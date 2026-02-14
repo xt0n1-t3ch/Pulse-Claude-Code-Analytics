@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 680" role="img" aria-labelledby="title desc">
   <title id="title">Claude Code Discord Presence</title>
-  <desc id="desc">Dark social card with CLAUDE block-letter ASCII art and pixel mascot for GitHub previews.</desc>
+  <desc id="desc">Dark social card with CLAUDE block-letter ASCII art and Clawd pixel mascot for GitHub previews.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0c0a09"/>
@@ -30,10 +30,10 @@
   <rect x="40" y="40" width="1360" height="600" rx="24" fill="url(#panel)" stroke="#2a2523"/>
   <rect x="40" y="40" width="1360" height="600" rx="24" fill="url(#glow)"/>
 
-  <!-- Top accent bar (gradient from Claude terracotta to Discord blurple) -->
+  <!-- Top accent bar -->
   <rect x="40" y="40" width="1360" height="3" rx="2" fill="url(#accentBar)"/>
 
-  <!-- Giant CLAUDE ASCII block letters — monospace, centered in 1440 -->
+  <!-- Giant CLAUDE ASCII block letters — font-size 38, centered in 1440 viewBox -->
   <text fill="url(#textGlow)" font-family="Consolas, 'Courier New', monospace" font-weight="700" font-size="38" letter-spacing="1" xml:space="preserve">
     <tspan x="160" y="130">██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗</tspan>
     <tspan x="160" y="168">██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝</tspan>
@@ -43,118 +43,98 @@
     <tspan x="160" y="320">╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝</tspan>
   </text>
 
-  <!-- Claude Code pixel mascot (the iconic terracotta creature) -->
-  <!-- 9x9 grid, each pixel = 8x8, placed left of "DISCORD PRESENCE" -->
-  <g transform="translate(490, 352)">
-    <!-- Row 0: head top -->
-    <rect x="16" y="0" width="8" height="8" fill="#E8956E"/>
-    <rect x="24" y="0" width="8" height="8" fill="#DA7756"/>
-    <rect x="32" y="0" width="8" height="8" fill="#DA7756"/>
-    <rect x="40" y="0" width="8" height="8" fill="#DA7756"/>
-    <rect x="48" y="0" width="8" height="8" fill="#E8956E"/>
-    <!-- Row 1: head -->
-    <rect x="8"  y="8" width="8" height="8" fill="#DA7756"/>
-    <rect x="16" y="8" width="8" height="8" fill="#E8956E"/>
-    <rect x="24" y="8" width="8" height="8" fill="#E8956E"/>
-    <rect x="32" y="8" width="8" height="8" fill="#E8956E"/>
-    <rect x="40" y="8" width="8" height="8" fill="#E8956E"/>
-    <rect x="48" y="8" width="8" height="8" fill="#E8956E"/>
-    <rect x="56" y="8" width="8" height="8" fill="#DA7756"/>
-    <!-- Row 2: eyes -->
-    <rect x="8"  y="16" width="8" height="8" fill="#E8956E"/>
-    <rect x="16" y="16" width="8" height="8" fill="#E8956E"/>
-    <rect x="24" y="16" width="8" height="8" fill="#292524"/>
-    <rect x="32" y="16" width="8" height="8" fill="#E8956E"/>
-    <rect x="40" y="16" width="8" height="8" fill="#292524"/>
-    <rect x="48" y="16" width="8" height="8" fill="#E8956E"/>
-    <rect x="56" y="16" width="8" height="8" fill="#E8956E"/>
-    <!-- Row 3: face -->
-    <rect x="8"  y="24" width="8" height="8" fill="#DA7756"/>
-    <rect x="16" y="24" width="8" height="8" fill="#E8956E"/>
-    <rect x="24" y="24" width="8" height="8" fill="#E8956E"/>
-    <rect x="32" y="24" width="8" height="8" fill="#E8956E"/>
-    <rect x="40" y="24" width="8" height="8" fill="#E8956E"/>
-    <rect x="48" y="24" width="8" height="8" fill="#E8956E"/>
-    <rect x="56" y="24" width="8" height="8" fill="#DA7756"/>
-    <!-- Row 4: body top -->
-    <rect x="0"  y="32" width="8" height="8" fill="#c4613f"/>
-    <rect x="8"  y="32" width="8" height="8" fill="#DA7756"/>
-    <rect x="16" y="32" width="8" height="8" fill="#DA7756"/>
-    <rect x="24" y="32" width="8" height="8" fill="#DA7756"/>
-    <rect x="32" y="32" width="8" height="8" fill="#DA7756"/>
-    <rect x="40" y="32" width="8" height="8" fill="#DA7756"/>
-    <rect x="48" y="32" width="8" height="8" fill="#DA7756"/>
-    <rect x="56" y="32" width="8" height="8" fill="#DA7756"/>
-    <rect x="64" y="32" width="8" height="8" fill="#c4613f"/>
-    <!-- Row 5: body -->
-    <rect x="0"  y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="8"  y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="16" y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="24" y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="32" y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="40" y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="48" y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="56" y="40" width="8" height="8" fill="#DA7756"/>
-    <rect x="64" y="40" width="8" height="8" fill="#DA7756"/>
-    <!-- Row 6: body bottom -->
-    <rect x="8"  y="48" width="8" height="8" fill="#c4613f"/>
-    <rect x="16" y="48" width="8" height="8" fill="#DA7756"/>
-    <rect x="24" y="48" width="8" height="8" fill="#DA7756"/>
-    <rect x="32" y="48" width="8" height="8" fill="#DA7756"/>
-    <rect x="40" y="48" width="8" height="8" fill="#DA7756"/>
-    <rect x="48" y="48" width="8" height="8" fill="#DA7756"/>
-    <rect x="56" y="48" width="8" height="8" fill="#c4613f"/>
-    <!-- Row 7: legs -->
-    <rect x="16" y="56" width="8" height="8" fill="#c4613f"/>
-    <rect x="24" y="56" width="8" height="8" fill="#DA7756"/>
-    <rect x="40" y="56" width="8" height="8" fill="#DA7756"/>
-    <rect x="48" y="56" width="8" height="8" fill="#c4613f"/>
-    <!-- Row 8: feet -->
-    <rect x="8"  y="64" width="8" height="8" fill="#c4613f"/>
-    <rect x="16" y="64" width="8" height="8" fill="#DA7756"/>
-    <rect x="48" y="64" width="8" height="8" fill="#DA7756"/>
-    <rect x="56" y="64" width="8" height="8" fill="#c4613f"/>
+  <!--
+    Clawd — the real Claude Code mascot (extracted from source).
+    Color: rgb(215,119,87) = #D77757. 4-row blob with eyes and 4 legs.
+    Grid: 11 cols × 4 rows, each cell = 8×8px → 88×32px total.
+    Centered horizontally: (1440 - 88) / 2 = 676
+  -->
+  <g transform="translate(676, 348)">
+    <!-- Row 0: body top — cols 1..9 filled -->
+    <rect x="8"  y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="0" width="8" height="8" fill="#D77757"/>
+
+    <!-- Row 1: face with eyes — all 11 cols body, then dark overlays for eyes -->
+    <!-- Full body base for row 1 -->
+    <rect x="0"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="8"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="80" y="8" width="8" height="8" fill="#D77757"/>
+    <!-- Eyes: dark top-half overlay at col 2 (x=16) and col 8 (x=64) -->
+    <rect x="16" y="8" width="8" height="4" fill="#0c0a09"/>
+    <rect x="64" y="8" width="8" height="4" fill="#0c0a09"/>
+
+    <!-- Row 2: body bottom — cols 1..9 filled -->
+    <rect x="8"  y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="16" width="8" height="8" fill="#D77757"/>
+
+    <!-- Row 3: legs — cols 1, 3, 7, 9 -->
+    <rect x="8"  y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="24" width="8" height="8" fill="#D77757"/>
   </g>
 
-  <!-- Subtitle — next to mascot -->
-  <text x="720" y="390" fill="#faf9f7" font-size="36" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="700" text-anchor="middle" letter-spacing="6">DISCORD PRESENCE</text>
-  <text x="720" y="425" fill="#a8a29e" font-size="20" font-family="Segoe UI, Inter, Arial, sans-serif" text-anchor="middle">Real-time activity, tokens, and cost for Claude Code sessions</text>
+  <!-- Subtitle -->
+  <text x="720" y="410" fill="#faf9f7" font-size="36" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="700" text-anchor="middle" letter-spacing="6">DISCORD PRESENCE</text>
+  <text x="720" y="442" fill="#a8a29e" font-size="20" font-family="Segoe UI, Inter, Arial, sans-serif" text-anchor="middle">Real-time activity, tokens, and cost for Claude Code sessions</text>
 
   <!-- Divider -->
-  <line x1="160" y1="452" x2="1280" y2="452" stroke="#2a2523"/>
+  <line x1="160" y1="465" x2="1280" y2="465" stroke="#2a2523"/>
 
   <!-- Feature row -->
   <text font-family="Segoe UI, Inter, Arial, sans-serif" font-size="18" text-anchor="middle">
-    <tspan x="370" y="486" fill="#DA7756">Thinking</tspan>
-    <tspan x="470" y="486" fill="#78716c">/</tspan>
-    <tspan x="570" y="486" fill="#DA7756">Reading</tspan>
-    <tspan x="660" y="486" fill="#78716c">/</tspan>
-    <tspan x="750" y="486" fill="#DA7756">Editing</tspan>
-    <tspan x="840" y="486" fill="#78716c">/</tspan>
-    <tspan x="940" y="486" fill="#DA7756">Running</tspan>
-    <tspan x="1030" y="486" fill="#78716c">/</tspan>
-    <tspan x="1120" y="486" fill="#DA7756">Waiting</tspan>
+    <tspan x="370" y="496" fill="#DA7756">Thinking</tspan>
+    <tspan x="470" y="496" fill="#78716c">/</tspan>
+    <tspan x="570" y="496" fill="#DA7756">Reading</tspan>
+    <tspan x="660" y="496" fill="#78716c">/</tspan>
+    <tspan x="750" y="496" fill="#DA7756">Editing</tspan>
+    <tspan x="840" y="496" fill="#78716c">/</tspan>
+    <tspan x="940" y="496" fill="#DA7756">Running</tspan>
+    <tspan x="1030" y="496" fill="#78716c">/</tspan>
+    <tspan x="1120" y="496" fill="#DA7756">Waiting</tspan>
   </text>
 
   <!-- Bottom section -->
-  <line x1="100" y1="518" x2="1340" y2="518" stroke="#2a2523"/>
+  <line x1="100" y1="526" x2="1340" y2="526" stroke="#2a2523"/>
 
   <!-- Tech badges -->
-  <rect x="120" y="544" width="72" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
-  <text x="156" y="563" fill="#DA7756" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Rust</text>
+  <rect x="120" y="550" width="72" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
+  <text x="156" y="569" fill="#DA7756" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Rust</text>
 
-  <rect x="206" y="544" width="108" height="28" rx="6" fill="#5865F2" fill-opacity="0.15" stroke="#5865F2" stroke-opacity="0.4"/>
-  <text x="260" y="563" fill="#7d88ff" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Discord RPC</text>
+  <rect x="206" y="550" width="108" height="28" rx="6" fill="#5865F2" fill-opacity="0.15" stroke="#5865F2" stroke-opacity="0.4"/>
+  <text x="260" y="569" fill="#7d88ff" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Discord RPC</text>
 
-  <rect x="328" y="544" width="148" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
-  <text x="402" y="563" fill="#DA7756" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cache-Aware Cost</text>
+  <rect x="328" y="550" width="148" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
+  <text x="402" y="569" fill="#DA7756" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cache-Aware Cost</text>
 
-  <rect x="490" y="544" width="130" height="28" rx="6" fill="#22c55e" fill-opacity="0.12" stroke="#22c55e" stroke-opacity="0.35"/>
-  <text x="555" y="563" fill="#4ade80" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Colored Bars</text>
+  <rect x="490" y="550" width="130" height="28" rx="6" fill="#22c55e" fill-opacity="0.12" stroke="#22c55e" stroke-opacity="0.35"/>
+  <text x="555" y="569" fill="#4ade80" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Colored Bars</text>
 
-  <rect x="634" y="544" width="140" height="28" rx="6" fill="#5865F2" fill-opacity="0.12" stroke="#5865F2" stroke-opacity="0.35"/>
-  <text x="704" y="563" fill="#7d88ff" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cross-Platform</text>
+  <rect x="634" y="550" width="140" height="28" rx="6" fill="#5865F2" fill-opacity="0.12" stroke="#5865F2" stroke-opacity="0.35"/>
+  <text x="704" y="569" fill="#7d88ff" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cross-Platform</text>
 
   <!-- Credit -->
-  <text x="1320" y="563" fill="#78716c" font-size="16" font-family="Segoe UI, Inter, Arial, sans-serif" text-anchor="end">XT0N1.T3CH</text>
+  <text x="1320" y="569" fill="#78716c" font-size="16" font-family="Segoe UI, Inter, Arial, sans-serif" text-anchor="end">XT0N1.T3CH</text>
 </svg>
