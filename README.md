@@ -1,15 +1,15 @@
 # Claude Code Discord Presence
 
 <p align="center">
-  <img src="assets/branding/social-card.svg" alt="Claude Code Discord Presence social card" width="960" />
+  <img src="assets/branding/social-card.svg" alt="Claude Code Discord Presence social card" width="820" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence/releases"><img src="https://img.shields.io/github/v/release/xt0n1-t3ch/Claude-Code-Discord-Presence?style=flat" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/xt0n1-t3ch/Claude-Code-Discord-Presence?style=flat" alt="License"></a>
+  <a href="https://github.com/tsanva/cc-discord-presence/releases"><img src="https://img.shields.io/github/v/release/tsanva/cc-discord-presence?style=flat&label=release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/tsanva/cc-discord-presence?style=flat" alt="License"></a>
   <img src="https://img.shields.io/badge/Rust-2024-black?logo=rust" alt="Rust 2024">
-  <img src="https://img.shields.io/badge/Discord-Rich%20Presence-5865F2?logo=discord" alt="Discord Rich Presence">
-  <img src="https://img.shields.io/badge/Claude-Code-DA7756?logo=anthropic" alt="Claude Code">
+  <img src="https://img.shields.io/badge/Discord-Rich%20Presence-5865F2?logo=discord&logoColor=white" alt="Discord Rich Presence">
+  <img src="https://img.shields.io/badge/Claude-Code-DA7756?logo=anthropic&logoColor=white" alt="Claude Code">
 </p>
 
 <p align="center"><strong>Real-time Discord Rich Presence for Claude Code sessions.</strong></p>
@@ -203,7 +203,7 @@ cargo test
 ## Credits
 
 <p align="center">
-  <img src="assets/branding/credits-ribbon.svg" alt="Project credits" width="900" />
+  <img src="assets/branding/credits-ribbon.svg" alt="Project credits" width="780" />
 </p>
 
 ## Anthropic Brand Notice
