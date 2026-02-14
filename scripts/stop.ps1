@@ -1,43 +1,39 @@
-# Stop Discord Rich Presence daemon (Windows)
-# WARNING: Windows support is untested. Please report issues on GitHub.
+# Stop cc-discord-presence daemon (Rust v2, Windows)
+# The binary uses file locks, so we just need to find and terminate the process.
 
-# Configuration
 $ClaudeDir = Join-Path $env:USERPROFILE ".claude"
-$PidFile = Join-Path $ClaudeDir "discord-presence.pid"
-$RefcountFile = Join-Path $ClaudeDir "discord-presence.refcount"
+$MetaFile = Join-Path $ClaudeDir "cc-discord-presence.instance.json"
 
-# Session tracking: Use refcount (PID-based tracking is unreliable on Windows)
-$CurrentCount = 1
-if (Test-Path $RefcountFile) {
-    $CurrentCount = [int](Get-Content $RefcountFile -ErrorAction SilentlyContinue)
-}
-$ActiveSessions = [Math]::Max(0, $CurrentCount - 1)
+$Stopped = $false
 
-if ($ActiveSessions -gt 0) {
-    $ActiveSessions | Out-File -FilePath $RefcountFile -Encoding ASCII -NoNewline
-    Write-Host "Discord Rich Presence still in use by $ActiveSessions session(s)"
-    exit 0
-}
-
-# No more sessions, clean up refcount file
-Remove-Item $RefcountFile -Force -ErrorAction SilentlyContinue
-
-# Stop the daemon
-if (Test-Path $PidFile) {
-    $ProcessId = Get-Content $PidFile -ErrorAction SilentlyContinue
-    if ($ProcessId) {
-        $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
-        if ($Process) {
-            Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
-            Write-Host "Discord Rich Presence stopped (PID: $ProcessId)"
+# Try to read PID from instance metadata (Rust v2 writes this file)
+if (Test-Path $MetaFile) {
+    try {
+        $Meta = Get-Content $MetaFile -Raw | ConvertFrom-Json
+        $Pid = $Meta.pid
+        if ($Pid) {
+            $Process = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+            if ($Process) {
+                Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue
+                $Stopped = $true
+                Write-Host "cc-discord-presence stopped (PID: $Pid)"
+            }
         }
+    } catch {
+        # Metadata parse failed, fall through to name-based kill
     }
-    Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
-} else {
-    # Try to find and kill by process name
+}
+
+if (-not $Stopped) {
+    # Fallback: kill by process name
     $Processes = Get-Process -Name "cc-discord-presence*" -ErrorAction SilentlyContinue
     if ($Processes) {
         $Processes | Stop-Process -Force
-        Write-Host "Discord Rich Presence stopped"
+        Write-Host "cc-discord-presence stopped (fallback)"
     }
 }
+
+# Clean up legacy v1 files
+Remove-Item (Join-Path $ClaudeDir "discord-presence.pid") -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $ClaudeDir "discord-presence.refcount") -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $ClaudeDir "discord-presence-sessions") -Recurse -Force -ErrorAction SilentlyContinue

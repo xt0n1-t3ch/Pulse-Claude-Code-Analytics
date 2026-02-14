@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Claude Code Discord Presence</title>
+  <desc id="desc">Dark social card with CLAUDE block-letter ASCII art for GitHub previews.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0c0a09"/>
+      <stop offset="100%" stop-color="#1c1917"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0e0c0b"/>
+      <stop offset="100%" stop-color="#1a1715"/>
+    </linearGradient>
+    <linearGradient id="textGlow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#DA7756"/>
+      <stop offset="100%" stop-color="#c4613f"/>
+    </linearGradient>
+    <linearGradient id="accentBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#DA7756"/>
+      <stop offset="50%" stop-color="#E8956E"/>
+      <stop offset="100%" stop-color="#5865F2"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.3" r="0.6">
+      <stop offset="0%" stop-color="#DA7756" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#DA7756" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect x="40" y="40" width="1200" height="560" rx="24" fill="url(#panel)" stroke="#2a2523"/>
+  <rect x="40" y="40" width="1200" height="560" rx="24" fill="url(#glow)"/>
+
+  <!-- Top accent bar (gradient from Claude terracotta to Discord blurple) -->
+  <rect x="40" y="40" width="1200" height="3" rx="2" fill="url(#accentBar)"/>
+
+  <!-- Giant CLAUDE ASCII block letters — monospace, centered -->
+  <text fill="url(#textGlow)" font-family="Consolas, 'Courier New', monospace" font-weight="700" font-size="38" letter-spacing="1" xml:space="preserve">
+    <tspan x="215" y="130">██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗</tspan>
+    <tspan x="215" y="168">██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝</tspan>
+    <tspan x="215" y="206">██║     ██║     ███████║██║   ██║██║  ██║█████╗</tspan>
+    <tspan x="215" y="244">██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝</tspan>
+    <tspan x="215" y="282">╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗</tspan>
+    <tspan x="215" y="320">╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝</tspan>
+  </text>
+
+  <!-- Subtitle -->
+  <text x="640" y="375" fill="#faf9f7" font-size="36" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="700" text-anchor="middle" letter-spacing="6">DISCORD PRESENCE</text>
+  <text x="640" y="410" fill="#a8a29e" font-size="20" font-family="Segoe UI, Inter, Arial, sans-serif" text-anchor="middle">Real-time activity, tokens, and cost for Claude Code sessions</text>
+
+  <!-- Divider -->
+  <line x1="200" y1="438" x2="1080" y2="438" stroke="#2a2523"/>
+
+  <!-- Feature row -->
+  <text font-family="Segoe UI, Inter, Arial, sans-serif" font-size="18" text-anchor="middle">
+    <tspan x="310" y="474" fill="#DA7756">Thinking</tspan>
+    <tspan x="410" y="474" fill="#78716c">/</tspan>
+    <tspan x="510" y="474" fill="#DA7756">Reading</tspan>
+    <tspan x="600" y="474" fill="#78716c">/</tspan>
+    <tspan x="690" y="474" fill="#DA7756">Editing</tspan>
+    <tspan x="780" y="474" fill="#78716c">/</tspan>
+    <tspan x="880" y="474" fill="#DA7756">Running</tspan>
+    <tspan x="970" y="474" fill="#78716c">/</tspan>
+    <tspan x="1060" y="474" fill="#DA7756">Waiting</tspan>
+  </text>
+
+  <!-- Bottom section -->
+  <line x1="100" y1="510" x2="1180" y2="510" stroke="#2a2523"/>
+
+  <!-- Tech badges -->
+  <rect x="100" y="536" width="72" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
+  <text x="136" y="555" fill="#DA7756" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Rust</text>
+
+  <rect x="186" y="536" width="108" height="28" rx="6" fill="#5865F2" fill-opacity="0.15" stroke="#5865F2" stroke-opacity="0.4"/>
+  <text x="240" y="555" fill="#7d88ff" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Discord RPC</text>
+
+  <rect x="308" y="536" width="148" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
+  <text x="382" y="555" fill="#DA7756" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cache-Aware Cost</text>
+
+  <rect x="470" y="536" width="130" height="28" rx="6" fill="#22c55e" fill-opacity="0.12" stroke="#22c55e" stroke-opacity="0.35"/>
+  <text x="535" y="555" fill="#4ade80" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Colored Bars</text>
+
+  <rect x="614" y="536" width="140" height="28" rx="6" fill="#5865F2" fill-opacity="0.12" stroke="#5865F2" stroke-opacity="0.35"/>
+  <text x="684" y="555" fill="#7d88ff" font-size="14" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cross-Platform</text>
+
+  <!-- Credit -->
+  <text x="1160" y="555" fill="#78716c" font-size="16" font-family="Segoe UI, Inter, Arial, sans-serif" text-anchor="end">XT0N1.T3CH</text>
+</svg>

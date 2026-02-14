@@ -1,9 +1,10 @@
-# Binaries
-/cc-discord-presence
-bin/
+# Rust build artifacts
+/releases/.cargo-target/
 
-# Go
-vendor/
+# Release binaries (built via build-dist.ps1)
+/releases/windows/
+/releases/linux/
+/releases/macos/
 
 # IDE
 .idea/

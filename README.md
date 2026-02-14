@@ -1,91 +1,105 @@
-# Clawd Code - Discord Rich Presence for Claude Code
+# Claude Code Discord Presence
 
-Show your Claude Code session on Discord! Display your current project, git branch, model, session time, token usage, and cost in real-time.
+<p align="center">
+  <img src="assets/branding/social-card.svg" alt="Claude Code Discord Presence social card" width="960" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence/releases"><img src="https://img.shields.io/github/v/release/xt0n1-t3ch/Claude-Code-Discord-Presence?style=flat" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/xt0n1-t3ch/Claude-Code-Discord-Presence?style=flat" alt="License"></a>
+  <img src="https://img.shields.io/badge/Rust-2024-black?logo=rust" alt="Rust 2024">
+  <img src="https://img.shields.io/badge/Discord-Rich%20Presence-5865F2?logo=discord" alt="Discord Rich Presence">
+  <img src="https://img.shields.io/badge/Claude-Code-DA7756?logo=anthropic" alt="Claude Code">
+</p>
+
+<p align="center"><strong>Real-time Discord Rich Presence for Claude Code sessions.</strong></p>
+
+## Overview
+
+`cc-discord-presence` monitors local Claude Code session JSONL files, detects live activity (`Thinking`, `Reading`, `Editing`, `Running`, `Waiting for input`), renders an adaptive terminal dashboard with colored usage bars, and updates Discord Rich Presence with accurate token and cost tracking — including prompt cache tokens.
+
+## Core Capabilities
+
+- **Live activity detection** with action-first Discord details and deterministic truncation.
+- **Cache-aware cost tracking** — includes `cache_creation` and `cache_read` tokens at correct pricing tiers.
+- **Adaptive terminal dashboard** — Full, Compact, and Minimal layouts based on terminal size.
+- **Colored usage bars** — green/yellow/red thresholds for 5-hour and 7-day rate limits.
+- **Multi-session support** — tracks all active Claude Code instances simultaneously.
+- **Cross-platform** — Windows, macOS, Linux with platform-native Discord IPC.
 
 ## Platform Support
 
-| Platform | Status |
-|----------|--------|
-| macOS (Apple Silicon) | ✅ Tested |
-| macOS (Intel) | ⚠️ Untested |
-| Linux (x64) | ⚠️ Untested |
-| Linux (ARM64) | ⚠️ Untested |
-| Windows (x64) | ✅ Tested |
-| Windows (ARM64) | ⚠️ Untested |
+| Platform              | Status    |
+| --------------------- | --------- |
+| Windows (x64)         | Tested    |
+| macOS (Apple Silicon) | Tested    |
+| macOS (Intel)         | Supported |
+| Linux (x64)           | Supported |
+| Linux (ARM64)         | Supported |
 
-> **Note**: macOS Intel and Linux should work but haven't been verified. Please [report problems](https://github.com/tsanva/cc-discord-presence/issues).
->
-> **Windows users**: Requires [Git Bash](https://git-scm.com/downloads) (included with Git for Windows) for automatic plugin hooks. Alternatively, run the PowerShell scripts manually (`scripts/start.ps1` and `scripts/stop.ps1`). WSL won't work as Discord runs on the Windows host.
+> **Windows users**: Requires [Git Bash](https://git-scm.com/downloads) for automatic plugin hooks. Alternatively, run the PowerShell scripts manually (`scripts/start.ps1` and `scripts/stop.ps1`).
 
-## Features
-
-- **Session Time** - Shows how long you've been coding with Claude
-- **Project Name** - Displays the current project you're working on
-- **Git Branch** - Shows your current git branch
-- **Model Name** - Shows which Claude model you're using (Opus 4.5, Sonnet 4.5, Haiku 4.5)
-- **Total Tokens** - Token usage counter (input + output)
-- **Total Cost** - Real-time cost tracking for your session
-
-## Installation
+## Install
 
 ### As a Claude Code Plugin (Recommended)
 
 ```bash
-# Add the marketplace
 claude plugin marketplace add tsanva/cc-discord-presence
-
-# Install the plugin
 claude plugin install cc-discord-presence@cc-discord-presence
 ```
 
-That's it! The plugin will automatically start when you begin a Claude Code session and stop when you exit.
+The plugin automatically starts on `SessionStart` and stops on `SessionEnd`.
 
-### Manual Installation
+### Build from Source
 
 ```bash
-# Clone and build
-git clone https://github.com/tsanva/cc-discord-presence.git
-cd cc-discord-presence
-go build -o cc-discord-presence .
+git clone https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence.git
+cd Claude-Code-Discord-Presence
+cargo build --release
+```
 
-# Run manually
-./cc-discord-presence
+Build output:
+
+- Windows: `releases/.cargo-target/release/cc-discord-presence.exe`
+- Linux/macOS: `releases/.cargo-target/release/cc-discord-presence`
+
+### Download Release Binaries
+
+- [Releases](https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence/releases)
+
+## Usage
+
+```bash
+cc-discord-presence            # Run with interactive TUI
+cc-discord-presence --headless # Run without terminal UI (daemon mode)
+cc-discord-presence status     # Show current session status
+cc-discord-presence doctor     # Diagnose configuration issues
 ```
 
 ## How It Works
 
 The app reads session data from Claude Code in two ways:
 
-### 1. JSONL Fallback (Zero Config)
+### 1. JSONL Parsing (Zero Config)
 
-By default, the app parses Claude Code's session files from `~/.claude/projects/`. This works out of the box with no configuration needed.
+By default, the app parses session transcript files from `~/.claude/projects/`. It extracts model, tokens (including prompt cache), cost, git branch, and activity from the JSONL stream. This works out of the box with no configuration.
 
-### 2. Statusline Integration (More Accurate)
+### 2. Statusline Integration (Higher Accuracy)
 
-For the most accurate token/cost data, you can configure the statusline integration. This uses Claude Code's own calculations instead of estimating from JSONL.
+For the most accurate token/cost data, configure the statusline integration to use Claude Code's own calculations.
 
 <a name="statusline-setup"></a>
+
 #### Statusline Setup
 
-**Automatic Setup (Recommended)**:
+**Automatic** (requires `jq`):
 
-Run the setup script (requires `jq`):
 ```bash
-# Find your plugin directory and run setup
 ~/.claude/plugins/cache/*/cc-discord-presence/*/scripts/setup-statusline.sh
 ```
 
-Or if you have the repo cloned:
-```bash
-./scripts/setup-statusline.sh
-```
+**Manual**: Edit `~/.claude/settings.json`:
 
-The setup script will:
-- Copy `statusline-wrapper.sh` to `~/.claude/`
-- Update your `~/.claude/settings.json` automatically
-- Back up any existing statusline to `~/.claude/statusline.sh`
-
-**Manual Setup**: If you prefer, edit `~/.claude/settings.json`:
 ```json
 {
   "statusLine": {
@@ -95,123 +109,109 @@ The setup script will:
 }
 ```
 
-Then copy `scripts/statusline-wrapper.sh` to `~/.claude/statusline-wrapper.sh`.
+Then copy `scripts/statusline-wrapper.sh` to `~/.claude/statusline-wrapper.sh`. Restart Claude Code after setup.
 
-**Note**: Restart Claude Code after setup for changes to take effect.
+## Configuration
 
-#### Verifying Your Setup
+Config file: `~/.claude/discord-presence-config.json`
 
-Check which data source is being used by viewing the daemon log:
-```bash
-cat ~/.claude/discord-presence.log
+```json
+{
+  "schema_version": 3,
+  "discord_client_id": "1455326944060248250",
+  "plan": "max_20x",
+  "poll_interval_seconds": 3,
+  "display": {
+    "large_image_key": "claude-code",
+    "large_text": "Claude Code"
+  },
+  "privacy": {
+    "show_project_name": true,
+    "show_model": true,
+    "show_tokens": true,
+    "show_cost": true,
+    "show_activity": true,
+    "show_limits": true,
+    "show_plan": true
+  }
+}
 ```
 
-You'll see one of:
-- `✓ Found active session: project-name (using statusline data)` - Best accuracy
-- `✓ Found active session: project-name (using JSONL fallback)` - Working, but consider setting up statusline
+### Subscription Plans
 
-## Discord Presence Display
+| Plan ID   | Display           |
+| --------- | ----------------- |
+| `free`    | Free              |
+| `pro`     | Pro ($20/mo)      |
+| `max_5x`  | Max 5x ($100/mo)  |
+| `max_20x` | Max 20x ($200/mo) |
 
-```
-┌─────────────────────────────────┐
-│ Clawd Code                      │
-│ Working on: my-project (main)   │
-│ Opus 4.5 | 1.5M tokens | $0.1234│
-│ 00:45:30 elapsed                │
-└─────────────────────────────────┘
-```
+### Environment Overrides
 
-## Requirements
-
-- [Discord](https://discord.com) desktop app running
-- [Claude Code](https://claude.ai/code) installed
-- Go 1.25+ (only for building from source)
-
-## Building from Source
-
-```bash
-# Build for current platform
-go build -o cc-discord-presence .
-
-# Cross-compile for all platforms
-mkdir -p bin
-GOOS=darwin GOARCH=arm64 go build -o bin/cc-discord-presence-darwin-arm64 .
-GOOS=darwin GOARCH=amd64 go build -o bin/cc-discord-presence-darwin-amd64 .
-GOOS=linux GOARCH=amd64 go build -o bin/cc-discord-presence-linux-amd64 .
-GOOS=linux GOARCH=arm64 go build -o bin/cc-discord-presence-linux-arm64 .
-GOOS=windows GOARCH=amd64 go build -o bin/cc-discord-presence-windows-amd64.exe .
-```
+- `CC_DISCORD_CLIENT_ID`
+- `CC_PRESENCE_STALE_SECONDS`
+- `CC_PRESENCE_POLL_SECONDS`
+- `CC_PRESENCE_ACTIVE_STICKY_SECONDS`
 
 ## Token Pricing
 
-Cost is calculated using current Claude API pricing (Dec 2025):
+Cost is calculated using current Claude API pricing with full prompt caching support:
 
-| Model | Input (per 1M tokens) | Output (per 1M tokens) |
-|-------|----------------------|------------------------|
-| Opus 4.5 | $15.00 | $75.00 |
-| Sonnet 4.5 | $3.00 | $15.00 |
-| Sonnet 4 | $3.00 | $15.00 |
-| Haiku 4.5 | $1.00 | $5.00 |
+| Model        | Input /1M | Output /1M | Cache Write /1M | Cache Read /1M |
+| ------------ | --------- | ---------- | --------------- | -------------- |
+| Opus 4.5/4.6 | $15.00    | $75.00     | $18.75          | $1.50          |
+| Sonnet 4/4.5 | $3.00     | $15.00     | $3.75           | $0.30          |
+| Haiku 4.5    | $1.00     | $5.00      | $1.25           | $0.10          |
 
-## Advanced: Custom Discord App
+> Cache write = 1.25x base input price. Cache read = 0.10x base input price.
 
-By default, this uses a shared Discord application ("Clawd Code"). If you want to use your own:
+## Discord Asset Setup
 
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click "New Application" and name it
-   > ⚠️ **Note**: Discord blocks trademarked names like "Claude Code"
-3. Set an app icon in "General Information" (this appears in Rich Presence)
-4. Copy the **Application ID** and update `ClientID` in `main.go`
-5. Rebuild the binary
+1. The default shared app (`1455326944060248250`) works out of the box.
+2. For a custom app: [Discord Developer Portal](https://discord.com/developers/applications) → New Application → copy Application ID → set in config.
+3. Upload image assets: `claude-code` (large), optional per-activity small images.
+4. `display.*_image_key` accepts an uploaded asset key or an `https://` image URL.
 
 ## Uninstallation
 
-### Plugin Removal
-
 ```bash
+# Remove plugin
 claude plugin uninstall cc-discord-presence@cc-discord-presence
-```
 
-### Statusline Cleanup (if configured)
-
-If you set up statusline integration, restore your original settings:
-
-```bash
-# Remove the wrapper script
+# Remove statusline wrapper (if configured)
 rm ~/.claude/statusline-wrapper.sh
 
-# Restore your original statusline in settings.json:
-# Option 1: Point back to the default statusline.sh
-jq '.statusLine.command = "~/.claude/statusline.sh"' ~/.claude/settings.json > ~/.claude/settings.json.tmp \
-  && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
-
-# Option 2: Remove statusline config entirely
-jq 'del(.statusLine)' ~/.claude/settings.json > ~/.claude/settings.json.tmp \
-  && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+# Restore original statusline
+jq 'del(.statusLine)' ~/.claude/settings.json > /tmp/s.json && mv /tmp/s.json ~/.claude/settings.json
 ```
 
-Restart Claude Code after making changes.
+## Security and Privacy
 
-## Privacy
-
-This application runs entirely locally and does not collect any data. See [PRIVACY.md](PRIVACY.md) for details.
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
+- Reads local Claude Code session files only.
+- No external telemetry or data collection.
+- See [PRIVACY.md](PRIVACY.md) for details.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-**Before submitting a PR**, make sure to run the test suite:
 ```bash
-go test -v ./...
+# Run tests before submitting PRs
+cargo test
 ```
 
-## Acknowledgments
+## Credits
 
-- [Anthropic](https://anthropic.com) for Claude
-- [fsnotify](https://github.com/fsnotify/fsnotify) for file watching
-- [go-winio](https://github.com/Microsoft/go-winio) for Windows named pipe support
-- The Claude Code community
+<p align="center">
+  <img src="assets/branding/credits-ribbon.svg" alt="Project credits" width="900" />
+</p>
+
+## Anthropic Brand Notice
+
+- Anthropic marks and logos are trademarks of Anthropic.
+- Follow official guidelines when distributing or configuring assets:
+  - https://www.anthropic.com/brand
+
+## License
+
+MIT ([LICENSE](LICENSE))

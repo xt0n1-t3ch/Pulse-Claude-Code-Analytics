@@ -2,41 +2,54 @@
 
 ## Project Overview
 
-**cc-discord-presence** is a Discord Rich Presence plugin for Claude Code. It displays real-time session information on Discord, including project name, git branch, model, session duration, token usage, and cost.
+**cc-discord-presence** is a Discord Rich Presence plugin for Claude Code. It displays real-time session information on Discord, including project name, git branch, model, session duration, token usage (with prompt cache), and cost. Features an adaptive terminal dashboard with colored usage bars.
 
 ## Tech Stack
 
-- **Language**: Go 1.25
+- **Language**: Rust 2024 edition
 - **Key Dependencies**:
-  - `github.com/fsnotify/fsnotify` - Cross-platform file watching
-  - `github.com/Microsoft/go-winio` - Windows named pipe support (Discord IPC)
+  - `discord-rich-presence` - Discord IPC Rich Presence client
+  - `crossterm` - Cross-platform terminal rendering
+  - `serde` / `serde_json` - JSON serialization
+  - `chrono` - DateTime handling
+  - `anyhow` - Error handling
+  - `tracing` / `tracing-subscriber` - Structured logging
+  - `clap` - CLI argument parsing
 
 ## Project Structure
 
 ```
 cc-discord-presence/
-├── main.go               # Main entry - session tracking, data parsing, presence updates
-├── discord/
-│   ├── client.go         # Discord IPC client, Conn interface, presence logic
-│   ├── conn_unix.go      # Unix socket connection (macOS/Linux)
-│   └── conn_windows.go   # Named pipe connection (Windows, uses go-winio)
+├── src/
+│   ├── main.rs           # Entry point, explorer detection, panic handler
+│   ├── lib.rs            # Module declarations
+│   ├── app.rs            # Main application loop, session merging, Discord updates
+│   ├── session.rs        # JSONL parsing, session accumulation, statusline reading
+│   ├── discord.rs        # Discord presence formatting, activity mapping
+│   ├── ui.rs             # Adaptive TUI (Full/Compact/Minimal), colored bars
+│   ├── config.rs         # Config loading, migration, schema validation
+│   ├── cost.rs           # Model pricing (with cache tiers), display names
+│   ├── usage.rs          # API usage/rate limit tracking
+│   ├── util.rs           # Formatting helpers (tokens, cost, duration, truncate)
+│   ├── cli.rs            # CLI subcommands (status, doctor)
+│   └── process_guard.rs  # Single-instance lock, PID management
 ├── scripts/
-│   ├── build.sh          # Cross-compile binaries for all platforms
-│   ├── start.sh          # Plugin hook: starts daemon on SessionStart
-│   ├── stop.sh           # Plugin hook: stops daemon on SessionEnd
+│   ├── build.sh          # Cross-compile binaries
+│   ├── start.sh / start.ps1   # Plugin hook: starts daemon
+│   ├── stop.sh / stop.ps1     # Plugin hook: stops daemon
 │   ├── statusline-wrapper.sh  # Wrapper script (copied to ~/.claude/)
-│   └── setup-statusline.sh    # One-time setup for statusline integration
+│   └── setup-statusline.sh    # One-time statusline setup
 ├── .claude-plugin/
 │   └── plugin.json       # Plugin manifest with SessionStart/SessionEnd hooks
-├── go.mod
-└── go.sum
+├── Cargo.toml
+└── Cargo.lock
 ```
 
 ## Key Concepts
 
 ### Discord IPC Protocol
-- Unix socket at `/tmp/discord-ipc-{0-9}` (macOS/Linux)
-- Named pipe on Windows
+
+- Uses `discord-rich-presence` crate for cross-platform IPC
 - Frame format: `[opcode:4 LE][length:4 LE][JSON payload]`
 - Opcodes: 0 = Handshake, 1 = Frame
 
@@ -45,84 +58,76 @@ cc-discord-presence/
 1. **Statusline Data** (`~/.claude/discord-presence-data.json`)
    - Most accurate - uses Claude Code's own calculations
    - Requires user to configure statusline wrapper
-   - Provides: model display name, cost, tokens directly from Claude
 
-2. **JSONL Fallback** (`~/.claude/projects/<encoded-path>/*.jsonl`)
+2. **JSONL Parsing** (`~/.claude/projects/<encoded-path>/*.jsonl`)
    - Zero configuration needed
-   - Parses session transcript files
-   - Calculates cost based on model pricing table
-   - Finds most recently modified file (handles multiple instances)
+   - Parses session transcript files with cursor-based incremental reads
+   - Includes prompt cache tokens (`cache_creation_input_tokens`, `cache_read_input_tokens`)
+   - Cache-aware cost: write = 1.25x input, read = 0.10x input
 
-### Plugin Hooks
-- **SessionStart**: Launches daemon via `scripts/start.sh`
-- **SessionEnd**: Stops daemon via `scripts/stop.sh`
-- Uses PID file at `~/.claude/discord-presence.pid`
+### Model Display Names
 
-### Session Tracking (Platform-specific)
-- **macOS/Linux**: PID-based tracking via files in `~/.claude/discord-presence-sessions/`
-- **Windows**: Refcount-based tracking via `~/.claude/discord-presence.refcount` (PPID unreliable on Windows)
+- Extracted dynamically from model ID strings (handles both dated and short IDs)
+- `"claude-opus-4-6-20260213"` or `"claude-opus-4-6"` → "Claude Opus 4.6"
+- Located in `src/cost.rs` → `model_display_name()`
 
 ### Model Pricing (Update when new models release)
-Located at top of `main.go` in `modelPricing` and `modelDisplayNames` maps.
 
-| Model | Input $/1M | Output $/1M |
-|-------|-----------|-------------|
-| Opus 4.5 | $15 | $75 |
-| Sonnet 4.5 | $3 | $15 |
-| Sonnet 4 | $3 | $15 |
-| Haiku 4.5 | $1 | $5 |
+Located in `src/cost.rs` → `model_pricing()`. Pattern-based matching (contains "opus"/"sonnet"/"haiku").
+
+| Model  | Input $/1M | Output $/1M | Cache Write $/1M | Cache Read $/1M |
+| ------ | ---------- | ----------- | ---------------- | --------------- |
+| Opus   | $15        | $75         | $18.75           | $1.50           |
+| Sonnet | $3         | $15         | $3.75            | $0.30           |
+| Haiku  | $1         | $5          | $1.25            | $0.10           |
+
+### TUI Layout Modes
+
+- **Full** (100x30+): ASCII banner, all sections, branch/path
+- **Compact** (60x18+): Smaller banner, essential sections
+- **Minimal** (<60x18): Single-line status
+
+### Colored Usage Bars
+
+- Usage (how much used): Green ≤40%, Yellow ≤70%, Red >70%
+- Remaining (how much left): Green ≥60%, Yellow ≥30%, Red <30%
 
 ## Development Commands
 
 ```bash
-go build -o cc-discord-presence .   # Build binary
-go run .                             # Run directly
-./cc-discord-presence                # Run built binary
-go test -v ./...                     # Run all tests
+cargo build --release          # Build optimized binary
+cargo run                      # Run directly
+cargo test                     # Run all tests
+RUST_LOG=debug cargo run       # Run with debug logging
 ```
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Key points:
-- Run `go test -v ./...` before submitting PRs
-- Update CHANGELOG.md with your changes
-- Contributors are credited in release notes
 
 ## Configuration
 
-- Client ID `1455326944060248250` is hardcoded (shared "Clawd Code" Discord app)
-- App icon set in Discord Developer Portal (used automatically for Rich Presence)
+- Default Client ID: `1455326944060248250` (shared "Claude Code" Discord app)
+- Config file: `~/.claude/discord-presence-config.json`
+- Schema version: 3 (auto-migrated)
 
 ## Important Notes
 
-- Polls every 3 seconds + uses file watcher
+- Polls every 3 seconds by default
 - Discord must be running for RPC to connect
-- Graceful shutdown on SIGINT/SIGTERM
-- Shows nudge message when using JSONL fallback encouraging statusline setup
+- Graceful shutdown on Ctrl+C / SIGTERM
+- Explorer/conhost detection prevents TUI in non-interactive contexts
+- Debug log: `~/.claude/cc-discord-presence-debug.log`
 
 ## Releasing
 
-Binaries are downloaded from GitHub Releases on first run. To create a new release:
-
-1. **Update version** in these files:
+1. **Update version** in:
    - `scripts/start.sh` - `VERSION="vX.X.X"`
    - `scripts/start.ps1` - `$Version = "vX.X.X"`
    - `.claude-plugin/plugin.json` - `"version": "X.X.X"` (no 'v' prefix)
+   - `Cargo.toml` - `version = "X.X.X"`
 
-2. **Build all binaries:**
-   ```bash
-   ./scripts/build.sh
-   ```
+2. **Build**: `cargo build --release`
 
-3. **Commit and tag:**
+3. **Commit, tag, release**:
    ```bash
-   git add scripts/start.sh scripts/start.ps1 .claude-plugin/plugin.json
-   git commit -m "Bump version to vX.X.X"
    git tag vX.X.X
    git push origin main --tags
-   ```
-
-4. **Create GitHub release:**
-   ```bash
-   gh release create vX.X.X bin/* --title "vX.X.X" --generate-notes
+   gh release create vX.X.X releases/windows/cc-discord-presence.exe --title "vX.X.X" --generate-notes
    ```

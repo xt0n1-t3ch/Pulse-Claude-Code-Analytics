@@ -1,18 +1,14 @@
 #!/bin/bash
-# Start Discord Rich Presence daemon
-# WARNING: Linux support is untested. Please report issues on GitHub.
+# Start cc-discord-presence daemon (Rust v2)
+# The binary handles single-instance locking with auto-takeover internally.
 
 set -e
 
-# Configuration
 CLAUDE_DIR="$HOME/.claude"
 BIN_DIR="$CLAUDE_DIR/bin"
-PID_FILE="$CLAUDE_DIR/discord-presence.pid"
-LOG_FILE="$CLAUDE_DIR/discord-presence.log"
-SESSIONS_DIR="$CLAUDE_DIR/discord-presence-sessions"
-REFCOUNT_FILE="$CLAUDE_DIR/discord-presence.refcount"
+LOG_FILE="$CLAUDE_DIR/cc-discord-presence.log"
 REPO="tsanva/cc-discord-presence"
-VERSION="v1.0.3"
+VERSION="v2.0.0"
 
 # Detect platform
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -21,49 +17,8 @@ case "$OS" in
     mingw*|msys*|cygwin*) IS_WINDOWS=true; OS="windows" ;;
 esac
 
-# Cross-platform process check
-process_exists() {
-    local pid=$1
-    if $IS_WINDOWS; then
-        tasklist //FI "PID eq $pid" 2>/dev/null | grep -q "$pid"
-    else
-        kill -0 "$pid" 2>/dev/null
-    fi
-}
-
 # Ensure directories exist
-mkdir -p "$CLAUDE_DIR" "$BIN_DIR" "$SESSIONS_DIR"
-
-# Session tracking: Windows uses refcount (PPID unreliable), Unix uses PID files
-if $IS_WINDOWS; then
-    CURRENT_COUNT=$(cat "$REFCOUNT_FILE" 2>/dev/null || echo "0")
-    ACTIVE_SESSIONS=$((CURRENT_COUNT + 1))
-    echo "$ACTIVE_SESSIONS" > "$REFCOUNT_FILE"
-else
-    SESSION_PID="${PPID:-$$}"
-    echo "$SESSION_PID" > "$SESSIONS_DIR/$SESSION_PID"
-
-    # Count active sessions and clean up orphans
-    ACTIVE_SESSIONS=0
-    for session_file in "$SESSIONS_DIR"/*; do
-        [[ -f "$session_file" ]] || continue
-        pid=$(basename "$session_file")
-        if process_exists "$pid"; then
-            ACTIVE_SESSIONS=$((ACTIVE_SESSIONS + 1))
-        else
-            rm -f "$session_file"
-        fi
-    done
-fi
-
-# If daemon is already running, just exit
-if [[ -f "$PID_FILE" ]]; then
-    OLD_PID=$(cat "$PID_FILE")
-    if process_exists "$OLD_PID"; then
-        echo "Discord Rich Presence already running (PID: $OLD_PID, sessions: $ACTIVE_SESSIONS)"
-        exit 0
-    fi
-fi
+mkdir -p "$CLAUDE_DIR" "$BIN_DIR"
 
 # Detect architecture
 ARCH=$(uname -m)
@@ -104,17 +59,14 @@ if [[ ! -f "$BINARY" ]]; then
     exit 1
 fi
 
-# Start the daemon in background
+# Start the daemon in background.
+# The binary handles single-instance locking and auto-takeover of any existing instance.
 if $IS_WINDOWS; then
-    # On Windows, convert path to Windows format and use PowerShell
     WIN_BINARY=$(cygpath -w "$BINARY" 2>/dev/null || echo "$BINARY")
-    WIN_PID_FILE=$(cygpath -w "$PID_FILE" 2>/dev/null || echo "$PID_FILE")
-
-    # Use PowerShell to start the process and capture PID (hidden window)
-    powershell.exe -NoProfile -WindowStyle Hidden -Command '$process = Start-Process -FilePath "'"$WIN_BINARY"'" -WindowStyle Hidden -PassThru; $process.Id | Out-File -FilePath "'"$WIN_PID_FILE"'" -Encoding ASCII -NoNewline' 2>/dev/null
+    powershell.exe -NoProfile -WindowStyle Hidden -Command \
+        "Start-Process -FilePath '$WIN_BINARY' -WindowStyle Hidden" 2>/dev/null
 else
     nohup "$BINARY" > "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
 fi
 
-echo "Discord Rich Presence started (PID: $(cat "$PID_FILE" 2>/dev/null || echo "unknown"), sessions: $ACTIVE_SESSIONS)"
+echo "cc-discord-presence started"
