@@ -19,11 +19,27 @@ pub struct DiscordPresence {
     last_publish_at: Option<Instant>,
     known_asset_keys: Option<HashSet<String>>,
     last_asset_refresh_at: Option<Instant>,
+    // Keepalive fields
+    last_heartbeat_at: Option<Instant>,
+    reconnect_backoff: Duration,
+    last_reconnect_attempt: Option<Instant>,
+    consecutive_errors: u32,
+    idle_start_epoch: Option<i64>,
 }
 
 const DISCORD_MIN_PUBLISH_INTERVAL: Duration = Duration::from_secs(2);
 const DISCORD_ASSET_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 const DISCORD_ASSET_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Force re-send activity at this interval even if payload unchanged,
+/// preventing Discord from dropping the IPC connection due to inactivity.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Minimum backoff between reconnection attempts after IPC errors.
+const RECONNECT_MIN_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Maximum backoff cap for exponential reconnection backoff.
+const RECONNECT_MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 impl DiscordPresence {
     pub fn new(client_id: Option<String>) -> Self {
@@ -40,6 +56,11 @@ impl DiscordPresence {
             last_publish_at: None,
             known_asset_keys: None,
             last_asset_refresh_at: None,
+            last_heartbeat_at: None,
+            reconnect_backoff: RECONNECT_MIN_BACKOFF,
+            last_reconnect_attempt: None,
+            consecutive_errors: 0,
+            idle_start_epoch: None,
         }
     }
 
@@ -59,14 +80,29 @@ impl DiscordPresence {
             return Ok(());
         }
 
-        self.ensure_connected()?;
+        // Try to connect; silently skip during backoff period
+        if let Err(_err) = self.ensure_connected() {
+            return Ok(());
+        }
+        if self.client.is_none() {
+            return Ok(());
+        }
+
         self.refresh_asset_keys_if_needed();
+
+        let needs_heartbeat = self
+            .last_heartbeat_at
+            .map(|t| t.elapsed() >= HEARTBEAT_INTERVAL)
+            .unwrap_or(true);
 
         match active_session {
             Some(session) => {
+                self.idle_start_epoch = None;
                 let (details, state) = presence_lines(session, effective_limits, api_usage, config);
                 let payload = (details.clone(), state.clone());
-                if self.last_sent.as_ref() == Some(&payload) {
+
+                // Allow re-send when heartbeat interval has elapsed (keepalive)
+                if self.last_sent.as_ref() == Some(&payload) && !needs_heartbeat {
                     self.last_status = "Connected".to_string();
                     return Ok(());
                 }
@@ -108,12 +144,62 @@ impl DiscordPresence {
                 }
                 self.last_sent = Some(payload);
                 self.last_publish_at = Some(Instant::now());
+                self.last_heartbeat_at = Some(Instant::now());
                 self.last_status = "Connected".to_string();
             }
             None => {
-                self.clear_activity()?;
-                self.last_sent = None;
+                // Show idle presence instead of clearing — keeps Rich Presence visible
+                let idle_start = *self
+                    .idle_start_epoch
+                    .get_or_insert_with(|| Utc::now().timestamp().max(0));
+
+                let details = "Claude Code".to_string();
+                let state = "Waiting for session".to_string();
+                let payload = (details.clone(), state.clone());
+
+                if self.last_sent.as_ref() == Some(&payload) && !needs_heartbeat {
+                    self.last_status = "Connected (idle)".to_string();
+                    return Ok(());
+                }
+                if let Some(last_publish) = self.last_publish_at {
+                    if last_publish.elapsed() < DISCORD_MIN_PUBLISH_INTERVAL {
+                        self.last_status = "Connected (idle)".to_string();
+                        return Ok(());
+                    }
+                }
+
+                let resolved_large_key = resolve_image_key(
+                    &config.display.large_image_key,
+                    self.known_asset_keys.as_ref(),
+                );
+
+                let mut activity = Activity::new()
+                    .details(&details)
+                    .state(&state)
+                    .timestamps(Timestamps::new().start(idle_start));
+
+                if let Some(ref key) = resolved_large_key {
+                    let mut assets = Assets::new().large_image(key.as_str());
+                    if let Some(text) = non_empty_trimmed(&config.display.large_text) {
+                        assets = assets.large_text(text);
+                    }
+                    activity = activity.assets(assets);
+                }
+
+                let client = self
+                    .client
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("Discord IPC client unexpectedly missing"))?;
+                if let Err(err) = client
+                    .set_activity(activity)
+                    .context("failed to set Discord idle activity")
+                {
+                    self.handle_ipc_error(&err.to_string());
+                    return Err(err);
+                }
+                self.last_sent = Some(payload);
                 self.last_publish_at = Some(Instant::now());
+                self.last_heartbeat_at = Some(Instant::now());
                 self.last_status = "Connected (idle)".to_string();
             }
         }
@@ -129,7 +215,11 @@ impl DiscordPresence {
         self.client = None;
         self.last_sent = None;
         self.last_publish_at = None;
+        self.last_heartbeat_at = None;
         self.last_asset_refresh_at = None;
+        self.idle_start_epoch = None;
+        self.consecutive_errors = 0;
+        self.reconnect_backoff = RECONNECT_MIN_BACKOFF;
         if self.client_id.is_some() {
             self.last_status = "Disconnected".to_string();
         }
@@ -157,16 +247,36 @@ impl DiscordPresence {
             return Ok(());
         };
 
+        // Respect reconnection backoff — skip silently if too soon
+        if let Some(last_attempt) = self.last_reconnect_attempt {
+            if last_attempt.elapsed() < self.reconnect_backoff {
+                return Ok(());
+            }
+        }
+
+        self.last_reconnect_attempt = Some(Instant::now());
+
         let mut client = DiscordIpcClient::new(&client_id);
-        client
+        match client
             .connect()
             .context("failed to connect to Discord IPC (is Discord desktop open?)")
-            .inspect_err(|err| {
-                self.handle_ipc_error(&err.to_string());
-            })?;
-        self.client = Some(client);
-        self.last_status = "Connected".to_string();
-        Ok(())
+        {
+            Ok(()) => {
+                self.client = Some(client);
+                self.consecutive_errors = 0;
+                self.reconnect_backoff = RECONNECT_MIN_BACKOFF;
+                self.last_sent = None; // Force re-send after reconnect
+                self.last_heartbeat_at = None;
+                self.last_status = "Connected".to_string();
+                Ok(())
+            }
+            Err(err) => {
+                self.increase_backoff();
+                self.last_status =
+                    format!("Reconnecting in {}s...", self.reconnect_backoff.as_secs());
+                Err(err)
+            }
+        }
     }
 
     fn refresh_asset_keys_if_needed(&mut self) {
@@ -187,7 +297,17 @@ impl DiscordPresence {
 
     fn handle_ipc_error(&mut self, message: &str) {
         self.client = None;
+        self.increase_backoff();
         self.last_status = format!("Discord error: {}", compact_error(message));
+    }
+
+    fn increase_backoff(&mut self) {
+        self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+        let backoff_secs = RECONNECT_MIN_BACKOFF
+            .as_secs()
+            .saturating_mul(1u64 << self.consecutive_errors.min(4));
+        self.reconnect_backoff =
+            Duration::from_secs(backoff_secs.min(RECONNECT_MAX_BACKOFF.as_secs()));
     }
 }
 
