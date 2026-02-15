@@ -957,7 +957,11 @@ fn classify_tool_call(content: &Value) -> (ActivityKind, Option<String>) {
                 .and_then(|v| v.as_str())
                 .map(|s| {
                     if s.len() > 50 {
-                        format!("{}...", &s[..47])
+                        let mut end = 47;
+                        while end > 0 && !s.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        format!("{}...", &s[..end])
                     } else {
                         s.to_string()
                     }

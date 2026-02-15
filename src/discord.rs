@@ -316,7 +316,11 @@ fn compact_error(input: &str) -> String {
     if input.len() <= MAX {
         return input.to_string();
     }
-    format!("{}...", &input[..MAX.saturating_sub(3)])
+    let mut end = MAX.saturating_sub(3);
+    while end > 0 && !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &input[..end])
 }
 
 fn build_activity<'a>(
@@ -525,7 +529,12 @@ fn truncate_for_discord(s: &str) -> String {
     if s.len() <= 128 {
         s.to_string()
     } else {
-        format!("{}...", &s[..125])
+        // Walk back to a valid UTF-8 char boundary to avoid panicking on multi-byte chars
+        let mut end = 125;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 
