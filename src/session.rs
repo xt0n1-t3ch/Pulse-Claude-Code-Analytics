@@ -937,38 +937,62 @@ fn classify_tool_call(content: &Value) -> (ActivityKind, Option<String>) {
     let input = content.get("input");
 
     match name {
-        "Read" | "read" | "file_read" => {
-            let target = input
-                .and_then(|v| v.get("file_path").or(v.get("path")))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+        "Read" | "read" | "file_read" | "NotebookRead" => {
+            let target = extract_filename(input);
             (ActivityKind::ReadingFile, target)
         }
-        "Write" | "write" | "Edit" | "edit" | "file_write" => {
-            let target = input
-                .and_then(|v| v.get("file_path").or(v.get("path")))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+        "Write" | "write" | "Edit" | "edit" | "file_write" | "NotebookEdit" => {
+            let target = extract_filename(input);
             (ActivityKind::EditingFile, target)
+        }
+        "Glob" | "glob" | "Grep" | "grep" | "Search" | "search" => {
+            let target = input
+                .and_then(|v| v.get("pattern"))
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_target(s, 40));
+            (ActivityKind::ReadingFile, target)
         }
         "Bash" | "bash" | "command_execute" | "terminal" => {
             let target = input
                 .and_then(|v| v.get("command"))
                 .and_then(|v| v.as_str())
-                .map(|s| {
-                    if s.len() > 50 {
-                        let mut end = 47;
-                        while end > 0 && !s.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        format!("{}...", &s[..end])
-                    } else {
-                        s.to_string()
-                    }
-                });
+                .map(|s| truncate_target(s, 50));
             (ActivityKind::RunningCommand, target)
         }
-        _ => (ActivityKind::Thinking, Some(name.to_string())),
+        "AskUserQuestion" | "ask_user" => (ActivityKind::WaitingInput, None),
+        "WebSearch" | "WebFetch" | "web_search" | "web_fetch" => (ActivityKind::Thinking, None),
+        _ => (ActivityKind::Thinking, None),
+    }
+}
+
+/// Extract just the filename from a file_path/path input field.
+fn extract_filename(input: Option<&Value>) -> Option<String> {
+    input
+        .and_then(|v| {
+            v.get("file_path")
+                .or(v.get("path"))
+                .or(v.get("notebook_path"))
+        })
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            Path::new(s)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| truncate_target(s, 40))
+        })
+}
+
+/// Truncate a target string, respecting UTF-8 char boundaries.
+fn truncate_target(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        let suffix_len = 3; // "..."
+        let mut end = max_len.saturating_sub(suffix_len);
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 
@@ -1189,7 +1213,7 @@ mod tests {
         });
         let (kind, target) = classify_tool_call(&content);
         assert_eq!(kind, ActivityKind::ReadingFile);
-        assert_eq!(target, Some("/foo/bar.rs".to_string()));
+        assert_eq!(target, Some("bar.rs".to_string()));
     }
 
     #[test]
