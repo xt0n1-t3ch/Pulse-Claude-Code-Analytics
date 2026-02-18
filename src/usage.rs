@@ -10,18 +10,40 @@ const USAGE_CACHE_TTL: Duration = Duration::from_secs(30);
 const USAGE_API_TIMEOUT: Duration = Duration::from_secs(10);
 const USAGE_API_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
+/// Endpoint for enabling/disabling pay-per-use extra usage.
+/// NOTE: This is inferred from the usage URL pattern (internal Anthropic API).
+/// If the toggle is not working, open Chrome DevTools on claude.ai, click the
+/// Extra Usage toggle, and update this constant with the correct URL + method.
+const EXTRA_USAGE_TOGGLE_URL: &str = "https://api.anthropic.com/api/oauth/extra-usage";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UsageData {
     pub five_hour: UsageWindow,
     pub seven_day: UsageWindow,
-    #[serde(default)]
+    // API returns "seven_day_sonnet"; keep alias for forward-compat
+    #[serde(rename = "seven_day_sonnet", alias = "sonnet_free", default)]
     pub sonnet_free: Option<UsageWindow>,
+    #[serde(default)]
+    pub extra_usage: Option<ExtraUsage>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UsageWindow {
     pub utilization: f64,
     pub resets_at: DateTime<Utc>,
+}
+
+/// Pay-per-use (extra) usage beyond the plan's included quota.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ExtraUsage {
+    #[serde(default)]
+    pub is_enabled: bool,
+    /// Monthly spending limit in USD (e.g. 75.0)
+    pub monthly_limit: Option<f64>,
+    /// Credits consumed this month in USD (e.g. 48.89)
+    pub used_credits: Option<f64>,
+    /// Percent of monthly limit consumed (0–100)
+    pub utilization: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +96,14 @@ impl UsageManager {
 
     pub fn invalidate_cache(&mut self) {
         self.last_fetch = None;
+    }
+
+    /// Returns a clone of the current OAuth access token, if credentials are loaded.
+    pub fn get_access_token(&mut self) -> Option<String> {
+        self.ensure_credentials();
+        self.credentials
+            .as_ref()
+            .map(|c| c.claude_ai_oauth.access_token.clone())
     }
 
     pub fn subscription_type(&mut self) -> Option<String> {
@@ -172,4 +202,46 @@ impl Default for UsageManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Spawns a background thread that disables Extra Usage, waits 3 seconds, then re-enables it.
+///
+/// This is a fire-and-forget safety measure triggered when a new charge is detected.
+/// Both toggle calls are logged; on failure the toggle is a no-op (charge already happened).
+pub fn spawn_extra_usage_toggle_cycle(access_token: String) {
+    std::thread::spawn(move || {
+        let agent = ureq::AgentBuilder::new().timeout(USAGE_API_TIMEOUT).build();
+
+        let do_toggle = |enabled: bool| {
+            let body = format!("{{\"enabled\":{enabled}}}");
+            let result = agent
+                .put(EXTRA_USAGE_TOGGLE_URL)
+                .set("Authorization", &format!("Bearer {access_token}"))
+                .set("anthropic-beta", "oauth-2025-04-20")
+                .set("Content-Type", "application/json")
+                .set("User-Agent", "claude-code/2.0.31")
+                .send_string(&body);
+
+            match result {
+                Ok(resp) => {
+                    debug!(
+                        enabled,
+                        status = resp.status(),
+                        "extra usage toggle response"
+                    );
+                }
+                Err(ureq::Error::Status(status, resp)) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    warn!(enabled, status, body = %body, "extra usage toggle HTTP error");
+                }
+                Err(e) => {
+                    warn!(enabled, error = %e, "extra usage toggle request failed");
+                }
+            }
+        };
+
+        do_toggle(false);
+        std::thread::sleep(Duration::from_secs(3));
+        do_toggle(true);
+    });
 }

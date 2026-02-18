@@ -13,6 +13,7 @@ use tracing::debug;
 
 use crate::config::{self, PresenceConfig, RuntimeSettings};
 use crate::discord::DiscordPresence;
+use crate::metrics::MetricsTracker;
 use crate::process_guard::{self, RunningState};
 use crate::session::{
     collect_active_sessions_multi, latest_limits_source, preferred_active_session,
@@ -196,6 +197,7 @@ fn run_foreground_tui(mut config: PresenceConfig, runtime: RuntimeSettings) -> R
     let mut parse_cache = SessionParseCache::default();
     let mut discord = DiscordPresence::new(config.effective_client_id());
     let mut usage_mgr = UsageManager::new();
+    let mut metrics_tracker = MetricsTracker::new();
     let projects_roots = config::projects_paths();
     let started = Instant::now();
     let mut last_tick = Instant::now() - runtime.poll_interval;
@@ -204,6 +206,8 @@ fn run_foreground_tui(mut config: PresenceConfig, runtime: RuntimeSettings) -> R
     let mut last_render_at = Instant::now() - Duration::from_secs(31);
     let mut force_redraw = true;
     let mut cached_usage = None;
+    let mut last_extra_spent: Option<f64> = None;
+    let mut extra_usage_alert_until: Option<Instant> = None;
     let mut setup_active = !config.initialized;
     let mut setup_step: u8 = 0;
 
@@ -230,11 +234,34 @@ fn run_foreground_tui(mut config: PresenceConfig, runtime: RuntimeSettings) -> R
                     merge_statusline_into_sessions(&mut sessions, statusline_session);
                 }
 
+                // Update metrics tracker with latest session data
+                metrics_tracker.update(&sessions);
+                metrics_tracker.persist_if_due();
+
                 let active = preferred_active_session(&sessions);
                 let effective_limits = latest_limits_source(&sessions).map(|source| &source.limits);
 
                 // Fetch API usage
                 cached_usage = usage_mgr.get_usage();
+
+                // Detect Extra Usage charge — play alert + trigger auto-toggle cycle
+                if let Some(ref usage) = cached_usage {
+                    if let Some(ref extra) = usage.extra_usage {
+                        if let Some(spent) = extra.used_credits {
+                            if let Some(prev) = last_extra_spent {
+                                if (spent - prev).abs() > 0.001 {
+                                    crate::sound::play_extra_usage_alert();
+                                    extra_usage_alert_until =
+                                        Some(Instant::now() + Duration::from_secs(5));
+                                    if let Some(token) = usage_mgr.get_access_token() {
+                                        crate::usage::spawn_extra_usage_toggle_cycle(token);
+                                    }
+                                }
+                            }
+                            last_extra_spent = Some(spent);
+                        }
+                    }
+                }
 
                 if let Err(err) =
                     discord.update(active, effective_limits, cached_usage.as_ref(), &config)
@@ -258,10 +285,13 @@ fn run_foreground_tui(mut config: PresenceConfig, runtime: RuntimeSettings) -> R
                     effective_limits,
                     api_usage: cached_usage.as_ref(),
                     plan_name: plan_name.as_deref(),
+                    metrics: metrics_tracker.snapshot(),
                     sessions: &sessions,
                     config: &config,
                     setup_active,
                     setup_step,
+                    extra_usage_alert: extra_usage_alert_until
+                        .map_or(false, |t| t > Instant::now()),
                 };
                 let signature = ui::frame_signature(&render);
                 let should_draw = force_redraw
@@ -343,6 +373,7 @@ fn run_headless_foreground(
     let mut parse_cache = SessionParseCache::default();
     let mut discord = DiscordPresence::new(config.effective_client_id());
     let mut usage_mgr = UsageManager::new();
+    let mut metrics_tracker = MetricsTracker::new();
     let projects_roots = config::projects_paths();
     println!("No interactive terminal detected; running in headless foreground mode.");
     println!("Press Ctrl+C to stop.");
@@ -359,6 +390,9 @@ fn run_headless_foreground(
         if let Some(statusline_session) = read_statusline_data(&mut git_cache) {
             merge_statusline_into_sessions(&mut sessions, statusline_session);
         }
+
+        metrics_tracker.update(&sessions);
+        metrics_tracker.persist_if_due();
 
         let active = preferred_active_session(&sessions);
         let effective_limits = latest_limits_source(&sessions).map(|source| &source.limits);
@@ -465,6 +499,7 @@ fn run_claude_wrapper(
     let mut parse_cache = SessionParseCache::default();
     let mut discord = DiscordPresence::new(config.effective_client_id());
     let mut usage_mgr = UsageManager::new();
+    let mut metrics_tracker = MetricsTracker::new();
     let projects_roots = config::projects_paths();
 
     println!("claude child started; Discord presence tracking is active.");
@@ -486,6 +521,9 @@ fn run_claude_wrapper(
         if let Some(statusline_session) = read_statusline_data(&mut git_cache) {
             merge_statusline_into_sessions(&mut sessions, statusline_session);
         }
+
+        metrics_tracker.update(&sessions);
+        metrics_tracker.persist_if_due();
 
         let active = preferred_active_session(&sessions);
         let effective_limits = latest_limits_source(&sessions).map(|source| &source.limits);

@@ -8,11 +8,20 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, QueueableCommand};
 
 use crate::config::{PresenceConfig, TerminalLogoMode};
+use crate::metrics::MetricsSnapshot;
 use crate::session::{ClaudeSessionSnapshot, RateLimits};
 use crate::usage::UsageData;
 use crate::util::{
-    format_cost, format_time_until, format_time_until_reset, format_token_triplet, human_duration,
-    now_local, truncate,
+    format_cost, format_time_until, format_time_until_reset, format_token_triplet, format_tokens,
+    human_duration, now_local, truncate,
+};
+
+// ── Brand Color ───────────────────────────────────────────────────────────
+// Claude mascot orange — matches the salmon/terracotta of the pixel art pig
+const MASCOT: Color = Color::Rgb {
+    r: 210,
+    g: 120,
+    b: 80,
 };
 
 // ── ASCII Art Banners ─────────────────────────────────────────────────────
@@ -81,10 +90,13 @@ pub struct RenderData<'a> {
     pub effective_limits: Option<&'a RateLimits>,
     pub api_usage: Option<&'a UsageData>,
     pub plan_name: Option<&'a str>,
+    pub metrics: Option<&'a MetricsSnapshot>,
     pub sessions: &'a [ClaudeSessionSnapshot],
     pub config: &'a PresenceConfig,
     pub setup_active: bool,
     pub setup_step: u8,
+    /// True for ~5 seconds after an Extra Usage charge is detected.
+    pub extra_usage_alert: bool,
 }
 
 // ── Terminal Management ───────────────────────────────────────────────────
@@ -126,6 +138,10 @@ pub fn frame_signature(data: &RenderData<'_>) -> String {
             usage.five_hour.utilization, usage.seven_day.utilization
         ));
     }
+    if let Some(metrics) = data.metrics {
+        sig.push_str(&format!("|m{:.4}", metrics.totals.cost_usd));
+    }
+    sig.push_str(&format!("|a{}", data.extra_usage_alert as u8));
     sig
 }
 
@@ -160,6 +176,9 @@ pub fn draw(data: &RenderData<'_>) -> Result<()> {
     // Usage section (from API)
     render_usage(&mut out, &mut row, max_body_row, width, layout, data)?;
 
+    // Metrics (cumulative cost + token breakdown)
+    render_metrics(&mut out, &mut row, max_body_row, width, layout, data)?;
+
     // Active session
     render_active(&mut out, &mut row, max_body_row, width, layout, data)?;
 
@@ -185,14 +204,22 @@ fn render_banner(
 ) -> Result<()> {
     match layout {
         LayoutMode::Full => {
-            for line in &CLAUDE_ASCII {
-                write_line(out, row, max_row, width, line)?;
+            for (i, line) in CLAUDE_ASCII.iter().enumerate() {
+                if i < 6 {
+                    write_line_colored(out, row, max_row, width, line, MASCOT)?;
+                } else {
+                    write_line_colored(out, row, max_row, width, line, Color::DarkGrey)?;
+                }
             }
             write_line(out, row, max_row, width, "")?;
         }
         LayoutMode::Compact => {
-            for line in &CC_ASCII {
-                write_line(out, row, max_row, width, line)?;
+            for (i, line) in CC_ASCII.iter().enumerate() {
+                if i < 4 {
+                    write_line_colored(out, row, max_row, width, line, MASCOT)?;
+                } else {
+                    write_line_colored(out, row, max_row, width, line, Color::DarkGrey)?;
+                }
             }
             write_line(out, row, max_row, width, "")?;
         }
@@ -239,7 +266,19 @@ fn render_runtime(
         "Uptime",
         &human_duration(data.running_for),
     )?;
-    write_kv(out, row, max_row, width, "Discord", data.discord_status)?;
+    {
+        let (dot, dot_color) = discord_status_indicator(data.discord_status);
+        write_kv_icon(
+            out,
+            row,
+            max_row,
+            width,
+            "Discord",
+            dot,
+            dot_color,
+            data.discord_status,
+        )?;
+    }
 
     if layout == LayoutMode::Full {
         write_kv(
@@ -285,17 +324,23 @@ fn render_usage(
     };
 
     if layout == LayoutMode::Minimal {
-        let line = format!(
-            "5h {:.0}% | 7d {:.0}%",
-            usage.five_hour.utilization, usage.seven_day.utilization
-        );
-        write_line(out, row, max_row, width, &line)?;
+        // "5h 14% │ 7d 66% │ Sonnet 5%"
+        let mut parts = vec![
+            format!("5h {:.0}%", usage.five_hour.utilization),
+            format!("7d {:.0}%", usage.seven_day.utilization),
+        ];
+        if let Some(ref s) = usage.sonnet_free {
+            parts.push(format!("Sonnet {:.0}%", s.utilization));
+        }
+        write_line(out, row, max_row, width, &parts.join(" │ "))?;
         return Ok(());
     }
 
     write_hr(out, row, max_row, width, "Usage")?;
 
-    let bar_width = if width > 40 { 20 } else { 10 };
+    // Adaptive bar: fills available width after label(12) + percent(4) + reset text(~16) + gaps
+    let bar_width = (width.saturating_sub(40)).clamp(6, 30);
+
     let five_hr_reset = format_time_until_reset(usage.five_hour.resets_at);
     write_colored_bar(
         out,
@@ -321,6 +366,171 @@ fn render_usage(
         &seven_day_reset,
         usage_color(usage.seven_day.utilization),
     )?;
+
+    // Sonnet-only window (Max plans) — field is "seven_day_sonnet" in the API
+    if let Some(ref sonnet) = usage.sonnet_free {
+        let sonnet_reset = format_time_until_reset(sonnet.resets_at);
+        write_colored_bar(
+            out,
+            row,
+            max_row,
+            width,
+            "Sonnet    ",
+            sonnet.utilization,
+            bar_width,
+            &sonnet_reset,
+            usage_color(sonnet.utilization),
+        )?;
+    }
+
+    // Extra (pay-per-use) usage — only when enabled and data is available
+    if let Some(ref extra) = usage.extra_usage {
+        if extra.is_enabled {
+            if let (Some(spent), Some(limit)) = (extra.used_credits, extra.monthly_limit) {
+                // API returns values in cents — divide by 100 to get USD
+                let spent_usd = spent / 100.0;
+                let limit_usd = limit / 100.0;
+                let pct = extra.utilization.unwrap_or(0.0);
+                write_hr(out, row, max_row, width, "Extra Usage")?;
+                write_kv(
+                    out,
+                    row,
+                    max_row,
+                    width,
+                    "Spent",
+                    &format!("${:.2} / ${:.2} ({:.0}% used)", spent_usd, limit_usd, pct),
+                )?;
+                // Flash alert for ~5 s when a new charge is detected
+                if data.extra_usage_alert && *row < max_row {
+                    out.queue(MoveTo(0, *row))?;
+                    out.queue(SetForegroundColor(Color::Yellow))?;
+                    out.queue(Print(format!("  {:<12}", "Alert")))?;
+                    out.queue(SetForegroundColor(Color::DarkGrey))?;
+                    out.queue(Print(": "))?;
+                    out.queue(SetForegroundColor(Color::Yellow))?;
+                    out.queue(Print("! charge detected \u{2014} toggling off/on"))?;
+                    out.queue(ResetColor)?;
+                    *row += 1;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn render_metrics(
+    out: &mut impl Write,
+    row: &mut u16,
+    max_row: u16,
+    width: usize,
+    layout: LayoutMode,
+    data: &RenderData<'_>,
+) -> Result<()> {
+    let Some(metrics) = data.metrics else {
+        return Ok(());
+    };
+
+    if metrics.totals.cost_usd == 0.0 && metrics.totals.total_tokens == 0 {
+        return Ok(());
+    }
+
+    if layout == LayoutMode::Minimal {
+        let line = format!(
+            "Cost: {} | {} tok",
+            format_cost(metrics.totals.cost_usd),
+            format_tokens(metrics.totals.total_tokens),
+        );
+        write_line(out, row, max_row, width, &line)?;
+        return Ok(());
+    }
+
+    write_hr(out, row, max_row, width, "Metrics")?;
+
+    write_kv(
+        out,
+        row,
+        max_row,
+        width,
+        "Total Cost",
+        &format_cost(metrics.totals.cost_usd),
+    )?;
+    write_kv(
+        out,
+        row,
+        max_row,
+        width,
+        "Tokens",
+        &format!(
+            "{} (in: {} | out: {})",
+            format_tokens(metrics.totals.total_tokens),
+            format_tokens(metrics.totals.input_tokens),
+            format_tokens(metrics.totals.output_tokens),
+        ),
+    )?;
+
+    if layout == LayoutMode::Full {
+        // Cache token counts
+        if metrics.totals.cache_write_tokens > 0 || metrics.totals.cache_read_tokens > 0 {
+            write_kv(
+                out,
+                row,
+                max_row,
+                width,
+                "Cache",
+                &format!(
+                    "write: {} | read: {}",
+                    format_tokens(metrics.totals.cache_write_tokens),
+                    format_tokens(metrics.totals.cache_read_tokens),
+                ),
+            )?;
+        }
+
+        // Cost breakdown by token type with proportional bars
+        let total = metrics.totals.cost_usd.max(0.0001);
+        let bar_width = if width > 60 { 15 } else { 8 };
+
+        for (label, cost) in [
+            ("Input    ", metrics.cost_breakdown.input_cost),
+            ("Output   ", metrics.cost_breakdown.output_cost),
+            ("Cache Wr ", metrics.cost_breakdown.cache_write_cost),
+            ("Cache Rd ", metrics.cost_breakdown.cache_read_cost),
+        ] {
+            if cost > 0.0 {
+                let pct = (cost / total) * 100.0;
+                write_cost_bar(out, row, max_row, label, cost, pct, bar_width)?;
+            }
+        }
+
+        // Per-model breakdown
+        if !metrics.by_model.is_empty() {
+            write_line(out, row, max_row, width, "")?;
+            for model in &metrics.by_model {
+                let pct = (model.cost_usd / total) * 100.0;
+                let line = format!(
+                    "  {} {} ({:.0}%) | {} tok | {} sess",
+                    format_cost(model.cost_usd),
+                    model.display_name,
+                    pct,
+                    format_tokens(model.input_tokens + model.output_tokens),
+                    model.session_count,
+                );
+                write_line(out, row, max_row, width, &line)?;
+            }
+        }
+    } else {
+        // Compact: show top model if available
+        if let Some(top) = metrics.by_model.first() {
+            write_kv(
+                out,
+                row,
+                max_row,
+                width,
+                "Top Model",
+                &format!("{} ({})", top.display_name, format_cost(top.cost_usd)),
+            )?;
+        }
+    }
 
     Ok(())
 }
@@ -367,7 +577,10 @@ fn render_active(
     write_kv(out, row, max_row, width, "Project", &active.project_name)?;
 
     if let Some(model) = &active.model_display {
-        write_kv(out, row, max_row, width, "Model", model)?;
+        let model_id = active.model.as_deref().unwrap_or("");
+        let tokens = active.session_total_tokens.unwrap_or(0);
+        let model_str = crate::cost::model_display_with_context(model_id, model, tokens);
+        write_kv(out, row, max_row, width, "Model", &model_str)?;
     }
 
     if let Some(activity) = &active.activity {
@@ -486,7 +699,14 @@ fn render_recent(
 
         let is_active = session.session_id == active_id;
         let marker = if is_active { ">" } else { "-" };
-        let model = session.model_display.as_deref().unwrap_or("Claude");
+        let model_id = session.model.as_deref().unwrap_or("");
+        let tokens = session.session_total_tokens.unwrap_or(0);
+        let model_str = session
+            .model_display
+            .as_ref()
+            .map(|d| crate::cost::model_display_with_context(model_id, d, tokens))
+            .unwrap_or_else(|| "Claude".to_string());
+        let model = model_str.as_str();
 
         if layout == LayoutMode::Minimal {
             let line = format!("{} {} | {}", marker, session.project_name, model);
@@ -662,18 +882,65 @@ fn write_hr(
     if *row >= max_row {
         return Ok(());
     }
-    let dashes_left = 5;
-    let dashes_right = width.saturating_sub(dashes_left + title.len() + 4);
-    let line = format!(
-        "{} {} {}",
-        "-".repeat(dashes_left),
-        title,
-        "-".repeat(dashes_right)
-    );
+    let dashes_left = 2usize;
+    let title_len = title.chars().count();
+    // "── " + title + " ──────────..."
+    let dashes_right = width.saturating_sub(dashes_left + title_len + 2);
     out.queue(MoveTo(0, *row))?;
     out.queue(SetForegroundColor(Color::DarkGrey))?;
-    out.queue(Print(&line))?;
+    out.queue(Print("─".repeat(dashes_left)))?;
+    out.queue(Print(" "))?;
+    out.queue(SetForegroundColor(MASCOT))?;
+    out.queue(SetAttribute(Attribute::Bold))?;
+    out.queue(Print(title))?;
+    out.queue(SetAttribute(Attribute::Reset))?;
+    out.queue(SetForegroundColor(Color::DarkGrey))?;
+    out.queue(Print(" "))?;
+    out.queue(Print("─".repeat(dashes_right)))?;
     out.queue(ResetColor)?;
+    *row += 1;
+    Ok(())
+}
+
+/// Returns the indicator dot and its color for a Discord connection status string.
+fn discord_status_indicator(status: &str) -> (&'static str, Color) {
+    if status.starts_with("Connected") {
+        ("●", Color::Green)
+    } else if status.starts_with("Reconnecting") {
+        ("◌", Color::Yellow)
+    } else {
+        ("○", Color::DarkGrey)
+    }
+}
+
+/// Like `write_kv` but renders a colored icon before the value text.
+#[allow(clippy::too_many_arguments)]
+fn write_kv_icon(
+    out: &mut impl Write,
+    row: &mut u16,
+    max_row: u16,
+    width: usize,
+    key: &str,
+    icon: &str,
+    icon_color: Color,
+    value: &str,
+) -> Result<()> {
+    if *row >= max_row {
+        return Ok(());
+    }
+    out.queue(MoveTo(0, *row))?;
+    out.queue(SetForegroundColor(Color::White))?;
+    out.queue(Print(format!("  {:<12}", key)))?;
+    out.queue(SetForegroundColor(Color::DarkGrey))?;
+    out.queue(Print(": "))?;
+    out.queue(SetForegroundColor(icon_color))?;
+    out.queue(Print(icon))?;
+    out.queue(Print(" "))?;
+    out.queue(ResetColor)?;
+    let icon_len = icon.chars().count();
+    let max_val = width.saturating_sub(16 + icon_len + 1);
+    let val_display = truncate(value, max_val);
+    out.queue(Print(&val_display))?;
     *row += 1;
     Ok(())
 }
@@ -716,25 +983,66 @@ fn write_colored_bar(
     }
     let filled = ((percent.clamp(0.0, 100.0) / 100.0) * bar_width as f64).round() as usize;
     let empty = bar_width.saturating_sub(filled);
-    let filled_str = "#".repeat(filled);
-    let empty_str = "-".repeat(empty);
 
     out.queue(MoveTo(0, *row))?;
-    out.queue(Print(format!("  {} [", label)))?;
+    out.queue(SetForegroundColor(Color::White))?;
+    out.queue(Print(format!("  {} ", label)))?;
     out.queue(SetForegroundColor(color))?;
     out.queue(SetAttribute(Attribute::Bold))?;
     out.queue(Print(format!("{:>3.0}%", percent)))?;
     out.queue(SetAttribute(Attribute::Reset))?;
-    out.queue(Print("] "))?;
+    out.queue(Print(" "))?;
     out.queue(SetForegroundColor(color))?;
-    out.queue(Print(&filled_str))?;
+    out.queue(Print("█".repeat(filled)))?;
+    out.queue(SetForegroundColor(Color::DarkGrey))?;
+    out.queue(Print("░".repeat(empty)))?;
     out.queue(ResetColor)?;
     out.queue(SetForegroundColor(Color::DarkGrey))?;
-    out.queue(Print(&empty_str))?;
-    out.queue(ResetColor)?;
     out.queue(Print(format!(" reset {}", reset_text)))?;
+    out.queue(ResetColor)?;
     *row += 1;
     Ok(())
+}
+
+fn write_cost_bar(
+    out: &mut impl Write,
+    row: &mut u16,
+    max_row: u16,
+    label: &str,
+    cost: f64,
+    pct: f64,
+    bar_width: usize,
+) -> Result<()> {
+    if *row >= max_row {
+        return Ok(());
+    }
+    let filled = ((pct.clamp(0.0, 100.0) / 100.0) * bar_width as f64).round() as usize;
+    let empty = bar_width.saturating_sub(filled);
+    let color = cost_proportion_color(pct);
+
+    out.queue(MoveTo(0, *row))?;
+    out.queue(SetForegroundColor(Color::White))?;
+    out.queue(Print(format!("  {:<10}", label)))?;
+    out.queue(SetForegroundColor(color))?;
+    out.queue(Print(format!("{} ", format_cost(cost))))?;
+    out.queue(Print("█".repeat(filled)))?;
+    out.queue(SetForegroundColor(Color::DarkGrey))?;
+    out.queue(Print("░".repeat(empty)))?;
+    out.queue(ResetColor)?;
+    out.queue(Print(format!(" {:.0}%", pct)))?;
+    *row += 1;
+    Ok(())
+}
+
+/// Color for cost proportion: biggest cost contributors are red/yellow
+fn cost_proportion_color(pct: f64) -> Color {
+    if pct >= 50.0 {
+        Color::Red
+    } else if pct >= 25.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    }
 }
 
 fn write_kv(
@@ -748,7 +1056,15 @@ fn write_kv(
     if *row >= max_row {
         return Ok(());
     }
-    let line = format!("  {:<12}: {}", key, value);
-    write_line(out, row, max_row, width, &line)?;
+    out.queue(MoveTo(0, *row))?;
+    out.queue(SetForegroundColor(Color::White))?;
+    out.queue(Print(format!("  {:<12}", key)))?;
+    out.queue(SetForegroundColor(Color::DarkGrey))?;
+    out.queue(Print(": "))?;
+    out.queue(ResetColor)?;
+    let max_val = width.saturating_sub(16);
+    let val_display = truncate(value, max_val);
+    out.queue(Print(&val_display))?;
+    *row += 1;
     Ok(())
 }

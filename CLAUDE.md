@@ -28,8 +28,10 @@ cc-discord-presence/
 │   ├── discord.rs        # Discord presence formatting, activity mapping
 │   ├── ui.rs             # Adaptive TUI (Full/Compact/Minimal), colored bars
 │   ├── config.rs         # Config loading, migration, schema validation
-│   ├── cost.rs           # Model pricing (with cache tiers), display names
-│   ├── usage.rs          # API usage/rate limit tracking
+│   ├── cost.rs           # Model pricing (tiered per version), display names
+│   ├── usage.rs          # API usage/rate limit tracking, Extra Usage toggle
+│   ├── sound.rs          # Sound alerts via Win32 Beep FFI (no extra deps)
+│   ├── metrics.rs        # Session metrics tracker (totals, per-model costs)
 │   ├── util.rs           # Formatting helpers (tokens, cost, duration, truncate)
 │   ├── cli.rs            # CLI subcommands (status, doctor)
 │   └── process_guard.rs  # Single-instance lock, PID management
@@ -73,13 +75,16 @@ cc-discord-presence/
 
 ### Model Pricing (Update when new models release)
 
-Located in `src/cost.rs` → `model_pricing()`. Pattern-based matching (contains "opus"/"sonnet"/"haiku").
+Located in `src/cost.rs` → `model_pricing()`. Pattern-based matching with version-aware tiers.
 
-| Model  | Input $/1M | Output $/1M | Cache Write $/1M | Cache Read $/1M |
-| ------ | ---------- | ----------- | ---------------- | --------------- |
-| Opus   | $15        | $75         | $18.75           | $1.50           |
-| Sonnet | $3         | $15         | $3.75            | $0.30           |
-| Haiku  | $1         | $5          | $1.25            | $0.10           |
+| Model              | Input $/1M | Output $/1M | Cache Write $/1M | Cache Read $/1M |
+| ------------------ | ---------- | ----------- | ---------------- | --------------- |
+| Opus 4.5 / 4.6     | $5         | $25         | $6.25            | $0.50           |
+| Opus 4.0 / 3 (old) | $15        | $75         | $18.75           | $1.50           |
+| Sonnet (all)       | $3         | $15         | $3.75            | $0.30           |
+| Haiku 4.5+         | $1         | $5          | $1.25            | $0.10           |
+| Haiku 3.5          | $0.80      | $4          | $1.00            | $0.08           |
+| Haiku 3            | $0.25      | $1.25       | $0.30            | $0.03           |
 
 ### TUI Layout Modes
 
@@ -91,6 +96,16 @@ Located in `src/cost.rs` → `model_pricing()`. Pattern-based matching (contains
 
 - Usage (how much used): Green ≤40%, Yellow ≤70%, Red >70%
 - Remaining (how much left): Green ≥60%, Yellow ≥30%, Red <30%
+
+### Extra Usage Sound Alert
+
+When the Extra Usage `used_credits` value changes (any new charge detected):
+1. Plays a C5→E5→G5→C6 arpeggio via Win32 `Beep()` (no extra deps, Windows only, no-op elsewhere)
+2. Shows a yellow `Alert : ! charge detected — toggling off/on` line in the TUI for ~5 seconds
+3. Spawns a background thread that: disables Extra Usage → waits 3s → re-enables it
+
+The toggle endpoint is `EXTRA_USAGE_TOGGLE_URL` in `src/usage.rs` (inferred from usage API pattern).
+If it doesn't work: open Chrome DevTools on claude.ai, click the toggle, copy the network request URL.
 
 ## Development Commands
 
