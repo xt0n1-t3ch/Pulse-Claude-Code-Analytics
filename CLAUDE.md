@@ -146,3 +146,8 @@ RUST_LOG=debug cargo run       # Run with debug logging
    git push origin main --tags
    gh release create vX.X.X releases/windows/cc-discord-presence.exe --title "vX.X.X" --generate-notes
    ```
+
+## Repository
+
+- **Origin**: https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence
+- Default branch: `main`
