@@ -55,12 +55,32 @@ impl ActivitySnapshot {
     pub fn to_text(&self, show_target: bool) -> String {
         if show_target {
             if let Some(ref target) = self.target {
-                if !target.trim().is_empty() {
-                    return format!("{} {}", self.action_text(), target);
+                let trimmed = target.trim();
+                if !trimmed.is_empty() {
+                    let short = shorten_activity_target(&self.kind, trimmed);
+                    return format!("{} {}", self.action_text(), short);
                 }
             }
         }
         self.action_text().to_string()
+    }
+}
+
+/// Condenses an activity target to its most readable short form for Discord/UI display.
+/// Files → filename only. Commands → first token (command name) only.
+fn shorten_activity_target(kind: &ActivityKind, target: &str) -> String {
+    match kind {
+        ActivityKind::ReadingFile | ActivityKind::EditingFile => std::path::Path::new(target)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(target)
+            .to_string(),
+        ActivityKind::RunningCommand => target
+            .split_whitespace()
+            .next()
+            .unwrap_or(target)
+            .to_string(),
+        _ => target.to_string(),
     }
 }
 
@@ -97,6 +117,8 @@ pub struct ClaudeSessionSnapshot {
     pub session_delta_tokens: Option<u64>,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
     pub total_cost: f64,
     pub limits: RateLimits,
     pub activity: Option<ActivitySnapshot>,
@@ -511,6 +533,8 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
         session_delta_tokens: None,
         input_tokens: status.context_window.total_input_tokens,
         output_tokens: status.context_window.total_output_tokens,
+        cache_creation_tokens: 0, // statusline doesn't expose cache breakdown
+        cache_read_tokens: 0,
         total_cost: status.cost.total_cost_usd,
         limits: RateLimits::default(),
         activity: None,
@@ -754,6 +778,8 @@ fn parse_session_file_cached(
     let last_turn_tokens = entry.accumulator.last_turn_tokens;
     let input_tokens = entry.accumulator.total_input_tokens;
     let output_tokens = entry.accumulator.total_output_tokens;
+    let cache_creation_tokens = entry.accumulator.total_cache_creation_tokens;
+    let cache_read_tokens = entry.accumulator.total_cache_read_tokens;
     let total_cost = entry.accumulator.total_cost;
     let limits = entry.accumulator.limits.clone();
     let started_at = entry.accumulator.started_at;
@@ -777,6 +803,8 @@ fn parse_session_file_cached(
         session_delta_tokens: session_delta,
         input_tokens,
         output_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
         total_cost,
         limits,
         activity: entry.accumulator.activity_tracker.finalize(),
@@ -847,8 +875,13 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
 
                 // Calculate cost with cache-aware pricing
                 let model_id = acc.model.as_deref().unwrap_or("claude-sonnet-4-20250514");
-                acc.total_cost +=
-                    cost::calculate_cost(model_id, input, output, cache_creation, cache_read);
+                acc.total_cost += cost::calculate_cost_with_context(
+                    model_id,
+                    input,
+                    output,
+                    cache_creation,
+                    cache_read,
+                );
 
                 // Track last turn tokens (all tokens for this message)
                 acc.last_turn_tokens = Some(all_input + output);
@@ -1201,7 +1234,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(snap.action_text(), "Editing");
-        assert_eq!(snap.to_text(true), "Editing src/main.rs");
+        // to_text shortens the path to just the filename
+        assert_eq!(snap.to_text(true), "Editing main.rs");
         assert_eq!(snap.to_text(false), "Editing");
     }
 

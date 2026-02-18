@@ -418,7 +418,11 @@ fn presence_lines(
 
     if config.privacy.show_model {
         if let Some(display) = &session.model_display {
-            state_parts.push(display.clone());
+            let model_id = session.model.as_deref().unwrap_or("");
+            let tokens = session.session_total_tokens.unwrap_or(0);
+            state_parts.push(crate::cost::model_display_with_context(
+                model_id, display, tokens,
+            ));
         } else if let Some(model) = &session.model {
             state_parts.push(model.clone());
         }
@@ -444,6 +448,10 @@ fn presence_lines(
         render_limits_to_state(&mut state_parts, effective_limits, api_usage);
     }
 
+    if config.privacy.show_cost {
+        render_extra_usage_to_state(&mut state_parts, api_usage);
+    }
+
     let state = compact_join_prioritized(&state_parts, 128);
 
     (truncate_for_discord(&details), state)
@@ -462,6 +470,26 @@ fn token_state_parts(session: &ClaudeSessionSnapshot) -> Vec<String> {
         }
     }
     parts
+}
+
+fn render_extra_usage_to_state(parts: &mut Vec<String>, api_usage: Option<&UsageData>) {
+    let Some(usage) = api_usage else { return };
+    let Some(ref extra) = usage.extra_usage else {
+        return;
+    };
+    if !extra.is_enabled {
+        return;
+    }
+    if let (Some(spent), Some(limit)) = (extra.used_credits, extra.monthly_limit) {
+        // API returns values in cents — divide by 100 to get USD
+        let spent_usd = spent / 100.0;
+        let limit_usd = limit / 100.0;
+        let pct = extra.utilization.unwrap_or(0.0);
+        parts.push(format!(
+            "Extra ${:.2}/${:.2} ({:.0}%)",
+            spent_usd, limit_usd, pct
+        ));
+    }
 }
 
 fn render_limits_to_state(
