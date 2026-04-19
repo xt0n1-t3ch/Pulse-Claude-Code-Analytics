@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 680" role="img" aria-labelledby="title desc">
+  <title id="title">Claude Code Discord Presence</title>
+  <desc id="desc">Social card showing Claude Code Discord Presence with a mini Discord presence card mockup.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0c0a09"/>
+      <stop offset="100%" stop-color="#1c1917"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0e0c0b"/>
+      <stop offset="100%" stop-color="#1a1715"/>
+    </linearGradient>
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#DA7756"/>
+      <stop offset="100%" stop-color="#E8956E"/>
+    </linearGradient>
+    <linearGradient id="accentBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#DA7756"/>
+      <stop offset="50%" stop-color="#E8956E"/>
+      <stop offset="100%" stop-color="#5865F2"/>
+    </linearGradient>
+    <linearGradient id="discordBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#5865F2"/>
+      <stop offset="100%" stop-color="#7d88ff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.25" r="0.6">
+      <stop offset="0%" stop-color="#DA7756" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#DA7756" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="panelClip">
+      <rect x="40" y="40" width="1360" height="600" rx="24"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1440" height="680" fill="url(#bg)"/>
+  <rect x="40" y="40" width="1360" height="600" rx="24" fill="url(#panel)" stroke="#2a2523"/>
+  <rect x="40" y="40" width="1360" height="600" rx="24" fill="url(#glow)"/>
+
+  <!-- Top accent bar -->
+  <rect x="40" y="40" width="1360" height="3" rx="2" fill="url(#accentBar)"/>
+
+  <!-- Main title: CLAUDE CODE -->
+  <text x="720" y="145" fill="url(#titleGrad)" font-size="82" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="800" text-anchor="middle" letter-spacing="6">CLAUDE CODE</text>
+
+  <!-- Subtitle: DISCORD PRESENCE -->
+  <text x="720" y="195" fill="#a8a29e" font-size="32" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle" letter-spacing="10">DISCORD PRESENCE</text>
+
+  <!-- Clawd pixel mascot (2x scale: 176x64px) centered -->
+  <g transform="translate(652, 220) scale(2)">
+    <!-- Row 0: body top -->
+    <rect x="8"  y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="0" width="8" height="8" fill="#D77757"/>
+    <!-- Row 1: face with eyes -->
+    <rect x="0"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="8"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="80" y="8" width="8" height="8" fill="#D77757"/>
+    <!-- Eyes -->
+    <rect x="16" y="8" width="8" height="4" fill="#0c0a09"/>
+    <rect x="64" y="8" width="8" height="4" fill="#0c0a09"/>
+    <!-- Row 2: body bottom -->
+    <rect x="8"  y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="16" width="8" height="8" fill="#D77757"/>
+    <!-- Row 3: legs -->
+    <rect x="8"  y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="24" width="8" height="8" fill="#D77757"/>
+  </g>
+
+  <!-- Tagline -->
+  <text x="720" y="310" fill="#78716c" font-size="20" font-family="'Segoe UI', Inter, Arial, sans-serif" text-anchor="middle">Real-time activity, tokens, and cost tracking for your Discord profile</text>
+
+  <!-- Divider -->
+  <line x1="160" y1="335" x2="1280" y2="335" stroke="#2a2523"/>
+
+  <!-- Mini Discord Presence Card Mockup -->
+  <rect x="410" y="360" width="620" height="170" rx="12" fill="#111111" stroke="#2a2523"/>
+
+  <!-- Discord card: left accent bar -->
+  <rect x="410" y="360" width="4" height="170" rx="2" fill="url(#discordBar)"/>
+
+  <!-- Discord card: "Playing" label -->
+  <text x="440" y="388" fill="#78716c" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="700" letter-spacing="0.5">PLAYING</text>
+
+  <!-- Discord card: app name -->
+  <text x="440" y="410" fill="#faf9f7" font-size="18" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="700">Claude Code</text>
+
+  <!-- Discord card: details line -->
+  <text x="440" y="434" fill="#a8a29e" font-size="15" font-family="'Segoe UI', Inter, Arial, sans-serif">Editing files · my-project (main)</text>
+
+  <!-- Discord card: state line -->
+  <text x="440" y="456" fill="#a8a29e" font-size="15" font-family="'Segoe UI', Inter, Arial, sans-serif">Opus 4.6 · Max 20x ($200/mo) · $3.45 · 5.2M tokens</text>
+
+  <!-- Discord card: usage bars -->
+  <text x="440" y="478" fill="#78716c" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif">5h</text>
+  <rect x="458" y="468" width="120" height="8" rx="4" fill="#292524"/>
+  <rect x="458" y="468" width="86" height="8" rx="4" fill="#22c55e"/>
+  <text x="584" y="478" fill="#78716c" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif">72%</text>
+
+  <text x="626" y="478" fill="#78716c" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif">7d</text>
+  <rect x="646" y="468" width="120" height="8" rx="4" fill="#292524"/>
+  <rect x="646" y="468" width="34" height="8" rx="4" fill="#22c55e"/>
+  <text x="772" y="478" fill="#78716c" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif">28%</text>
+
+  <!-- Discord card: elapsed time -->
+  <text x="440" y="518" fill="#22c55e" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif">02:15:30 elapsed</text>
+
+  <!-- Discord card: small icon placeholder (Clawd mini) -->
+  <g transform="translate(960, 380) scale(1.8)">
+    <rect x="8"  y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="0"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="8"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="80" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="8" width="8" height="4" fill="#111111"/>
+    <rect x="64" y="8" width="8" height="4" fill="#111111"/>
+    <rect x="8"  y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="8"  y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="24" width="8" height="8" fill="#D77757"/>
+  </g>
+
+  <!-- Bottom divider -->
+  <line x1="100" y1="555" x2="1340" y2="555" stroke="#2a2523"/>
+
+  <!-- Tech badges -->
+  <rect x="280" y="575" width="72" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
+  <text x="316" y="594" fill="#DA7756" font-size="14" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Rust</text>
+
+  <rect x="366" y="575" width="108" height="28" rx="6" fill="#5865F2" fill-opacity="0.15" stroke="#5865F2" stroke-opacity="0.4"/>
+  <text x="420" y="594" fill="#7d88ff" font-size="14" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Discord RPC</text>
+
+  <rect x="488" y="575" width="148" height="28" rx="6" fill="#DA7756" fill-opacity="0.15" stroke="#DA7756" stroke-opacity="0.4"/>
+  <text x="562" y="594" fill="#DA7756" font-size="14" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cache-Aware Cost</text>
+
+  <rect x="650" y="575" width="130" height="28" rx="6" fill="#22c55e" fill-opacity="0.12" stroke="#22c55e" stroke-opacity="0.35"/>
+  <text x="715" y="594" fill="#4ade80" font-size="14" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Colored Bars</text>
+
+  <rect x="794" y="575" width="140" height="28" rx="6" fill="#5865F2" fill-opacity="0.12" stroke="#5865F2" stroke-opacity="0.35"/>
+  <text x="864" y="594" fill="#7d88ff" font-size="14" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Cross-Platform</text>
+
+  <rect x="948" y="575" width="140" height="28" rx="6" fill="#DA7756" fill-opacity="0.12" stroke="#DA7756" stroke-opacity="0.35"/>
+  <text x="1018" y="594" fill="#DA7756" font-size="14" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle">Multi-Session</text>
+
+  <!-- Credit -->
+  <text x="1320" y="594" fill="#78716c" font-size="16" font-family="'Segoe UI', Inter, Arial, sans-serif" text-anchor="end">XT0N1.T3CH</text>
+</svg>
