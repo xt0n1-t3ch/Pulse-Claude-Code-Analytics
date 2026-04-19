@@ -1,0 +1,56 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicehash/tauri/refs/heads/dev/.schema/config.schema.json",
+  "productName": "Pulse",
+  "version": "1.0.0",
+  "identifier": "com.xt0n1.pulse",
+  "build": {
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Pulse — Claude Code Analytics",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "center": true
+      }
+    ],
+    "trayIcon": null
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi", "app", "dmg", "deb", "rpm", "appimage"],
+    "category": "DeveloperTool",
+    "shortDescription": "Claude Code analytics & Discord Rich Presence.",
+    "longDescription": "Pulse is a native, local-first analytics dashboard for Claude Code. Track cost per session, grade your cache health, catch runaway spend, and share your flow state on Discord via Rich Presence.",
+    "copyright": "© 2026 xt0n1-t3ch · Apache-2.0 — attribution required (see NOTICE)",
+    "publisher": "xt0n1-t3ch",
+    "homepage": "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
+  }
+}

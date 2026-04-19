@@ -1,0 +1,25 @@
+# GitHub auto-generated release notes — categorized by label / commit prefix.
+# Used when `generate_release_notes: true` on softprops/action-gh-release.
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - dependencies
+    authors:
+      - dependabot
+      - github-actions
+  categories:
+    - title: "Breaking changes"
+      labels: ["breaking", "breaking-change"]
+    - title: "New features"
+      labels: ["feature", "enhancement", "feat"]
+    - title: "Bug fixes"
+      labels: ["bug", "bugfix", "fix"]
+    - title: "Performance"
+      labels: ["performance", "perf"]
+    - title: "Documentation"
+      labels: ["documentation", "docs"]
+    - title: "Internal / chores"
+      labels: ["chore", "refactor", "ci", "build", "test"]
+    - title: "Other changes"
+      labels: ["*"]

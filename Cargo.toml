@@ -1,0 +1,42 @@
+[workspace]
+members = [".", "src-tauri"]
+
+[package]
+name = "cc-discord-presence"
+version = "1.0.0"
+edition = "2024"
+description = "Pulse — Claude Code analytics & Discord Rich Presence core"
+license = "Apache-2.0"
+repository = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
+homepage = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
+readme = "README.md"
+authors = ["xt0n1-t3ch"]
+keywords = ["claude-code", "analytics", "discord", "rich-presence", "tauri"]
+categories = ["command-line-utilities", "gui", "development-tools"]
+
+[dependencies]
+anyhow = "1.0.100"
+chrono = { version = "0.4.42", features = ["clock", "serde"] }
+clap = { version = "4.5.51", features = ["derive"] }
+ctrlc = "3.5.1"
+dirs = "6.0.0"
+discord-rich-presence = "1.1.0"
+fs2 = "0.4.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.17"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "time"] }
+ureq = { version = "2.12.1", default-features = true }
+walkdir = "2.5.0"
+
+[target.'cfg(windows)'.dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+[build-dependencies]
+winres = "0.1"
+
+[dev-dependencies]
+tempfile = "3.23.0"

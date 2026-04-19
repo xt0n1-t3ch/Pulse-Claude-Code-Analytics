@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 200" width="900" height="200" role="img" aria-label="Pulse — Claude Code Analytics">
+  <text x="450" y="128" text-anchor="middle" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-weight="800" font-size="138" letter-spacing="16" fill="#0a0a0a">PULSE</text>
+  <line x1="360" y1="156" x2="540" y2="156" stroke="#d4d4d8" stroke-width="1"/>
+  <path d="M 428 156 L 442 156 L 448 140 L 456 172 L 462 156 L 472 156" fill="none" stroke="#0a0a0a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="450" y="182" text-anchor="middle" font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace" font-weight="500" font-size="11" letter-spacing="10" fill="#52525b">CLAUDE · CODE · ANALYTICS</text>
+</svg>

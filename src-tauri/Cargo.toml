@@ -1,0 +1,25 @@
+[package]
+name = "pulse"
+version = "1.0.0"
+edition = "2024"
+description = "Pulse — Claude Code Analytics"
+license = "Apache-2.0"
+repository = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
+homepage = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
+authors = ["xt0n1-t3ch"]
+
+[dependencies]
+cc-discord-presence = { path = ".." }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+tracing = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 236" role="img" aria-labelledby="title desc">
+  <title id="title">Credits Ribbon</title>
+  <desc id="desc">Dark credits ribbon with Claude terracotta and Discord accents.</desc>
+  <defs>
+    <linearGradient id="canvasBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0c0a09"/>
+      <stop offset="100%" stop-color="#1c1917"/>
+    </linearGradient>
+    <linearGradient id="panelBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0e0c0b"/>
+      <stop offset="100%" stop-color="#1a1715"/>
+    </linearGradient>
+    <linearGradient id="accentLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#DA7756"/>
+      <stop offset="50%" stop-color="#E8956E"/>
+      <stop offset="100%" stop-color="#5865F2"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.2" cy="0.18" r="0.5">
+      <stop offset="0%" stop-color="#DA7756" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#DA7756" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="236" fill="url(#canvasBg)"/>
+  <rect x="14" y="14" width="1252" height="208" rx="22" fill="url(#panelBg)" stroke="#2a2523"/>
+  <rect x="14" y="14" width="1252" height="208" rx="22" fill="url(#glow)"/>
+  <rect x="14" y="14" width="1252" height="3" rx="2" fill="url(#accentLine)"/>
+
+  <!-- Clawd pixel mascot in icon box (scaled to fit 168x168) -->
+  <rect x="40" y="36" width="168" height="168" rx="18" fill="#0e0c0b" stroke="#3a3330"/>
+  <g transform="translate(60, 56) scale(1.7)">
+    <!-- Row 0: body top -->
+    <rect x="8"  y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="0" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="0" width="8" height="8" fill="#D77757"/>
+    <!-- Row 1: face with eyes -->
+    <rect x="0"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="8"  y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="80" y="8" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="8" width="8" height="4" fill="#0e0c0b"/>
+    <rect x="64" y="8" width="8" height="4" fill="#0e0c0b"/>
+    <!-- Row 2: body bottom -->
+    <rect x="8"  y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="16" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="32" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="40" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="48" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="64" y="16" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="16" width="8" height="8" fill="#D77757"/>
+    <!-- Row 3: legs -->
+    <rect x="8"  y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="24" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="56" y="24" width="8" height="8" fill="#D77757"/>
+    <rect x="72" y="24" width="8" height="8" fill="#D77757"/>
+  </g>
+
+  <!-- Text -->
+  <text x="240" y="82" fill="#faf9f7" font-size="48" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="700">XT0N1.T3CH</text>
+  <text x="240" y="118" fill="#a8a29e" font-size="22" font-family="'Segoe UI', Inter, Arial, sans-serif">Claude Code Discord Presence</text>
+
+  <line x1="240" y1="136" x2="1220" y2="136" stroke="#2a2523"/>
+
+  <text x="240" y="168" fill="#DA7756" font-size="24" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600">Discord @XT0N1.T3CH</text>
+  <text x="580" y="168" fill="#78716c" font-size="20" font-family="'Segoe UI', Inter, Arial, sans-serif">ID 211189703641268224</text>
+
+  <text x="240" y="194" fill="#78716c" font-size="16" font-family="'Segoe UI', Inter, Arial, sans-serif">Live telemetry &#x2022; Multi-session intelligence &#x2022; Cache-aware cost tracking</text>
+</svg>
