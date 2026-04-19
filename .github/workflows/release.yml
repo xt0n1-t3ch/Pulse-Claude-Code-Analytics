@@ -87,7 +87,7 @@ jobs:
           find "$BUNDLE_DIR" -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -exec cp {} dist/ \; || true
           ls -lah dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pulse-${{ matrix.label }}
           path: dist/*
