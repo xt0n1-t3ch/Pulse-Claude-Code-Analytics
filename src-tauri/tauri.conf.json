@@ -31,7 +31,7 @@
     "longDescription": "Pulse is a native, local-first analytics dashboard for Claude Code. Track cost per session, grade your cache health, catch runaway spend, and share your flow state on Discord via Rich Presence.",
     "copyright": "© xt0n1-t3ch · MIT licensed",
     "publisher": "xt0n1-t3ch",
-    "homepage": "https://github.com/xt0n1-t3ch/Pulse",
+    "homepage": "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics",
     "icon": [
       "../assets/icon.png",
       "../assets/icon.ico"

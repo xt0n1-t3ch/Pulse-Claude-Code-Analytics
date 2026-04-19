@@ -4,8 +4,8 @@ version = "1.0.0"
 edition = "2024"
 description = "Pulse — Claude Code Analytics"
 license = "MIT"
-repository = "https://github.com/xt0n1-t3ch/Pulse"
-homepage = "https://github.com/xt0n1-t3ch/Pulse"
+repository = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
+homepage = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
 authors = ["xt0n1-t3ch"]
 
 [dependencies]

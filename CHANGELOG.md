@@ -19,4 +19,4 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 - **Local-first** — SQLite at `~/.claude/pulse-analytics.db`, zero telemetry.
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
-[1.0.0]: https://github.com/xt0n1-t3ch/Pulse/releases/tag/v1.0.0
+[1.0.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.0.0
