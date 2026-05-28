@@ -8,6 +8,21 @@ use serde_json::Value;
 
 use crate::db::HistoricalSession;
 
+pub const MAX_JSONL_BYTES: u64 = 25 * 1024 * 1024;
+pub const MAX_JSONL_FILES: usize = 4000;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static SCAN_PASSES: AtomicUsize = AtomicUsize::new(0);
+
+pub fn scan_passes() -> usize {
+    SCAN_PASSES.load(Ordering::SeqCst)
+}
+
+pub fn reset_scan_passes() {
+    SCAN_PASSES.store(0, Ordering::SeqCst);
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SessionTrace {
     pub session_id: String,
@@ -33,11 +48,23 @@ impl SessionTrace {
 }
 
 pub fn load_session_traces(sessions: &[HistoricalSession]) -> HashMap<String, SessionTrace> {
+    load_session_traces_from_roots(
+        sessions,
+        cc_discord_presence::config::projects_paths(),
+        cc_discord_presence::codex::config::sessions_paths(),
+    )
+}
+
+pub fn load_session_traces_from_roots(
+    sessions: &[HistoricalSession],
+    claude_roots: Vec<PathBuf>,
+    codex_roots: Vec<PathBuf>,
+) -> HashMap<String, SessionTrace> {
     if sessions.is_empty() {
         return HashMap::new();
     }
 
-    let index = build_jsonl_index(sessions);
+    let index = build_jsonl_index(sessions, claude_roots, codex_roots);
     sessions
         .iter()
         .filter_map(|session| {
@@ -52,7 +79,11 @@ pub fn load_session_traces(sessions: &[HistoricalSession]) -> HashMap<String, Se
         .collect()
 }
 
-fn build_jsonl_index(sessions: &[HistoricalSession]) -> HashMap<(String, String), PathBuf> {
+fn build_jsonl_index(
+    sessions: &[HistoricalSession],
+    claude_roots: Vec<PathBuf>,
+    codex_roots: Vec<PathBuf>,
+) -> HashMap<(String, String), PathBuf> {
     let mut wanted_by_provider: HashMap<Provider, HashSet<String>> = HashMap::new();
     for session in sessions {
         if let Some(provider) = Provider::parse(&session.provider) {
@@ -64,20 +95,23 @@ fn build_jsonl_index(sessions: &[HistoricalSession]) -> HashMap<(String, String)
     }
 
     let mut found = HashMap::new();
+    let mut budget = MAX_JSONL_FILES;
     if let Some(wanted) = wanted_by_provider.get(&Provider::Claude).cloned() {
         scan_provider_roots(
             Provider::Claude,
-            cc_discord_presence::config::projects_paths(),
+            claude_roots,
             wanted,
             &mut found,
+            &mut budget,
         );
     }
     if let Some(wanted) = wanted_by_provider.get(&Provider::Codex).cloned() {
         scan_provider_roots(
             Provider::Codex,
-            cc_discord_presence::codex::config::sessions_paths(),
+            codex_roots,
             wanted,
             &mut found,
+            &mut budget,
         );
     }
 
@@ -89,7 +123,10 @@ fn scan_provider_roots(
     roots: Vec<PathBuf>,
     mut remaining: HashSet<String>,
     found: &mut HashMap<(String, String), PathBuf>,
+    budget: &mut usize,
 ) {
+    SCAN_PASSES.fetch_add(1, Ordering::SeqCst);
+
     for root in roots {
         if remaining.is_empty() || !root.exists() {
             continue;
@@ -114,6 +151,14 @@ fn scan_provider_roots(
                 if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                     continue;
                 }
+                if *budget == 0 {
+                    tracing::warn!(
+                        provider = provider.as_str(),
+                        cap = MAX_JSONL_FILES,
+                        "session-trace scan hit MAX_JSONL_FILES cap; remaining files skipped"
+                    );
+                    return;
+                }
                 let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
@@ -128,11 +173,28 @@ fn scan_provider_roots(
                 }) else {
                     continue;
                 };
+                if file_exceeds_size_cap(&path) {
+                    tracing::warn!(
+                        provider = provider.as_str(),
+                        path = %path.display(),
+                        cap_bytes = MAX_JSONL_BYTES,
+                        "session-trace JSONL exceeds MAX_JSONL_BYTES; file skipped"
+                    );
+                    remaining.remove(&matched_id);
+                    continue;
+                }
+                *budget -= 1;
                 remaining.remove(&matched_id);
                 found.insert((provider.as_str().to_string(), matched_id), path);
             }
         }
     }
+}
+
+fn file_exceeds_size_cap(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|meta| meta.len() > MAX_JSONL_BYTES)
+        .unwrap_or(false)
 }
 
 fn raw_session_id(session: &HistoricalSession) -> String {

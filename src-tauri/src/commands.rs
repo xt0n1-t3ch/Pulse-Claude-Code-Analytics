@@ -2051,17 +2051,34 @@ pub fn get_db_size() -> u64 {
 }
 
 #[tauri::command]
-pub fn generate_html_report(days: Option<i64>, project: Option<String>) -> String {
-    crate::report::generate_html_report(days, project.as_deref())
+pub async fn generate_html_report(days: Option<i64>, project: Option<String>) -> String {
+    offload(move || crate::report::generate_html_report(days, project.as_deref())).await
 }
 
 #[tauri::command]
-pub fn generate_markdown_report(days: Option<i64>, project: Option<String>) -> String {
-    crate::report::generate_markdown_report(days, project.as_deref())
+pub async fn generate_markdown_report(days: Option<i64>, project: Option<String>) -> String {
+    offload(move || crate::report::generate_markdown_report(days, project.as_deref())).await
+}
+
+async fn offload<T, F>(work: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .expect("analyzer blocking task panicked")
 }
 
 fn analyzer_sessions(days: Option<i64>) -> Vec<crate::db::HistoricalSession> {
     crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
+}
+
+fn analyzer_roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
+    (
+        cc_discord_presence::config::projects_paths(),
+        cc_discord_presence::codex::config::sessions_paths(),
+    )
 }
 
 fn analyzer_traces(
@@ -2075,125 +2092,146 @@ fn analyzer_provider() -> Provider {
 }
 
 #[tauri::command]
-pub fn get_cache_health(days: Option<i64>) -> crate::analyzers::cache_health::CacheHealthReport {
+pub async fn get_cache_health(
+    days: Option<i64>,
+) -> crate::analyzers::cache_health::CacheHealthReport {
     let provider = analyzer_provider();
-    crate::analyzers::cache_health::analyze_for_provider(provider, &analyzer_sessions(days))
+    offload(move || {
+        crate::analyzers::cache_health::analyze_for_provider(provider, &analyzer_sessions(days))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_inflection_points(
+pub async fn get_inflection_points(
     days: Option<i64>,
 ) -> Vec<crate::analyzers::inflection::InflectionPoint> {
     let provider = analyzer_provider();
-    crate::analyzers::inflection::detect_for_provider(provider, &analyzer_sessions(days))
+    offload(move || {
+        crate::analyzers::inflection::detect_for_provider(provider, &analyzer_sessions(days))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_model_routing(days: Option<i64>) -> crate::analyzers::model_routing::ModelRoutingReport {
-    crate::analyzers::model_routing::analyze(&analyzer_sessions(days))
+pub async fn get_model_routing(
+    days: Option<i64>,
+) -> crate::analyzers::model_routing::ModelRoutingReport {
+    offload(move || crate::analyzers::model_routing::analyze(&analyzer_sessions(days))).await
 }
 
 #[tauri::command]
-pub fn get_tool_frequency(
+pub async fn get_tool_frequency(
     days: Option<i64>,
 ) -> crate::analyzers::tool_frequency::ToolFrequencyReport {
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    crate::analyzers::tool_frequency::analyze(&sessions, &traces)
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        crate::analyzers::tool_frequency::analyze(&sessions, &traces)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_prompt_complexity(
+pub async fn get_prompt_complexity(
     days: Option<i64>,
 ) -> crate::analyzers::prompt_complexity::PromptComplexityReport {
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    crate::analyzers::prompt_complexity::analyze(&sessions, &traces)
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        crate::analyzers::prompt_complexity::analyze(&sessions, &traces)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_session_health(
+pub async fn get_session_health(
     days: Option<i64>,
 ) -> crate::analyzers::session_health::SessionHealthReport {
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
-    crate::analyzers::session_health::analyze(
-        &sessions,
-        &traces,
-        &tool_frequency,
-        &prompt_complexity,
-    )
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
+        let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
+        crate::analyzers::session_health::analyze(
+            &sessions,
+            &traces,
+            &tool_frequency,
+            &prompt_complexity,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_trace_overview(days: Option<i64>) -> crate::analyzers::trace_overview::TraceOverview {
+pub async fn get_trace_overview(
+    days: Option<i64>,
+) -> crate::analyzers::trace_overview::TraceOverview {
     let provider = analyzer_provider();
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    let cache = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
-    crate::analyzers::trace_overview::build(
-        provider,
-        &sessions,
-        &traces,
-        cache.trend_weighted_ratio,
-    )
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        let cache = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
+        crate::analyzers::trace_overview::build(
+            provider,
+            &sessions,
+            &traces,
+            cache.trend_weighted_ratio,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_recommendations(
+pub async fn get_recommendations(
     days: Option<i64>,
 ) -> Vec<crate::analyzers::recommendations::Recommendation> {
     let provider = analyzer_provider();
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    let cache = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
-    let routing = crate::analyzers::model_routing::analyze(&sessions);
-    let inflections = crate::analyzers::inflection::detect_for_provider(provider, &sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
-    let session_health = crate::analyzers::session_health::analyze(
-        &sessions,
-        &traces,
-        &tool_frequency,
-        &prompt_complexity,
-    );
-    let ctx = crate::analyzers::recommendations::AnalysisContext {
-        provider,
-        sessions: &sessions,
-        cache: &cache,
-        routing: &routing,
-        inflections: &inflections,
-        tool_frequency: Some(&tool_frequency),
-        prompt_complexity: Some(&prompt_complexity),
-        session_health: Some(&session_health),
-    };
-    crate::analyzers::recommendations::generate(&ctx)
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        recommendations_from_traces(provider, &sessions, &traces)
+    })
+    .await
 }
 
 /// Look up a recommendation by id and return its `fix_prompt` so the frontend
 /// can `navigator.clipboard.writeText(...)` it. Returns an empty string if
 /// no matching recommendation exists for the current data window.
 #[tauri::command]
-pub fn copy_fix_prompt(rec_id: String) -> String {
+pub async fn copy_fix_prompt(rec_id: String) -> String {
     let provider = analyzer_provider();
-    let sessions = analyzer_sessions(None);
-    let traces = analyzer_traces(&sessions);
-    let cache = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
-    let routing = crate::analyzers::model_routing::analyze(&sessions);
-    let inflections = crate::analyzers::inflection::detect_for_provider(provider, &sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
+    offload(move || {
+        let sessions = analyzer_sessions(None);
+        let traces = analyzer_traces(&sessions);
+        recommendations_from_traces(provider, &sessions, &traces)
+            .into_iter()
+            .find(|r| r.id == rec_id)
+            .map(|r| r.fix_prompt)
+            .unwrap_or_default()
+    })
+    .await
+}
+
+fn recommendations_from_traces(
+    provider: Provider,
+    sessions: &[crate::db::HistoricalSession],
+    traces: &std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace>,
+) -> Vec<crate::analyzers::recommendations::Recommendation> {
+    let cache = crate::analyzers::cache_health::analyze_for_provider(provider, sessions);
+    let routing = crate::analyzers::model_routing::analyze(sessions);
+    let inflections = crate::analyzers::inflection::detect_for_provider(provider, sessions);
+    let tool_frequency = crate::analyzers::tool_frequency::analyze(sessions, traces);
+    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(sessions, traces);
     let session_health = crate::analyzers::session_health::analyze(
-        &sessions,
-        &traces,
+        sessions,
+        traces,
         &tool_frequency,
         &prompt_complexity,
     );
     let ctx = crate::analyzers::recommendations::AnalysisContext {
         provider,
-        sessions: &sessions,
+        sessions,
         cache: &cache,
         routing: &routing,
         inflections: &inflections,
@@ -2202,10 +2240,93 @@ pub fn copy_fix_prompt(rec_id: String) -> String {
         session_health: Some(&session_health),
     };
     crate::analyzers::recommendations::generate(&ctx)
-        .into_iter()
-        .find(|r| r.id == rec_id)
-        .map(|r| r.fix_prompt)
-        .unwrap_or_default()
+}
+
+#[derive(Serialize)]
+pub struct ReportsBundle {
+    pub provider: String,
+    pub days: i64,
+    pub total_sessions: usize,
+    pub recommendations: Vec<crate::analyzers::recommendations::Recommendation>,
+    pub trace_overview: crate::analyzers::trace_overview::TraceOverview,
+    pub tool_frequency: crate::analyzers::tool_frequency::ToolFrequencyReport,
+    pub prompt_complexity: crate::analyzers::prompt_complexity::PromptComplexityReport,
+    pub session_health: crate::analyzers::session_health::SessionHealthReport,
+    pub cache_health: crate::analyzers::cache_health::CacheHealthReport,
+    pub model_routing: crate::analyzers::model_routing::ModelRoutingReport,
+    pub inflection_points: Vec<crate::analyzers::inflection::InflectionPoint>,
+}
+
+#[tauri::command]
+pub async fn get_reports_bundle(days: Option<i64>, project: Option<String>) -> ReportsBundle {
+    let provider = analyzer_provider();
+    let (claude_roots, codex_roots) = analyzer_roots();
+    offload(move || {
+        let sessions = crate::db::get_session_history(
+            Some(days.unwrap_or(30)),
+            project.as_deref(),
+            Some(5000),
+        );
+        build_reports_bundle_from_roots(provider, days, sessions, claude_roots, codex_roots)
+    })
+    .await
+}
+
+pub fn build_reports_bundle_from_roots(
+    provider: Provider,
+    days: Option<i64>,
+    sessions: Vec<crate::db::HistoricalSession>,
+    claude_roots: Vec<PathBuf>,
+    codex_roots: Vec<PathBuf>,
+) -> ReportsBundle {
+    let traces = crate::analyzers::session_trace::load_session_traces_from_roots(
+        &sessions,
+        claude_roots,
+        codex_roots,
+    );
+
+    let cache_health = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
+    let model_routing = crate::analyzers::model_routing::analyze(&sessions);
+    let inflection_points = crate::analyzers::inflection::detect_for_provider(provider, &sessions);
+    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
+    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
+    let session_health = crate::analyzers::session_health::analyze(
+        &sessions,
+        &traces,
+        &tool_frequency,
+        &prompt_complexity,
+    );
+    let trace_overview = crate::analyzers::trace_overview::build(
+        provider,
+        &sessions,
+        &traces,
+        cache_health.trend_weighted_ratio,
+    );
+    let ctx = crate::analyzers::recommendations::AnalysisContext {
+        provider,
+        sessions: &sessions,
+        cache: &cache_health,
+        routing: &model_routing,
+        inflections: &inflection_points,
+        tool_frequency: Some(&tool_frequency),
+        prompt_complexity: Some(&prompt_complexity),
+        session_health: Some(&session_health),
+    };
+    let recommendations = crate::analyzers::recommendations::generate(&ctx);
+
+    ReportsBundle {
+        provider: provider.as_str().to_string(),
+        days: days.unwrap_or(30),
+        total_sessions: sessions.len(),
+        recommendations,
+        trace_overview,
+        tool_frequency,
+        prompt_complexity,
+        session_health,
+        cache_health,
+        model_routing,
+        inflection_points,
+    }
 }
 
 #[cfg(test)]

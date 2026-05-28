@@ -649,7 +649,7 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     let model_table_html = build_model_table(&models, total_sessions);
     let top_sessions_html = build_top_sessions(&sessions);
     let hourly_heatmap_html = build_hourly_heatmap(&hourly);
-    let recommendations = build_recommendations(provider, &sessions);
+    let recommendations = build_recommendations(provider, &sessions, &traces);
     let mut by_date: BTreeMap<String, f64> = BTreeMap::new();
     for day in &daily {
         *by_date.entry(day.date.clone()).or_default() += day.total_cost;
@@ -1458,21 +1458,21 @@ fn html_escape(input: &str) -> String {
 fn build_recommendations(
     provider: cc_discord_presence::provider::Provider,
     sessions: &[db::HistoricalSession],
+    traces: &std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace>,
 ) -> String {
     use super::analyzers::{
         cache_health, inflection, model_routing, prompt_complexity, recommendations,
-        session_health, session_trace, tool_frequency,
+        session_health, tool_frequency,
     };
     let provider_name = provider.display_name();
 
     let cache = cache_health::analyze_for_provider(provider, sessions);
     let routing = model_routing::analyze(sessions);
     let inflections = inflection::detect_for_provider(provider, sessions);
-    let traces = session_trace::load_session_traces(sessions);
-    let tool_frequency = tool_frequency::analyze(sessions, &traces);
-    let prompt_complexity = prompt_complexity::analyze(sessions, &traces);
+    let tool_frequency = tool_frequency::analyze(sessions, traces);
+    let prompt_complexity = prompt_complexity::analyze(sessions, traces);
     let session_health =
-        session_health::analyze(sessions, &traces, &tool_frequency, &prompt_complexity);
+        session_health::analyze(sessions, traces, &tool_frequency, &prompt_complexity);
     let ctx = recommendations::AnalysisContext {
         provider,
         sessions,

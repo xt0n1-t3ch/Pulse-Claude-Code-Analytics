@@ -11,7 +11,7 @@ pub mod model_routing;
 pub mod prompt_complexity;
 pub mod recommendations;
 pub mod session_health;
-pub(crate) mod session_trace;
+pub mod session_trace;
 pub mod tool_frequency;
 pub mod trace_overview;
 
