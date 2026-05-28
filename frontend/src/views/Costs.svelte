@@ -191,7 +191,10 @@
         </div>
       {:else}
         <div class="budget-empty">
-          <span>No monthly budget set</span>
+          <div class="budget-empty-copy">
+            <span class="budget-empty-title">No monthly budget set</span>
+            <span class="budget-empty-sub">Track spend against a monthly cap and get a heads-up before you overshoot.</span>
+          </div>
           <button class="budget-set-btn" onclick={() => { editingBudget = true; budgetInput = "200"; }}>Set Budget</button>
         </div>
       {/if}
@@ -247,7 +250,10 @@
   {#if costByProject.length > 0}
     <div class="card">
       <h3 class="card-title">Cost by Project</h3>
-      <div class="chart-container">
+      <div
+        class="chart-container"
+        style="height: {Math.max(140, Math.min(360, 44 + costByProject.length * 44))}px"
+      >
         <Chart config={costChartConfig} updateData={updateCostChart} />
       </div>
     </div>
@@ -334,7 +340,7 @@
   .mc-bar-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width 0.3s var(--ease); }
   .mc-val { min-width: 60px; text-align: right; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
 
-  .chart-container { height: 250px; }
+  .chart-container { height: 250px; min-height: 140px; }
 
   .card-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
   .card-title-row .card-title { margin-bottom: 0; }
@@ -373,7 +379,10 @@
   .budget-bar-fill.danger { background: var(--danger); }
   .budget-warning { font-size: 11px; color: var(--danger); font-weight: 600; }
   .budget-edit-btn { font-size: 11px; color: var(--text-muted); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; align-self: flex-start; }
-  .budget-empty { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--text-muted); }
+  .budget-empty { display: flex; align-items: center; justify-content: space-between; gap: 20px; font-size: 13px; color: var(--text-muted); }
+  .budget-empty-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .budget-empty-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+  .budget-empty-sub { font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
   .budget-set-btn { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent-fg); background: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 6px 14px; cursor: pointer; transition: opacity 0.15s ease, transform 0.15s ease; }
   .budget-set-btn:hover { opacity: 0.9; transform: translateY(-1px); }
   .budget-edit { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }

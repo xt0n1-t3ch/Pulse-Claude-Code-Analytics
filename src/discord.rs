@@ -31,7 +31,7 @@ struct ResolvedAssets {
 }
 
 /// GitHub repo URL shown as a button on Discord profile popout.
-const GITHUB_REPO_URL: &str = "https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence";
+const GITHUB_REPO_URL: &str = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics";
 
 pub struct DiscordPresence {
     client_id: Option<String>,

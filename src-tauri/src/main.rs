@@ -7,14 +7,21 @@ pub mod report;
 
 use tauri::{
     Manager,
+    image::Image,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
 };
 
 const TRAY_ID: &str = "pulse-tray";
 
+fn pulse_icon() -> Image<'static> {
+    tauri::include_image!("../assets/icon.png")
+}
+
 fn show_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_title("Pulse");
+        let _ = win.set_icon(pulse_icon());
         let _ = win.show();
         let _ = win.unminimize();
         let _ = win.set_focus();
@@ -40,8 +47,8 @@ fn create_or_show_tray(app: &tauri::AppHandle) {
         .unwrap();
 
     let _ = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(tauri::include_image!("../assets/icon.png"))
-        .tooltip("Pulse — Claude Code Analytics")
+        .icon(pulse_icon())
+        .tooltip("Pulse")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_window(app),
@@ -64,6 +71,13 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.set_title("Pulse");
+                let _ = win.set_icon(pulse_icon());
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_health,
             commands::get_metrics,
@@ -75,6 +89,9 @@ fn main() {
             commands::set_discord_display_prefs,
             commands::get_plan_info,
             commands::set_plan_override,
+            commands::get_active_provider,
+            commands::get_provider_copy,
+            commands::set_active_provider,
             commands::get_session_history,
             commands::get_session_history_filtered,
             commands::get_sessions_by_hour_range,
@@ -99,6 +116,7 @@ fn main() {
             commands::get_inflection_points,
             commands::get_model_routing,
             commands::get_tool_frequency,
+            commands::get_trace_overview,
             commands::get_prompt_complexity,
             commands::get_session_health,
             commands::copy_fix_prompt,

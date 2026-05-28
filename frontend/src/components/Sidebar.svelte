@@ -1,5 +1,6 @@
 <script lang="ts">
   import { currentView } from "../lib/stores";
+  import PulseMark from "./PulseMark.svelte";
 
   const navItems = [
     { id: "dashboard", icon: "grid", title: "Dashboard" },
@@ -16,10 +17,8 @@
 </script>
 
 <aside class="sidebar">
-  <div class="sidebar-logo">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-      <path d="M12 2L12 6M12 18L12 22M6 12L2 12M22 12L18 12M5.64 5.64L8.17 8.17M15.83 15.83L18.36 18.36M5.64 18.36L8.17 15.83M15.83 8.17L18.36 5.64" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
-    </svg>
+  <div class="sidebar-logo" title="Pulse" aria-label="Pulse">
+    <PulseMark size={20} accent="var(--accent)" />
   </div>
 
   <nav class="sidebar-nav">
@@ -71,14 +70,19 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 12px 0;
+    padding: 0 0 12px;
     z-index: 100;
   }
 
   .sidebar-logo {
-    padding: 8px;
-    margin-bottom: 8px;
-    opacity: 0.9;
+    height: var(--topbar-height);
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+    margin-bottom: 10px;
   }
 
   .sidebar-nav {
@@ -90,6 +94,11 @@
 
   .sidebar-bottom {
     margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    width: 100%;
+    display: flex;
+    justify-content: center;
   }
 
   .nav-btn {

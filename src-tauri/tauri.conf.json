@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Pulse — Claude Code Analytics",
+        "title": "Pulse",
         "width": 1280,
         "height": 860,
         "minWidth": 900,
@@ -27,8 +27,8 @@
     "active": true,
     "targets": ["nsis", "msi", "app", "dmg", "deb", "rpm", "appimage"],
     "category": "DeveloperTool",
-    "shortDescription": "Claude Code analytics & Discord Rich Presence.",
-    "longDescription": "Pulse is a native, local-first analytics dashboard for Claude Code. Track cost per session, grade your cache health, catch runaway spend, and share your flow state on Discord via Rich Presence.",
+    "shortDescription": "AI coding analytics & Discord Rich Presence.",
+    "longDescription": "Pulse is a native, local-first analytics dashboard for Claude Code and Codex. Track cost per session, inspect context and model usage, catch runaway spend, and share your coding flow on Discord via Rich Presence.",
     "copyright": "© 2026 xt0n1-t3ch · Apache-2.0 — attribution required (see NOTICE)",
     "publisher": "xt0n1-t3ch",
     "homepage": "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics",

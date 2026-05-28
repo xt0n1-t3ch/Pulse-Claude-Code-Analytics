@@ -4,6 +4,8 @@
 
 use serde::Serialize;
 
+use cc_discord_presence::provider::Provider;
+
 use crate::db::HistoricalSession;
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +87,10 @@ pub fn trend_weighted_ratio(sessions: &[HistoricalSession]) -> f64 {
 }
 
 pub fn analyze(sessions: &[HistoricalSession]) -> CacheHealthReport {
+    analyze_for_provider(Provider::Claude, sessions)
+}
+
+pub fn analyze_for_provider(provider: Provider, sessions: &[HistoricalSession]) -> CacheHealthReport {
     let overall = overall_ratio(sessions);
     let weighted = trend_weighted_ratio(sessions);
     // Grade off the weighted score so recent behavior dominates.
@@ -97,7 +103,7 @@ pub fn analyze(sessions: &[HistoricalSession]) -> CacheHealthReport {
         .map(|s| (s.input_tokens - s.cache_write_tokens - s.cache_read_tokens).max(0))
         .sum();
 
-    let diagnosis = diagnose(grade, weighted, overall, total_cache_read + total_input);
+    let diagnosis = diagnose(provider, grade, weighted, overall, total_cache_read + total_input);
 
     CacheHealthReport {
         grade,
@@ -113,23 +119,25 @@ pub fn analyze(sessions: &[HistoricalSession]) -> CacheHealthReport {
     }
 }
 
-fn diagnose(grade: char, weighted: f64, overall: f64, denom: i64) -> String {
+fn diagnose(provider: Provider, grade: char, weighted: f64, overall: f64, denom: i64) -> String {
+    let instruction_file = provider.instruction_file_name();
+    let product_name = provider.display_name();
     if denom == 0 {
-        return "Not enough usage data yet to grade your cache health. Keep using Claude Code \
-            and check back after a few sessions."
-            .to_string();
+        return format!(
+            "Not enough usage data yet to grade your cache health. Keep using {product_name} and check back after a few sessions."
+        );
     }
     match grade {
         'A' => format!(
             "Cache is working hard for you — {weighted:.0}% of input tokens are served from \
-            cache. Keep your CLAUDE.md and system prompts stable to preserve this."
+            cache. Keep your {instruction_file} and system prompts stable to preserve this."
         ),
         'B' => format!(
             "Solid cache hit ratio ({weighted:.0}%). Small wins available: reorder prompts so \
             stable context sits at the top and volatile bits go last."
         ),
         'C' => format!(
-            "Cache is helping but leaking ({weighted:.0}%). Something in your CLAUDE.md or \
+            "Cache is helping but leaking ({weighted:.0}%). Something in your {instruction_file} or \
             tooling is invalidating the prefix more often than it should."
         ),
         'D' => format!(
@@ -138,7 +146,7 @@ fn diagnose(grade: char, weighted: f64, overall: f64, denom: i64) -> String {
         ),
         _ => format!(
             "Cache is broken ({weighted:.0}%). Almost every turn re-bills the full prefix. \
-            Check for recent CLAUDE.md edits or a Claude Code version that regressed caching."
+            Check for recent {instruction_file} edits or a {product_name} version that regressed caching."
         ),
     }
 }

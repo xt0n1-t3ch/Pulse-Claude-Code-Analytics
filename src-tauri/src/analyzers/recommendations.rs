@@ -1,8 +1,9 @@
 //! Recommendations engine — turns the raw analyzer output into a short list
-//! of actionable items. Each item carries a `fix_prompt` that the frontend's
-//! "Fix with Claude Code" button copies to the clipboard so the user can
-//! paste it straight into a CC session.
+//! of actionable items. Each item carries a `fix_prompt` plus provider-aware
+//! UI copy so the frontend can present the right action verb for Claude or
+//! Codex without hardcoding strings.
 
+use cc_discord_presence::provider::Provider;
 use serde::Serialize;
 
 use super::Severity;
@@ -23,10 +24,13 @@ pub struct Recommendation {
     pub estimated_savings: Option<String>,
     pub action: String,
     pub fix_prompt: String,
+    pub fix_label: String,
+    pub instruction_file: String,
     pub color: &'static str,
 }
 
 pub struct AnalysisContext<'a> {
+    pub provider: Provider,
     pub sessions: &'a [HistoricalSession],
     pub cache: &'a CacheHealthReport,
     pub routing: &'a ModelRoutingReport,
@@ -38,6 +42,11 @@ pub struct AnalysisContext<'a> {
 
 pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
     let mut recs: Vec<Recommendation> = Vec::new();
+    let provider_name = ctx.provider.display_name();
+    let instruction_file = ctx.provider.instruction_file_name();
+    let home_dir = ctx.provider.home_dir_name();
+    let fix_label = ctx.provider.fix_action_label().to_string();
+    let session_store = ctx.provider.sessions_glob_label();
 
     if ctx.cache.trend_weighted_ratio < 50.0 && ctx.cache.sessions_analyzed > 3 {
         let sev = if ctx.cache.trend_weighted_ratio < 30.0 {
@@ -51,21 +60,20 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
             title: "Prompt cache is underperforming".into(),
             description: format!(
                 "Recent cache hit ratio is {:.0}% — every turn is re-paying for the stable part \
-                of your context. Usually this means CLAUDE.md changed recently or volatile content \
+                of your context. Usually this means {instruction_file} changed recently or volatile content \
                 moved to the top of the prompt.",
                 ctx.cache.trend_weighted_ratio
             ),
             estimated_savings: Some("up to 40–60% fewer input tokens".into()),
-            action: "Audit CLAUDE.md for volatile content. Keep stable text (rules, project \
-                overview) at the top; put anything that changes per-session at the bottom."
-                .into(),
+            action: format!(
+                "Audit {instruction_file} for volatile content. Keep stable text (rules, project overview) at the top; put anything that changes per session at the bottom."
+            ),
             fix_prompt: format!(
-                "Analyze my Claude Code cache health. Read the CLAUDE.md files in this repo and \
-                in ~/.claude/. Identify sections that are likely changing between sessions and \
-                invalidating the prompt cache (current hit ratio: {:.0}%). Suggest a reordering \
-                that pins stable rules at the top and pushes volatile content to the bottom.",
+                "Analyze my {provider_name} cache health. Read the {instruction_file} files in this repo and in {home_dir}. Identify sections that are likely changing between sessions and invalidating the prompt cache (current hit ratio: {:.0}%). Suggest a reordering that pins stable rules at the top and pushes volatile content to the bottom.",
                 ctx.cache.trend_weighted_ratio
             ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: sev.color_hint(),
         });
     } else if ctx.cache.trend_weighted_ratio >= 70.0 && ctx.cache.sessions_analyzed > 5 {
@@ -74,15 +82,16 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
             severity: Severity::Positive,
             title: "Cache health is strong".into(),
             description: format!(
-                "{:.0}% of your input is served from cache. Keep your stable prompts stable — \
-                small reshuffles can drop this grade quickly.",
+                "{:.0}% of your input is served from cache. Keep your stable prompts stable — small reshuffles can drop this grade quickly.",
                 ctx.cache.trend_weighted_ratio
             ),
             estimated_savings: None,
             action: "No action — maintain current prompt stability.".into(),
-            fix_prompt: "No fix needed — my cache hit ratio is healthy. Just verify nothing has \
-                changed that would regress it."
-                .into(),
+            fix_prompt: format!(
+                "No fix needed — my {provider_name} cache hit ratio is healthy. Just verify nothing has changed that would regress it."
+            ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Positive.color_hint(),
         });
     }
@@ -91,25 +100,23 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
         recs.push(Recommendation {
             id: "opus-dominance".into(),
             severity: Severity::Warning,
-            title: "Opus is carrying almost all your spend".into(),
+            title: "Opus-tier models are carrying almost all your spend".into(),
             description: format!(
-                "{:.0}% of cost is Opus ({}). Simple lookups, commit messages, and quick \
-                refactors run fine on Sonnet or Haiku at 5–25× lower cost.",
+                "{:.0}% of cost is premium-tier reasoning ({} sessions). Simple lookups, commit messages, and quick refactors often run fine on cheaper models.",
                 ctx.routing.opus.cost_share_pct, ctx.routing.opus.sessions
             ),
             estimated_savings: Some(format!(
-                "~${:.2} if ~30% of Opus work moves to Sonnet",
+                "~${:.2} if ~30% of premium work moves down one tier",
                 ctx.routing.estimated_savings_if_rerouted
             )),
-            action: "For the next few sessions, try Sonnet-first on reads / small edits and \
-                only escalate to Opus when reasoning depth is needed."
+            action: "For the next few sessions, try the mid-tier model first on reads / small edits and only escalate when reasoning depth is needed."
                 .into(),
             fix_prompt: format!(
-                "Looking at my last 30 days of Claude Code usage, {:.0}% of cost is Opus. \
-                Suggest a concrete workflow: which classes of tasks should I route to Sonnet or \
-                Haiku to cut cost without hurting quality?",
+                "Looking at my last 30 days of {provider_name} usage, {:.0}% of cost is coming from my highest-tier reasoning model. Suggest a concrete routing workflow: which classes of tasks should I push to cheaper models without hurting quality?",
                 ctx.routing.opus.cost_share_pct
             ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Warning.color_hint(),
         });
     }
@@ -120,22 +127,20 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
             severity: Severity::Warning,
             title: format!("Cost spike on {}", spike.date),
             description: format!(
-                "Cost per session ran {:.1}× the prior 3-day baseline. ${:.2} across {} \
-                session(s). Likely cause: CLAUDE.md change, longer contexts, or a CC version update.",
+                "Cost per session ran {:.1}× the prior 3-day baseline. ${:.2} across {} session(s). Likely cause: {instruction_file} change, longer contexts, or a {provider_name} update.",
                 spike.multiplier, spike.cost_on_day, spike.sessions_on_day
             ),
             estimated_savings: None,
             action: format!(
-                "Compare your setup on {} to the days before. `git log --since=\"{} 1 day ago\" \
-                --until=\"{} 1 day\"` often reveals the trigger.",
+                "Compare your setup on {} to the days before. `git log --since=\"{} 1 day ago\" --until=\"{} 1 day\"` often reveals the trigger.",
                 spike.date, spike.date, spike.date
             ),
             fix_prompt: format!(
-                "On {} my Claude Code cost/session jumped {:.1}× versus the baseline. Check \
-                ~/.claude/projects/**/statusline.jsonl for sessions on that date and figure out \
-                what changed — CLAUDE.md edits, new skills/MCP servers, or CC version bump.",
+                "On {} my {provider_name} cost/session jumped {:.1}× versus the baseline. Check {session_store} for sessions on that date and figure out what changed — {instruction_file} edits, new skills/MCP servers, model routing, or a version bump.",
                 spike.date, spike.multiplier
             ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Warning.color_hint(),
         });
     }
@@ -147,14 +152,17 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
                 severity: Severity::Warning,
                 title: "Tool-call density is high".into(),
                 description: format!(
-                    "Average session fires {:.0} tools. Long read/search chains usually mean context drift and a missing `/compact` checkpoint.",
+                    "Average session fires {:.0} tools. Long read/search chains usually mean context drift and a missing compact checkpoint.",
                     tool_frequency.avg_tools_per_session
                 ),
                 estimated_savings: Some("~10–25% fewer cache-write tokens".into()),
                 action: "Compact every 30–40 tool calls. Split recon from implementation so searches do not ride along with edits."
                     .into(),
-                fix_prompt: "Review my Claude Code workflow for tool overuse. I average 40+ tool calls per session. Suggest a tighter cadence for search, `/compact`, and fresh-session boundaries."
-                    .into(),
+                fix_prompt: format!(
+                    "Review my {provider_name} workflow for tool overuse. I average 40+ tool calls per session. Suggest a tighter cadence for search, compacting, and fresh-session boundaries."
+                ),
+                fix_label: fix_label.clone(),
+                instruction_file: instruction_file.to_string(),
                 color: Severity::Warning.color_hint(),
             });
         }
@@ -169,9 +177,13 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
                     tool_frequency.mcp_share_pct
                 ),
                 estimated_savings: Some("~5–15% per avoidable cache break".into()),
-                action: "Disconnect idle MCP servers between tasks and keep only the ones needed for the current repo.".into(),
-                fix_prompt: "Audit my active Claude Code MCP servers. Which ones are adding tool-schema bloat without helping the current task, and what should I disable by default?"
+                action: "Disconnect idle MCP servers between tasks and keep only the ones needed for the current repo."
                     .into(),
+                fix_prompt: format!(
+                    "Audit my active {provider_name} MCP servers. Which ones are adding tool-schema bloat without helping the current task, and what should I disable by default?"
+                ),
+                fix_label: fix_label.clone(),
+                instruction_file: instruction_file.to_string(),
                 color: Severity::Info.color_hint(),
             });
         }
@@ -190,9 +202,13 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
                 prompt_complexity.avg_specificity_score
             ),
             estimated_savings: Some("~20–40% fewer exploratory tokens".into()),
-            action: "When possible, include file paths, failing command output, and desired end-state in the first prompt.".into(),
-            fix_prompt: "Show me how to rewrite my recent Claude Code prompts so they are more specific. Use file paths, failing commands, exact errors, and concrete acceptance criteria."
+            action: "When possible, include file paths, failing command output, and desired end-state in the first prompt."
                 .into(),
+            fix_prompt: format!(
+                "Show me how to rewrite my recent {provider_name} prompts so they are more specific. Use file paths, failing commands, exact errors, and concrete acceptance criteria."
+            ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Info.color_hint(),
         });
     }
@@ -201,18 +217,26 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
         && session_health.available
         && session_health.peak_overlap_pct > 40
     {
+        let overlap_copy = match ctx.provider {
+            Provider::Claude => "Anthropic peak hours",
+            Provider::Codex => "your busiest overlap window",
+        };
         recs.push(Recommendation {
             id: "peak-hour-overlap".into(),
             severity: Severity::Info,
             title: "A lot of work lands in throttled hours".into(),
             description: format!(
-                "{}% of traced session traffic overlaps Anthropic peak hours.",
+                "{}% of traced session traffic overlaps {overlap_copy}.",
                 session_health.peak_overlap_pct
             ),
-            estimated_savings: Some("~30% longer session limits off-peak".into()),
-            action: "Shift big refactors, test generation, or long debugging runs outside 5am–11am PT when possible.".into(),
-            fix_prompt: "Help me reschedule the most expensive Claude Code work to off-peak hours. Which task types should I batch for later to preserve 5-hour limits?"
+            estimated_savings: Some("~more stable long-session headroom off-peak".into()),
+            action: "Shift big refactors, test generation, or long debugging runs outside your busiest window when possible."
                 .into(),
+            fix_prompt: format!(
+                "Help me reschedule the most expensive {provider_name} work to off-peak hours. Which task types should I batch for later to preserve my session limits?"
+            ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Info.color_hint(),
         });
     }
@@ -227,17 +251,16 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
             id: "long-sessions".into(),
             severity: Severity::Info,
             title: format!("{long_sessions} sessions exceed 2 hours"),
-            description: "Very long sessions drift context and eat cache. Shorter, focused \
-                sessions tend to use tokens more efficiently and compact less."
+            description: "Very long sessions drift context and eat cache. Shorter, focused sessions tend to use tokens more efficiently and compact less."
                 .into(),
             estimated_savings: Some("10–25% fewer cache-write tokens".into()),
-            action: "Break long pairings into feature-sized sessions. Use /compact or start fresh \
-                when you shift topics."
+            action: "Break long pairings into feature-sized sessions. Compact or start fresh when you shift topics."
                 .into(),
-            fix_prompt: "I keep hitting multi-hour Claude Code sessions. Suggest a workflow for \
-                chunking my work into shorter focused sessions without losing thread between them \
-                (e.g. summary files, per-feature branches, /compact cadence)."
-                .into(),
+            fix_prompt: format!(
+                "I keep hitting multi-hour {provider_name} sessions. Suggest a workflow for chunking my work into shorter focused sessions without losing thread between them (e.g. summaries, per-feature branches, compact cadence)."
+            ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Info.color_hint(),
         });
     }
@@ -252,17 +275,16 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
             id: "high-cost-sessions".into(),
             severity: Severity::Info,
             title: format!("{} high-cost session(s) (>$20)", expensive.len()),
-            description: "A handful of sessions carry outsized cost. Worth knowing which ones and \
-                why — they're usually either rabbit-hole debugging or repeated re-reads."
+            description: "A handful of sessions carry outsized cost. Worth knowing which ones and why — they're usually either rabbit-hole debugging or repeated re-reads."
                 .into(),
             estimated_savings: None,
-            action: "Open the Sessions tab, sort by cost, and review the top 3 — the pattern is \
-                usually obvious once you see them lined up."
+            action: "Open the Sessions tab, sort by cost, and review the top 3 — the pattern is usually obvious once you see them lined up."
                 .into(),
-            fix_prompt: "Analyze my 3 most expensive Claude Code sessions (you can find them in \
-                ~/.claude/pulse-analytics.db or by sorting my JSONL sessions by total cost). \
-                What made each one expensive, and what would have kept it cheaper?"
-                .into(),
+            fix_prompt: format!(
+                "Analyze my 3 most expensive {provider_name} sessions from Pulse analytics history. What made each one expensive, and what would have kept it cheaper?"
+            ),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Info.color_hint(),
         });
     }
@@ -276,9 +298,12 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
             estimated_savings: None,
             action: "Keep going.".into(),
             fix_prompt: String::new(),
+            fix_label: fix_label.clone(),
+            instruction_file: instruction_file.to_string(),
             color: Severity::Positive.color_hint(),
         });
     }
 
     recs
 }
+

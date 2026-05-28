@@ -6,6 +6,7 @@
   import Sparkline from "../components/Sparkline.svelte";
   import Heatmap from "../components/Heatmap.svelte";
   import { health, metrics, sessions, rateLimits, planInfo } from "../lib/stores";
+  import { providerProfile } from "../lib/provider";
   import { fmtTokens, fmtCost, fmtDuration, fmtPct, fmtTps, formatResetRelative, formatResetWeekly } from "../lib/utils";
   import {
     getAnalyticsSummary, getSessionHistory, getCostForecast,
@@ -27,7 +28,13 @@
     refreshing = true;
     try {
       await refreshUsage();
-      addToast("Refreshing usage from Anthropic…", "info", 2500);
+      addToast(
+        $providerProfile.id === "claude"
+          ? "Refreshing Claude usage from Anthropic..."
+          : "Refreshing Codex telemetry...",
+        "info",
+        2500,
+      );
       setTimeout(() => { refreshing = false; }, 5500);
     } catch (err) {
       addToast(`Refresh failed: ${String(err)}`, "danger", 3500);
@@ -193,15 +200,20 @@
     <div class="card">
       <div class="usage-header">
         <h3 class="card-title">Plan Usage Limits {#if $planInfo}— {$planInfo.plan_name}{/if}</h3>
-        <button class="refresh-btn" class:spinning={refreshing} onclick={handleRefresh} title="Refresh usage from Anthropic API">
+        <button
+          class="refresh-btn"
+          class:spinning={refreshing}
+          onclick={handleRefresh}
+          title={$providerProfile.id === "claude" ? "Refresh usage from Anthropic API" : "Refresh Codex telemetry"}
+        >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
         </button>
       </div>
       <div class="usage-section">
         <div class="usage-group">
-          <div class="usage-group-label">Current session</div>
+          <div class="usage-group-label">{$providerProfile.id === "claude" ? "Current session" : "Live quotas"}</div>
           {#if $rateLimits && $rateLimits.five_hour_resets !== "N/A"}
-            <ProgressBar label="Current Session" pct={$rateLimits.five_hour_pct} meta={formatResetRelative($rateLimits.five_hour_resets)} />
+            <ProgressBar label={$rateLimits.five_hour_label} pct={$rateLimits.five_hour_pct} meta={formatResetRelative($rateLimits.five_hour_resets)} />
           {:else if $rateLimits}
             <div class="empty-hint">{$rateLimits.source}</div>
           {:else}
@@ -210,10 +222,10 @@
         </div>
         <div class="usage-divider"></div>
         <div class="usage-group">
-          <div class="usage-group-label">Weekly limits</div>
+          <div class="usage-group-label">{$providerProfile.id === "claude" ? "Weekly limits" : "Longer windows"}</div>
           {#if $rateLimits && $rateLimits.seven_day_resets !== "N/A"}
-            <ProgressBar label="All Models" pct={$rateLimits.seven_day_pct} meta={formatResetWeekly($rateLimits.seven_day_resets)} />
-            {#if $rateLimits.sonnet_pct != null}
+            <ProgressBar label={$rateLimits.seven_day_label} pct={$rateLimits.seven_day_pct} meta={formatResetWeekly($rateLimits.seven_day_resets)} />
+            {#if $providerProfile.id === "claude" && $rateLimits.sonnet_pct != null}
               <ProgressBar label="Sonnet Only" pct={$rateLimits.sonnet_pct} meta={$rateLimits.sonnet_resets ? formatResetWeekly($rateLimits.sonnet_resets) : ""} />
             {/if}
           {:else if $rateLimits}
@@ -224,22 +236,33 @@
           <div class="usage-footer">Source: {$rateLimits.source}</div>
         {/if}
       </div>
-      {#if $rateLimits}
+      {#if $rateLimits && $providerProfile.supportsExtraUsage}
         <div class="extra-usage">
           <div class="extra-header">
             <span class="extra-title">Extra usage</span>
-            <span class="extra-badge">{$rateLimits.extra_enabled ? "On" : "Off"}</span>
+            <span class="extra-badge" class:on={$rateLimits.extra_enabled}>
+              <span class="extra-dot"></span>
+              {$rateLimits.extra_enabled ? "On" : "Off"}
+            </span>
           </div>
-          {#if $rateLimits.extra_used != null}
-            <div class="extra-row">
-              <span>{fmtCost($rateLimits.extra_used)} spent</span>
-              <span class="extra-dim">{$rateLimits.extra_pct != null ? fmtPct($rateLimits.extra_pct) + " used" : ""}</span>
-            </div>
-          {/if}
-          {#if $rateLimits.extra_limit != null}
-            <div class="extra-row">
-              <span>{fmtCost($rateLimits.extra_limit)}</span>
-              <span class="extra-dim">Monthly spend limit</span>
+          {#if $rateLimits.extra_used != null || $rateLimits.extra_limit != null}
+            <div class="extra-grid">
+              {#if $rateLimits.extra_used != null}
+                <div class="extra-cell">
+                  <span class="extra-cell-label">Spent</span>
+                  <span class="extra-cell-val">{fmtCost($rateLimits.extra_used)}</span>
+                  {#if $rateLimits.extra_pct != null}
+                    <span class="extra-cell-meta">{fmtPct($rateLimits.extra_pct)} used</span>
+                  {/if}
+                </div>
+              {/if}
+              {#if $rateLimits.extra_limit != null}
+                <div class="extra-cell">
+                  <span class="extra-cell-label">Monthly cap</span>
+                  <span class="extra-cell-val">{fmtCost($rateLimits.extra_limit)}</span>
+                  <span class="extra-cell-meta">Spend limit</span>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
@@ -377,9 +400,11 @@
         </div>
       {:else}
         <div class="empty-state">
-          <div class="empty-icon">✳</div>
+          <div class="empty-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.35"/><path d="M12 8v4l2.5 2.5"/></svg>
+          </div>
           <div class="empty-text">No sessions yet</div>
-          <div class="empty-sub">Start a Claude Code session to see data</div>
+          <div class="empty-sub">Start a {$providerProfile.productName} session to see data</div>
         </div>
       {/if}
     </div>
@@ -445,12 +470,55 @@
   .usage-divider { height: 1px; background: var(--border); margin: 6px 0; }
   .usage-footer { margin-top: 8px; font-size: 11px; color: var(--text-muted); }
 
-  .extra-usage { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  .extra-usage {
+    margin-top: 16px;
+    padding: 14px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
   .extra-header { display: flex; justify-content: space-between; align-items: center; }
-  .extra-title { font-size: 13px; font-weight: 700; }
-  .extra-badge { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 8px; border-radius: 99px; }
-  .extra-row { display: flex; justify-content: space-between; font-size: 12px; }
-  .extra-dim { color: var(--text-muted); }
+  .extra-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .extra-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 3px 9px;
+    border-radius: 99px;
+  }
+  .extra-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+  .extra-badge.on { color: var(--success); background: var(--success-dim); border-color: transparent; }
+  .extra-badge.on .extra-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-glow); }
+
+  .extra-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .extra-cell { display: flex; flex-direction: column; gap: 2px; }
+  .extra-cell-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .extra-cell-val {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+  .extra-cell-meta { font-size: 11px; color: var(--text-muted); }
 
   .breakdown-table { display: flex; flex-direction: column; gap: 8px; }
   .bd-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
@@ -490,10 +558,17 @@
   .pt-col.cost { font-weight: 700; color: var(--accent); }
 
   .session-list { display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; }
-  .empty-state { text-align: center; padding: 40px 20px; }
-  .empty-icon { font-size: 28px; color: var(--accent); margin-bottom: 10px; }
+  .empty-state { text-align: center; padding: 44px 20px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .empty-icon {
+    width: 48px; height: 48px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted);
+    background: var(--bg-elevated);
+    border-radius: 50%;
+    margin-bottom: 6px;
+  }
   .empty-text { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
-  .empty-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .empty-sub { font-size: 12px; color: var(--text-muted); }
   .empty-hint { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
 
   .recent-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; font-style: italic; }

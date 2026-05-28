@@ -1,5 +1,225 @@
 use crate::db;
 
+const REPO_URL: &str = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics";
+
+struct ReportData {
+    sessions: Vec<db::HistoricalSession>,
+    daily: Vec<db::DailyStat>,
+    summary: db::AnalyticsSummary,
+    projects: Vec<db::ProjectStat>,
+    forecast: db::CostForecast,
+    hourly: Vec<db::HourlyActivity>,
+    models: Vec<(String, i64, f64)>,
+}
+
+fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
+    let sessions = db::get_session_history(Some(days), project, Some(5000));
+    if project.is_none() {
+        return ReportData {
+            daily: db::get_daily_stats(Some(days)),
+            summary: db::get_analytics_summary(),
+            projects: db::get_project_stats(Some(days)),
+            forecast: db::get_cost_forecast(),
+            hourly: db::get_hourly_activity(Some(days)),
+            models: db::get_model_distribution(Some(days)),
+            sessions,
+        };
+    }
+
+    use chrono::{Datelike, Timelike, Utc};
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
+    let now = Utc::now();
+    let days_elapsed = now.day() as i64;
+    let days_in_month = {
+        let (y, m) = (now.year(), now.month());
+        if m == 12 {
+            chrono::NaiveDate::from_ymd_opt(y + 1, 1, 1)
+        } else {
+            chrono::NaiveDate::from_ymd_opt(y, m + 1, 1)
+        }
+        .and_then(|d| d.pred_opt())
+        .map(|d| d.day() as i64)
+        .unwrap_or(30)
+    };
+    let month_start = now.format("%Y-%m-01T00:00:00+00:00").to_string();
+
+    let mut daily_map: BTreeMap<(String, String, String), db::DailyStat> = BTreeMap::new();
+    let mut hourly_map: BTreeMap<i64, db::HourlyActivity> = BTreeMap::new();
+    let mut project_map: HashMap<String, db::ProjectStat> = HashMap::new();
+    let mut model_map: HashMap<String, (i64, f64)> = HashMap::new();
+    let mut tracked_days: HashSet<String> = HashSet::new();
+    let mut top_model_counts: HashMap<String, i64> = HashMap::new();
+
+    for session in &sessions {
+        let ts = session
+            .started_at
+            .as_deref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc));
+        let date = ts
+            .map(|value| value.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| now.format("%Y-%m-%d").to_string());
+        tracked_days.insert(date.clone());
+
+        let daily_key = (date.clone(), session.project.clone(), session.model.clone());
+        let entry = daily_map.entry(daily_key).or_insert(db::DailyStat {
+            date: date.clone(),
+            project: session.project.clone(),
+            model: session.model.clone(),
+            session_count: 0,
+            total_cost: 0.0,
+            total_tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_tokens: 0,
+            cache_read_tokens: 0,
+        });
+        entry.session_count += 1;
+        entry.total_cost += session.total_cost;
+        entry.total_tokens += session.total_tokens;
+        entry.input_tokens += session.input_tokens;
+        entry.output_tokens += session.output_tokens;
+        entry.cache_write_tokens += session.cache_write_tokens;
+        entry.cache_read_tokens += session.cache_read_tokens;
+
+        let project_entry = project_map
+            .entry(session.project.clone())
+            .or_insert(db::ProjectStat {
+                project: session.project.clone(),
+                session_count: 0,
+                total_cost: 0.0,
+                total_tokens: 0,
+                avg_session_cost: 0.0,
+                avg_duration_secs: 0.0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                top_model: String::new(),
+            });
+        project_entry.session_count += 1;
+        project_entry.total_cost += session.total_cost;
+        project_entry.total_tokens += session.total_tokens;
+        project_entry.avg_duration_secs += session.duration_secs as f64;
+        project_entry.cache_read_tokens += session.cache_read_tokens;
+        project_entry.cache_write_tokens += session.cache_write_tokens;
+
+        *model_map.entry(session.model.clone()).or_insert((0, 0.0)) = {
+            let (count, cost) = model_map.get(&session.model).copied().unwrap_or((0, 0.0));
+            (count + 1, cost + session.total_cost)
+        };
+        *top_model_counts.entry(session.model.clone()).or_insert(0) += 1;
+
+        if let Some(ts) = ts {
+            let hour = i64::from(ts.hour() as i32);
+            let hourly = hourly_map.entry(hour).or_insert(db::HourlyActivity {
+                hour,
+                session_count: 0,
+                total_cost: 0.0,
+            });
+            hourly.session_count += 1;
+            hourly.total_cost += session.total_cost;
+        }
+    }
+
+    let mut projects: Vec<db::ProjectStat> = project_map
+        .into_values()
+        .map(|mut stat| {
+            if stat.session_count > 0 {
+                stat.avg_session_cost = stat.total_cost / stat.session_count as f64;
+                stat.avg_duration_secs /= stat.session_count as f64;
+            }
+            stat.top_model = top_model_counts
+                .iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(model, _)| model.clone())
+                .unwrap_or_default();
+            stat
+        })
+        .collect();
+    projects.sort_by(|a, b| {
+        b.total_cost
+            .partial_cmp(&a.total_cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut models: Vec<(String, i64, f64)> = model_map
+        .into_iter()
+        .map(|(model, (count, cost))| (model, count, cost))
+        .collect();
+    models.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let total_sessions = sessions.len() as i64;
+    let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
+    let total_tokens: i64 = sessions.iter().map(|s| s.total_tokens).sum();
+    let total_cache_read: i64 = sessions.iter().map(|s| s.cache_read_tokens).sum();
+    let total_cache_write: i64 = sessions.iter().map(|s| s.cache_write_tokens).sum();
+    let avg_duration_secs = if total_sessions > 0 {
+        sessions.iter().map(|s| s.duration_secs).sum::<i64>() as f64 / total_sessions as f64
+    } else {
+        0.0
+    };
+    let avg_tokens_per_session = if total_sessions > 0 {
+        total_tokens as f64 / total_sessions as f64
+    } else {
+        0.0
+    };
+    let avg_cost_per_session = if total_sessions > 0 {
+        total_cost / total_sessions as f64
+    } else {
+        0.0
+    };
+    let top_project = projects
+        .first()
+        .map(|p| p.project.clone())
+        .unwrap_or_else(|| "—".into());
+    let top_model = models
+        .first()
+        .map(|m| m.0.clone())
+        .unwrap_or_else(|| "—".into());
+    let spent_this_month: f64 = sessions
+        .iter()
+        .filter(|s| {
+            s.started_at
+                .as_deref()
+                .is_some_and(|ts| ts >= month_start.as_str())
+        })
+        .map(|s| s.total_cost)
+        .sum();
+    let daily_average = if days_elapsed > 0 {
+        spent_this_month / days_elapsed as f64
+    } else {
+        0.0
+    };
+
+    ReportData {
+        sessions,
+        daily: daily_map.into_values().collect(),
+        summary: db::AnalyticsSummary {
+            total_sessions,
+            total_cost,
+            total_tokens,
+            total_cache_read,
+            total_cache_write,
+            avg_duration_secs,
+            avg_tokens_per_session,
+            avg_cost_per_session,
+            top_project,
+            top_model,
+            days_tracked: tracked_days.len() as i64,
+        },
+        projects,
+        forecast: db::CostForecast {
+            spent_this_month,
+            days_elapsed,
+            days_in_month,
+            projected_monthly: daily_average * days_in_month as f64,
+            daily_average,
+        },
+        hourly: hourly_map.into_values().collect(),
+        models,
+    }
+}
+
 /// Render the analytics report as Markdown — suitable for pasting into a
 /// GitHub issue, a Slack message, or a CC session. Sections mirror the HTML
 /// report: cache grade, stats, top sessions, project + model breakdowns.
@@ -9,26 +229,31 @@ use crate::db;
 pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> String {
     use super::analyzers::{
         cache_health, inflection, model_routing, prompt_complexity, session_trace, tool_frequency,
+        trace_overview,
     };
     use std::fmt::Write as _;
 
     let d = days.unwrap_or(30);
-    let sessions = db::get_session_history(Some(d), project, Some(5000));
-    let projects = db::get_project_stats(Some(d));
-    let models = db::get_model_distribution(Some(d));
-    let forecast = db::get_cost_forecast();
-    let summary = db::get_analytics_summary();
+    let provider = cc_discord_presence::provider::load_active_provider();
+    let data = load_report_data(d, project);
+    let sessions = data.sessions;
+    let projects = data.projects;
+    let models = data.models;
+    let forecast = data.forecast;
+    let summary = data.summary;
 
     let total_sessions = sessions.len();
     let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
     let total_tokens: i64 = sessions.iter().map(|s| s.total_tokens).sum();
 
-    let cache = cache_health::analyze(&sessions);
+    let cache = cache_health::analyze_for_provider(provider, &sessions);
     let routing = model_routing::analyze(&sessions);
-    let inflections = inflection::detect(&sessions);
+    let inflections = inflection::detect_for_provider(provider, &sessions);
     let traces = session_trace::load_session_traces(&sessions);
     let tool_frequency = tool_frequency::analyze(&sessions, &traces);
     let prompt_complexity = prompt_complexity::analyze(&sessions, &traces);
+    let trace_overview =
+        trace_overview::build(provider, &sessions, &traces, cache.trend_weighted_ratio);
 
     let mut top_sessions: Vec<_> = sessions.iter().collect();
     top_sessions.sort_by(|a, b| {
@@ -270,6 +495,59 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
         writeln!(md).unwrap();
     }
 
+    writeln!(md, "## Telemetry Topology\n").unwrap();
+    writeln!(md, "- Provider: {}", provider.display_name()).unwrap();
+    writeln!(
+        md,
+        "- Instruction file: {}",
+        provider.instruction_file_name()
+    )
+    .unwrap();
+    writeln!(md, "- Session store: {}", provider.sessions_glob_label()).unwrap();
+    writeln!(md, "- Global state: {}", provider.global_state_label()).unwrap();
+    writeln!(
+        md,
+        "- Trace coverage: {} of {} sessions",
+        trace_overview.traced_sessions, trace_overview.total_sessions
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "- Messages: {} user · {} assistant",
+        trace_overview.user_messages, trace_overview.assistant_messages
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "- Tool calls: {} total · {} MCP · {} compact checkpoints\n",
+        trace_overview.total_tool_calls,
+        trace_overview.mcp_tool_calls,
+        trace_overview.total_compactions
+    )
+    .unwrap();
+    if !trace_overview.top_tools.is_empty() {
+        writeln!(md, "### Top traced tools\n").unwrap();
+        writeln!(md, "| Tool | Calls | Share |\n|---|---:|---:|").unwrap();
+        for tool in &trace_overview.top_tools {
+            writeln!(
+                md,
+                "| {} | {} | {:.1}% |",
+                md_escape(&tool.name),
+                tool.calls,
+                tool.share_pct
+            )
+            .unwrap();
+        }
+        writeln!(md).unwrap();
+    }
+    writeln!(
+        md,
+        "```mermaid\n{}\n```\n",
+        trace_overview.telemetry_mermaid
+    )
+    .unwrap();
+    writeln!(md, "```mermaid\n{}\n```\n", trace_overview.cache_mermaid).unwrap();
+
     writeln!(md, "## Prompts\n").unwrap();
     writeln!(
         md,
@@ -331,18 +609,21 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
 pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String {
     use super::analyzers::{
         cache_health, inflection, model_routing, prompt_complexity, session_trace, tool_frequency,
+        trace_overview,
     };
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
 
     let d = days.unwrap_or(30);
-    let sessions = db::get_session_history(Some(d), project, Some(5000));
-    let daily = db::get_daily_stats(Some(d));
-    let summary = db::get_analytics_summary();
-    let projects = db::get_project_stats(Some(d));
-    let forecast = db::get_cost_forecast();
-    let hourly = db::get_hourly_activity(Some(d));
-    let models = db::get_model_distribution(Some(d));
+    let provider = cc_discord_presence::provider::load_active_provider();
+    let data = load_report_data(d, project);
+    let sessions = data.sessions;
+    let daily = data.daily;
+    let summary = data.summary;
+    let projects = data.projects;
+    let forecast = data.forecast;
+    let hourly = data.hourly;
+    let models = data.models;
 
     let total_sessions = sessions.len();
     let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
@@ -355,12 +636,14 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     let total_cache_w: i64 = sessions.iter().map(|s| s.cache_write_tokens).sum();
     let total_cache_r: i64 = sessions.iter().map(|s| s.cache_read_tokens).sum();
 
-    let cache = cache_health::analyze(&sessions);
+    let cache = cache_health::analyze_for_provider(provider, &sessions);
     let routing = model_routing::analyze(&sessions);
-    let inflections = inflection::detect(&sessions);
+    let inflections = inflection::detect_for_provider(provider, &sessions);
     let traces = session_trace::load_session_traces(&sessions);
     let tool_frequency = tool_frequency::analyze(&sessions, &traces);
     let prompt_complexity = prompt_complexity::analyze(&sessions, &traces);
+    let trace_overview =
+        trace_overview::build(provider, &sessions, &traces, cache.trend_weighted_ratio);
 
     let grade_color = match cache.grade {
         'A' | 'B' => "#22c55e",
@@ -371,26 +654,11 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     let model_table_html = build_model_table(&models, total_sessions);
     let top_sessions_html = build_top_sessions(&sessions);
     let hourly_heatmap_html = build_hourly_heatmap(&hourly);
-    let recommendations = build_recommendations(&sessions);
-    let _legacy_daily_chart = build_daily_chart_data(&daily);
-    let _legacy_token_chart =
-        build_token_chart_data(total_input, total_output, total_cache_w, total_cache_r);
-
+    let recommendations = build_recommendations(provider, &sessions);
     let mut by_date: BTreeMap<String, f64> = BTreeMap::new();
     for day in &daily {
         *by_date.entry(day.date.clone()).or_default() += day.total_cost;
     }
-    let daily_labels = by_date
-        .keys()
-        .map(|d| format!("'{d}'"))
-        .collect::<Vec<_>>()
-        .join(",");
-    let daily_values = by_date
-        .values()
-        .map(|v| format!("{v:.2}"))
-        .collect::<Vec<_>>()
-        .join(",");
-
     let mut routing_rows_html = String::new();
     for (label, stats) in [
         ("Opus", &routing.opus),
@@ -468,18 +736,9 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     } else {
         format!("All Projects — Last {d} days")
     };
-    let daily_chart_script = format!(
-        r##"const dailyLabels=[{labels}];const dailyValues=[{values}];const dailyPointColors=dailyValues.map((value,index)=>{{if(index===0)return '#7cb9e8';const prev=dailyValues[index-1];if(value>prev)return '#ef4444';if(value<prev)return '#22c55e';return '#7cb9e8';}});new Chart(document.getElementById('dailyCostChart'),{{type:'line',data:{{labels:dailyLabels,datasets:[{{data:dailyValues,borderColor:'#f5f5f5',backgroundColor:'rgba(245,245,245,0.08)',fill:true,tension:0.32,borderWidth:2,pointRadius:3,pointHoverRadius:5,pointBackgroundColor:dailyPointColors,pointBorderColor:dailyPointColors,pointBorderWidth:0}}]}},options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{display:false}}}},scales:{{x:{{grid:{{color:'#1f1f1f',drawBorder:false}},ticks:{{color:'#6b6b6b'}}}},y:{{grid:{{color:'#1f1f1f',drawBorder:false}},ticks:{{color:'#6b6b6b',callback:(value)=>'$'+Number(value).toFixed(2)}}}}}}}}}});"##,
-        labels = daily_labels,
-        values = daily_values
-    );
-    let token_chart_script = format!(
-        r##"new Chart(document.getElementById('tokenChart'),{{type:'doughnut',data:{{labels:['Pure Input','Output','Cache Write','Cache Read'],datasets:[{{data:[{input},{output},{cache_w},{cache_r}],backgroundColor:['#f5f5f5','#7cb9e8','#fbbf24','#22c55e'],borderColor:'#0b0b0b',borderWidth:2,hoverOffset:8}}]}},options:{{responsive:true,maintainAspectRatio:false,cutout:'62%',animation:{{animateRotate:true,animateScale:true,duration:900,easing:'easeOutQuart'}},plugins:{{legend:{{display:false}},tooltip:{{backgroundColor:'rgba(11,11,11,0.95)',borderColor:'#1f1f1f',borderWidth:1,titleColor:'#fafafa',bodyColor:'#a0a0a0',padding:12,callbacks:{{label:function(ctx){{var v=ctx.parsed;var s=(v>=1e6)?(v/1e6).toFixed(1)+'M':(v>=1e3)?(v/1e3).toFixed(1)+'K':v.toString();var t=ctx.dataset.data.reduce(function(a,b){{return a+b;}},0);var p=t>0?(v/t*100).toFixed(1):'0.0';return ' '+ctx.label+': '+s+' ('+p+'%)';}}}}}}}}}}}});"##,
-        input = total_input,
-        output = total_output,
-        cache_w = total_cache_w,
-        cache_r = total_cache_r
-    );
+    let daily_chart_html = build_daily_cost_svg(&by_date);
+    let token_chart_html =
+        build_token_composition_svg(total_input, total_output, total_cache_w, total_cache_r);
 
     let mut html = String::new();
     html.push_str(r##"<!DOCTYPE html>
@@ -488,7 +747,6 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pulse Analytics Report</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 /* Pulse Report — matches the GUI design system: ultra-black Inter + JetBrains Mono.
@@ -700,7 +958,7 @@ a { color: inherit; }
 .cache-copy p { color: var(--text-secondary); font-size: 13px; margin-top: 4px; max-width: 48ch; }
 
 /* chart */
-.chart-card canvas { width: 100% !important; height: 240px !important; }
+.report-svg { width: 100%; height: 240px; display: block; }
 .token-legend { list-style: none; padding: 0; margin: 14px 0 0 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px 18px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.02em; }
 .token-legend li { display: flex; align-items: center; gap: 8px; }
 .token-legend li b { margin-left: auto; color: var(--text-primary); font-weight: 600; }
@@ -808,6 +1066,20 @@ tr:last-child td { border-bottom: none; }
   font-family: var(--font-sans);
 }
 
+.diagram-code {
+  margin: 0;
+  padding: 16px 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* recommendations */
 .rec-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
 .rec-item {
@@ -854,10 +1126,18 @@ tr:last-child td { border-bottom: none; }
 
 /* footer */
 .footer {
-  margin-top: 40px; padding: 22px 0; border-top: 1px solid var(--border);
+  margin-top: 48px; padding: 22px 0; border-top: 1px solid var(--border);
   font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
   letter-spacing: 0.04em;
+  display: flex; flex-wrap: wrap; gap: 18px;
+  align-items: baseline; justify-content: space-between;
 }
+.footer-brand {
+  text-transform: uppercase; letter-spacing: 0.14em; font-weight: 600;
+  color: var(--text-secondary);
+}
+.footer-meta b { color: var(--text-primary); font-weight: 600; }
+.footer-links { opacity: .85; }
 .footer a { color: var(--text-primary); text-decoration: none; border-bottom: 1px solid var(--border-hover); transition: border-color .15s var(--ease); }
 .footer a:hover { border-bottom-color: var(--text-primary); }
 
@@ -897,30 +1177,65 @@ tr:last-child td { border-bottom: none; }
   <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
 </button>
 <div class="report-shell">"##);
-    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · Claude Code Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{period_label}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
-    html.push_str(r##"<nav class="anchor-nav screen-only"><a href="#cache">Cache</a><a href="#routing">Routing</a><a href="#inflections">Inflections</a><a href="#sessions">Sessions</a><a href="#tools">Tools</a><a href="#prompts">Prompts</a></nav>"##);
-    write!(html, r##"<section id="cache" class="section"><div class="section-header"><div><h2>Cache</h2><p>Weighted cache health drives grade color. Token mix stays visible for fast copy-paste review.</p></div></div><div class="section-grid"><div class="card"><div class="cache-grade"><div class="cache-letter" style="color:{grade_color}">{cache_grade}</div><div class="cache-copy"><h3>Cache Health</h3><div class="ratio">{cache_ratio:.1}%</div><p>{cache_diagnosis}</p></div></div><div class="metric-strip"><div class="metric"><div class="label">Overall Hit Ratio</div><div class="value">{overall_ratio:.1}%</div></div><div class="metric"><div class="label">Cache Read</div><div class="value">{cache_read}</div></div><div class="metric"><div class="label">Cache Write</div><div class="value">{cache_write}</div></div></div></div><div class="card chart-card"><h2>Token Composition</h2><canvas id="tokenChart"></canvas><ul class="token-legend"><li><span class="dot" style="background:#f5f5f5"></span>Pure Input<b>{pure_input_short}</b></li><li><span class="dot" style="background:#7cb9e8"></span>Output<b>{output_short}</b></li><li><span class="dot" style="background:#fbbf24"></span>Cache Write<b>{cache_w_short}</b></li><li><span class="dot" style="background:#22c55e"></span>Cache Read<b>{cache_r_short}</b></li></ul></div></div></section>"##, grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, cache_diagnosis = html_escape(&cache.diagnosis), overall_ratio = cache.hit_ratio, cache_read = html_escape(&format_tokens_short(cache.total_cache_read)), cache_write = html_escape(&format_tokens_short(cache.total_cache_write)), pure_input_short = html_escape(&format_tokens_short(total_input)), output_short = html_escape(&format_tokens_short(total_output)), cache_w_short = html_escape(&format_tokens_short(total_cache_w)), cache_r_short = html_escape(&format_tokens_short(total_cache_r))).unwrap();
+    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{period_label}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, provider_name = html_escape(cc_discord_presence::provider::load_active_provider().display_name()), period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
+    let topology_tools_html = if trace_overview.top_tools.is_empty() {
+        r#"<div class="empty-state">No traced tool mix yet.</div>"#.to_string()
+    } else {
+        let mut html = String::from(
+            r#"<div class="card"><h2>Top Traced Tools</h2><table><tr><th>Tool</th><th>Calls</th><th>Share</th></tr>"#,
+        );
+        for tool in &trace_overview.top_tools {
+            write!(
+                html,
+                r#"<tr><td>{}</td><td class="num">{}</td><td class="num">{:.1}%</td></tr>"#,
+                html_escape(&tool.name),
+                tool.calls,
+                tool.share_pct
+            )
+            .unwrap();
+        }
+        html.push_str("</table></div>");
+        html
+    };
+
+    html.push_str(r##"<nav class="anchor-nav screen-only"><a href="#cache">Cache</a><a href="#routing">Routing</a><a href="#inflections">Inflections</a><a href="#sessions">Sessions</a><a href="#tools">Tools</a><a href="#topology">Topology</a><a href="#prompts">Prompts</a><a href="#recommendations">Fixes</a></nav>"##);
+    write!(html, r##"<section id="cache" class="section"><div class="section-header"><div><h2>Cache</h2><p>Weighted cache health drives grade color. Token mix stays visible for fast copy-paste review.</p></div></div><div class="section-grid"><div class="card"><div class="cache-grade"><div class="cache-letter" style="color:{grade_color}">{cache_grade}</div><div class="cache-copy"><h3>Cache Health</h3><div class="ratio">{cache_ratio:.1}%</div><p>{cache_diagnosis}</p></div></div><div class="metric-strip"><div class="metric"><div class="label">Overall Hit Ratio</div><div class="value">{overall_ratio:.1}%</div></div><div class="metric"><div class="label">Cache Read</div><div class="value">{cache_read}</div></div><div class="metric"><div class="label">Cache Write</div><div class="value">{cache_write}</div></div></div></div><div class="card chart-card"><h2>Token Composition</h2>{token_chart_html}<ul class="token-legend"><li><span class="dot" style="background:#f5f5f5"></span>Pure Input<b>{pure_input_short}</b></li><li><span class="dot" style="background:#7cb9e8"></span>Output<b>{output_short}</b></li><li><span class="dot" style="background:#fbbf24"></span>Cache Write<b>{cache_w_short}</b></li><li><span class="dot" style="background:#22c55e"></span>Cache Read<b>{cache_r_short}</b></li></ul></div></div></section>"##, grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, cache_diagnosis = html_escape(&cache.diagnosis), overall_ratio = cache.hit_ratio, cache_read = html_escape(&format_tokens_short(cache.total_cache_read)), cache_write = html_escape(&format_tokens_short(cache.total_cache_write)), token_chart_html = token_chart_html, pure_input_short = html_escape(&format_tokens_short(total_input)), output_short = html_escape(&format_tokens_short(total_output)), cache_w_short = html_escape(&format_tokens_short(total_cache_w)), cache_r_short = html_escape(&format_tokens_short(total_cache_r))).unwrap();
     write!(html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&format_cost(routing.estimated_savings_if_rerouted)), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html).unwrap();
     write!(html, r##"<section id="inflections" class="section"><div class="section-header"><div><h2>Inflections</h2><p>Spike cards use red rail. Efficiency drops use green rail. Sorted by absolute signal strength.</p></div></div>{inflections_html}</section>"##, inflections_html = inflections_html).unwrap();
-    write!(html, r##"<section id="sessions" class="section"><div class="section-header"><div><h2>Sessions</h2><p>Daily cost trend, hourly activity, top sessions, project mix. Same data sources. Cleaner export.</p></div></div><div class="section-grid"><div class="card chart-card"><h2>Daily Cost Trend</h2><canvas id="dailyCostChart"></canvas></div><div class="card"><h2>Hourly Activity</h2>{hourly_heatmap_html}</div></div><div class="section-grid" style="margin-top:18px;">{top_sessions_html}{project_table_html}</div></section>"##, hourly_heatmap_html = hourly_heatmap_html, top_sessions_html = top_sessions_html, project_table_html = project_table_html).unwrap();
+    write!(html, r##"<section id="sessions" class="section"><div class="section-header"><div><h2>Sessions</h2><p>Daily cost trend, hourly activity, top sessions, project mix. Same data sources. Cleaner export.</p></div></div><div class="section-grid"><div class="card chart-card"><h2>Daily Cost Trend</h2>{daily_chart_html}</div><div class="card"><h2>Hourly Activity</h2>{hourly_heatmap_html}</div></div><div class="section-grid" style="margin-top:18px;">{top_sessions_html}{project_table_html}</div></section>"##, daily_chart_html = daily_chart_html, hourly_heatmap_html = hourly_heatmap_html, top_sessions_html = top_sessions_html, project_table_html = project_table_html).unwrap();
     write!(html, r##"<section id="tools" class="section"><div class="section-header"><div><h2>Tools</h2><p>Tool intensity, MCP share, compact gaps, top tool mix.</p></div></div><div class="info-grid"><div class="info-card"><div class="info-label">Traced Sessions</div><div class="info-value">{traced_sessions}</div><p>{sessions_analyzed} sessions analyzed</p></div><div class="info-card"><div class="info-label">Total Tool Calls</div><div class="info-value">{tool_calls}</div><p>{tools_per_session:.1} avg per session</p></div><div class="info-card"><div class="info-label">Calls / Hour</div><div class="info-value">{calls_per_hour:.1}</div><p>{mcp_share:.1}% MCP share</p></div><div class="info-card"><div class="info-label">Compact Gaps</div><div class="info-value">{compact_gaps}</div><p>{tool_diagnosis}</p></div></div><div style="margin-top:18px;">{tools_table_html}</div></section>"##, traced_sessions = tool_frequency.traced_sessions, sessions_analyzed = tool_frequency.sessions_analyzed, tool_calls = tool_frequency.total_tool_calls, tools_per_session = tool_frequency.avg_tools_per_session, calls_per_hour = tool_frequency.avg_tool_calls_per_hour, mcp_share = tool_frequency.mcp_share_pct, compact_gaps = tool_frequency.compact_gap_sessions, tool_diagnosis = html_escape(&tool_frequency.diagnosis), tools_table_html = tools_table_html).unwrap();
+    write!(html, r##"<section id="topology" class="section"><div class="section-header"><div><h2>Telemetry Topology</h2><p>Provider-aware wiring from instruction files to cache reuse, session telemetry, analytics storage, exports, and rich presence.</p></div></div><div class="info-grid"><div class="info-card"><div class="info-label">Provider</div><div class="info-value">{provider_display}</div><p>{instruction_file} · {fix_label}</p></div><div class="info-card"><div class="info-label">Session Store</div><div class="info-value">{traced_sessions}/{total_sessions}</div><p>{session_store}</p></div><div class="info-card"><div class="info-label">Message Flow</div><div class="info-value">{user_messages}/{assistant_messages}</div><p>User / assistant traced messages</p></div><div class="info-card"><div class="info-label">Cache + Tools</div><div class="info-value">{tool_calls}</div><p>{cache_ratio:.1}% cache hit · {mcp_calls} MCP · {compactions} compactions</p></div></div><div class="section-grid" style="margin-top:18px;"><div class="card"><h2>Telemetry Flow</h2><pre class="diagram-code">{telemetry_mermaid}</pre></div><div class="card"><h2>Cache &amp; Tool Flow</h2><pre class="diagram-code">{cache_mermaid}</pre></div></div><div style="margin-top:18px;">{topology_tools_html}</div></section>"##,
+        provider_display = html_escape(&trace_overview.provider_display),
+        instruction_file = html_escape(&trace_overview.instruction_file),
+        fix_label = html_escape(&trace_overview.fix_button_label),
+        traced_sessions = trace_overview.traced_sessions,
+        total_sessions = trace_overview.total_sessions,
+        session_store = html_escape(&trace_overview.session_store),
+        user_messages = trace_overview.user_messages,
+        assistant_messages = trace_overview.assistant_messages,
+        tool_calls = trace_overview.total_tool_calls,
+        cache_ratio = trace_overview.cache_hit_ratio,
+        mcp_calls = trace_overview.mcp_tool_calls,
+        compactions = trace_overview.total_compactions,
+        telemetry_mermaid = html_escape(&trace_overview.telemetry_mermaid),
+        cache_mermaid = html_escape(&trace_overview.cache_mermaid),
+        topology_tools_html = topology_tools_html,
+    ).unwrap();
     write!(html, r##"<section id="prompts" class="section"><div class="section-header"><div><h2>Prompts</h2><p>Prompt complexity stays copyable. Preview column trims long prompts without hiding signal.</p></div></div><div class="info-grid"><div class="info-card"><div class="info-label">Prompts Analyzed</div><div class="info-value">{prompts_analyzed}</div><p>{prompt_sessions} sessions scanned</p></div><div class="info-card"><div class="info-label">Avg Complexity</div><div class="info-value">{avg_complexity:.1}</div><p>{high_complexity} high-complexity sessions</p></div><div class="info-card"><div class="info-label">Avg Specificity</div><div class="info-value">{avg_specificity:.1}</div><p>{low_specificity} low-specificity sessions</p></div><div class="info-card"><div class="info-label">Diagnosis</div><div class="info-value">{prompt_label}</div><p>{prompt_diagnosis}</p></div></div><div style="margin-top:18px;">{prompt_table_html}</div></section>"##, prompts_analyzed = prompt_complexity.prompts_analyzed, prompt_sessions = prompt_complexity.sessions_analyzed, avg_complexity = prompt_complexity.avg_complexity_score, high_complexity = prompt_complexity.high_complexity_sessions, avg_specificity = prompt_complexity.avg_specificity_score, low_specificity = prompt_complexity.low_specificity_sessions, prompt_label = if prompt_complexity.available { "Live" } else { "Pending" }, prompt_diagnosis = html_escape(&prompt_complexity.diagnosis), prompt_table_html = prompt_table_html).unwrap();
     write!(
         html,
-        r##"<section class="section"><div class="section-header"><div><h2>Recommendations</h2><p>Rule-based fixes from the Pulse recommendations engine. Every item has a "Copy Fix Prompt" button — paste the prompt into Claude Code to remediate.</p></div></div><div class="card"><ul class="rec-list">{recommendations}</ul></div></section><footer class="footer">Generated by <a href="https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics">Pulse</a> v{version} · All-time {all_time_sessions} sessions · {all_time_cost} · {all_time_days} days tracked</footer></div>"##,
+        r##"<section id="recommendations" class="section"><div class="section-header"><div><h2>Recommendations</h2><p>Rule-based fixes from the Pulse recommendations engine. Each card ships with a "{fix_label}" button — paste into {provider_name} to remediate.</p></div></div><ul class="rec-list">{recommendations}</ul></section><footer class="footer"><div class="footer-brand">Pulse · {provider_name} Analytics</div><div class="footer-meta">All-time <b>{all_time_sessions}</b> sessions · <b>{all_time_cost}</b> · {all_time_days} days tracked</div><div class="footer-links"><a href="{repo_url}">Source</a> · v{version}</div></footer></div>"##,
+        provider_name = html_escape(provider.display_name()),
+        fix_label = html_escape(provider.fix_action_label()),
         recommendations = recommendations,
+        repo_url = REPO_URL,
         version = env!("CARGO_PKG_VERSION"),
         all_time_sessions = summary.total_sessions,
         all_time_cost = html_escape(&format_cost(summary.total_cost)),
         all_time_days = summary.days_tracked
     )
     .unwrap();
-    html.push_str("<script>if(typeof Chart!=='undefined'){Chart.defaults.color='#a0a0a0';Chart.defaults.borderColor='#1f1f1f';Chart.defaults.font.family=\"Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif\";Chart.defaults.font.size=11;try{");
-    html.push_str(&daily_chart_script);
-    html.push_str("}catch(e){console.error('daily chart failed',e);}try{");
-    html.push_str(&token_chart_script);
-    html.push_str("}catch(e){console.error('token chart failed',e);}}else{document.querySelectorAll('.chart-card canvas').forEach(c=>{c.style.display='none';});}");
-    html.push_str("function pulseCopy(text){if(navigator.clipboard&&window.isSecureContext){return navigator.clipboard.writeText(text);}return new Promise((resolve,reject)=>{try{const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,ta.value.length);const ok=document.execCommand('copy');document.body.removeChild(ta);ok?resolve():reject(new Error('execCommand copy failed'));}catch(e){reject(e);}});}document.querySelectorAll('.rec-fix').forEach((btn)=>{btn.addEventListener('click',async()=>{const prompt=btn.getAttribute('data-prompt')||'';const original=btn.textContent;try{await pulseCopy(prompt);btn.classList.add('copied');btn.textContent='Copied prompt';}catch(err){btn.classList.add('copy-failed');btn.textContent='Copy failed - select manually';console.error('clipboard copy failed',err);}setTimeout(()=>{btn.classList.remove('copied','copy-failed');btn.textContent=original;},2000);});});</script></body></html>");
+    html.push_str("<script>function pulseCopy(text){if(navigator.clipboard&&window.isSecureContext){return navigator.clipboard.writeText(text);}return new Promise((resolve,reject)=>{try{const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,ta.value.length);const ok=document.execCommand('copy');document.body.removeChild(ta);ok?resolve():reject(new Error('execCommand copy failed'));}catch(e){reject(e);}});}document.querySelectorAll('.rec-fix').forEach((btn)=>{btn.addEventListener('click',async()=>{const prompt=btn.getAttribute('data-prompt')||'';const original=btn.textContent;try{await pulseCopy(prompt);btn.classList.add('copied');btn.textContent='Copied prompt';}catch(err){btn.classList.add('copy-failed');btn.textContent='Copy failed - select manually';console.error('clipboard copy failed',err);}setTimeout(()=>{btn.classList.remove('copied','copy-failed');btn.textContent=original;},2000);});});</script></body></html>");
     html
 }
 fn format_tokens_short(t: i64) -> String {
@@ -1015,31 +1330,107 @@ fn build_model_table(models: &[(String, i64, f64)], total: usize) -> String {
     html
 }
 
-fn build_daily_chart_data(daily: &[db::DailyStat]) -> String {
-    let mut by_date: std::collections::BTreeMap<&str, f64> = std::collections::BTreeMap::new();
-    for d in daily {
-        *by_date.entry(&d.date).or_default() += d.total_cost;
+fn build_daily_cost_svg(by_date: &std::collections::BTreeMap<String, f64>) -> String {
+    if by_date.is_empty() {
+        return r#"<div class="empty-state">No daily cost data available.</div>"#.to_string();
     }
-    let labels: Vec<String> = by_date.keys().map(|d| format!("'{d}'")).collect();
-    let values: Vec<String> = by_date.values().map(|v| format!("{v:.2}")).collect();
+    let width = 760.0;
+    let height = 220.0;
+    let padding_x = 18.0;
+    let padding_y = 20.0;
+    let values: Vec<f64> = by_date.values().copied().collect();
+    let max = values.iter().copied().fold(0.0_f64, f64::max).max(1.0);
+    let step_x = if values.len() > 1 {
+        (width - padding_x * 2.0) / (values.len() - 1) as f64
+    } else {
+        0.0
+    };
+    let points: Vec<String> = values
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| {
+            let x = padding_x + step_x * idx as f64;
+            let y = height - padding_y - ((value / max) * (height - padding_y * 2.0));
+            format!("{x:.2},{y:.2}")
+        })
+        .collect();
+    let mut area_points = Vec::with_capacity(points.len() + 2);
+    area_points.push(format!("{padding_x:.2},{:.2}", height - padding_y));
+    area_points.extend(points.iter().cloned());
+    let end_x = padding_x + step_x * (values.len().saturating_sub(1)) as f64;
+    area_points.push(format!("{end_x:.2},{:.2}", height - padding_y));
+    let labels = by_date
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| values.len() <= 6 || *idx == 0 || *idx == values.len() - 1 || idx % 2 == 0)
+        .map(|(idx, (date, _))| {
+            let x = padding_x + step_x * idx as f64;
+            format!(
+                r##"<text x="{x:.2}" y="{y}" text-anchor="middle" fill="#6b6b6b" font-size="10">{label}</text>"##,
+                y = height - 4.0,
+                label = html_escape(date),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
     format!(
-        "new Chart(document.getElementById('dailyCostChart'), {{
-  type: 'line',
-  data: {{ labels: [{labels}], datasets: [{{ data: [{values}], borderColor: accent, backgroundColor: 'rgba(249,115,22,0.08)', fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 }}] }},
-  options: {{ responsive: true, maintainAspectRatio: false, scales: {{ x: {{ grid: {{ color: border, drawBorder: false }} }}, y: {{ grid: {{ color: border, drawBorder: false }}, ticks: {{ callback: v => '$' + v.toFixed(2) }} }} }}, plugins: {{ legend: {{ display: false }} }} }}
-}});",
-        labels = labels.join(","),
-        values = values.join(",")
+        r##"<svg viewBox="0 0 {width} {height}" class="report-svg" role="img" aria-label="Daily cost trend">
+<rect x="0" y="0" width="{width}" height="{height}" fill="transparent"/>
+<line x1="{padding_x}" y1="{baseline}" x2="{end_x}" y2="{baseline}" stroke="#1f1f1f" stroke-width="1"/>
+<polygon points="{area}" fill="rgba(245,245,245,0.08)"/>
+<polyline points="{points}" fill="none" stroke="#f5f5f5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+{labels}
+</svg>"##,
+        baseline = height - padding_y,
+        end_x = width - padding_x,
+        area = area_points.join(" "),
+        points = points.join(" "),
+        labels = labels,
     )
 }
 
-fn build_token_chart_data(input: i64, output: i64, cache_w: i64, cache_r: i64) -> String {
+fn build_token_composition_svg(input: i64, output: i64, cache_w: i64, cache_r: i64) -> String {
+    let segments = [
+        ("#f5f5f5", input.max(0) as f64),
+        ("#7cb9e8", output.max(0) as f64),
+        ("#fbbf24", cache_w.max(0) as f64),
+        ("#22c55e", cache_r.max(0) as f64),
+    ];
+    let total = segments
+        .iter()
+        .map(|(_, value)| *value)
+        .sum::<f64>()
+        .max(1.0);
+    let width = 760.0;
+    let bar_x = 22.0;
+    let bar_y = 74.0;
+    let bar_w = width - 44.0;
+    let bar_h = 18.0;
+    let mut cursor = bar_x;
+    let mut bars = String::new();
+    for (color, value) in segments {
+        let segment_w = (value / total) * bar_w;
+        if segment_w > 0.0 {
+            bars.push_str(&format!(
+                r##"<rect x="{x:.2}" y="{bar_y}" width="{w:.2}" height="{bar_h}" rx="9" fill="{color}"/>"##,
+                x = cursor,
+                w = segment_w.max(2.0),
+            ));
+        }
+        cursor += segment_w;
+    }
     format!(
-        "new Chart(document.getElementById('tokenChart'), {{
-  type: 'doughnut',
-  data: {{ labels: ['Input','Output','Cache Write','Cache Read'], datasets: [{{ data: [{input},{output},{cache_w},{cache_r}], backgroundColor: [accent,'rgba(255,255,255,0.78)','rgba(163,163,163,0.58)','rgba(115,115,115,0.72)'], borderColor: border, borderWidth: 2 }}] }},
-  options: {{ responsive: true, maintainAspectRatio: false, cutout: '62%', plugins: {{ legend: {{ position: 'bottom', labels: {{ usePointStyle: true, padding: 14, boxWidth: 8, font: {{ size: 11 }} }} }} }} }}
-}});"
+        r##"<svg viewBox="0 0 {width} 140" class="report-svg" role="img" aria-label="Token composition">
+<rect x="{bar_x}" y="{bar_y}" width="{bar_w}" height="{bar_h}" rx="9" fill="#121212" stroke="#1f1f1f" stroke-width="1"/>
+{bars}
+<text x="{bar_x}" y="40" fill="#fafafa" font-size="26" font-weight="700">{total_label}</text>
+<text x="{bar_x}" y="58" fill="#6b6b6b" font-size="11" font-family="JetBrains Mono, monospace">total token mix</text>
+</svg>"##,
+        bars = bars,
+        total_label = html_escape(&format_tokens_short(
+            (input + output + cache_w + cache_r).max(0)
+        )),
     )
 }
 
@@ -1089,21 +1480,26 @@ fn html_escape(input: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn build_recommendations(sessions: &[db::HistoricalSession]) -> String {
+fn build_recommendations(
+    provider: cc_discord_presence::provider::Provider,
+    sessions: &[db::HistoricalSession],
+) -> String {
     use super::analyzers::{
         cache_health, inflection, model_routing, prompt_complexity, recommendations,
         session_health, session_trace, tool_frequency,
     };
+    let provider_name = provider.display_name();
 
-    let cache = cache_health::analyze(sessions);
+    let cache = cache_health::analyze_for_provider(provider, sessions);
     let routing = model_routing::analyze(sessions);
-    let inflections = inflection::detect(sessions);
+    let inflections = inflection::detect_for_provider(provider, sessions);
     let traces = session_trace::load_session_traces(sessions);
     let tool_frequency = tool_frequency::analyze(sessions, &traces);
     let prompt_complexity = prompt_complexity::analyze(sessions, &traces);
     let session_health =
         session_health::analyze(sessions, &traces, &tool_frequency, &prompt_complexity);
     let ctx = recommendations::AnalysisContext {
+        provider,
         sessions,
         cache: &cache,
         routing: &routing,
@@ -1142,8 +1538,9 @@ fn build_recommendations(sessions: &[db::HistoricalSession]) -> String {
                 String::new()
             } else {
                 format!(
-                    r#"<button class="rec-fix" data-prompt="{}">Fix with Claude Code</button>"#,
-                    html_escape(&r.fix_prompt)
+                    r#"<button class="rec-fix" data-prompt="{}">Fix with {}</button>"#,
+                    html_escape(&r.fix_prompt),
+                    html_escape(provider_name)
                 )
             };
             format!(

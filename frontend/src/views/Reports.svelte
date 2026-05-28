@@ -8,6 +8,7 @@
     getToolFrequency,
     getPromptComplexity,
     getSessionHealth,
+    getTraceOverview,
     copyFixPrompt,
     generateHtmlReport,
     generateMarkdownReport,
@@ -18,9 +19,11 @@
     type ToolFrequencyReport,
     type PromptComplexityReport,
     type SessionHealthReport,
+    type TraceOverview,
     type Severity,
   } from "../lib/api";
   import { addToast } from "../lib/stores";
+  import { providerProfile } from "../lib/provider";
   import { fmtCost } from "../lib/utils";
 
   let cache = $state<CacheHealthReport | null>(null);
@@ -30,6 +33,7 @@
   let tools = $state<ToolFrequencyReport | null>(null);
   let prompts = $state<PromptComplexityReport | null>(null);
   let health = $state<SessionHealthReport | null>(null);
+  let trace = $state<TraceOverview | null>(null);
   let loading = $state(true);
   let hasLoaded = $state(false);
   let days = $state(30);
@@ -55,7 +59,7 @@
   async function loadReports(): Promise<void> {
     loading = true;
     try {
-      const [c, r, i, m, t, p, h] = await Promise.all([
+      const [c, r, i, m, t, p, h, tr] = await Promise.all([
         withTimeout(getCacheHealth(days), 6000, "cache_health"),
         withTimeout(getRecommendations(days), 6000, "recommendations"),
         withTimeout(getInflectionPoints(days), 6000, "inflection"),
@@ -63,6 +67,7 @@
         withTimeout(getToolFrequency(days), 8000, "tool_frequency"),
         withTimeout(getPromptComplexity(days), 8000, "prompt_complexity"),
         withTimeout(getSessionHealth(days), 8000, "session_health"),
+        withTimeout(getTraceOverview(days), 6000, "trace_overview"),
       ]);
       cache = c;
       recs = r ?? [];
@@ -71,6 +76,7 @@
       tools = t;
       prompts = p;
       health = h;
+      trace = tr;
     } finally {
       loading = false;
       hasLoaded = true;
@@ -79,7 +85,7 @@
 
   onMount(loadReports);
 
-  let lastDays = $state(days);
+  let lastDays = $state<number | undefined>(undefined);
   $effect(() => {
     if (days !== lastDays) {
       lastDays = days;
@@ -101,7 +107,7 @@
     try {
       const prompt = await copyFixPrompt(rec.id);
       await navigator.clipboard.writeText(prompt || rec.fix_prompt);
-      addToast("Fix prompt copied — paste into Claude Code.", "success", 3500);
+      addToast(`Fix prompt copied — paste into ${$providerProfile.productName}.`, "success", 3500);
     } catch (err) {
       addToast(`Copy failed: ${String(err)}`, "danger", 4000);
     }
@@ -170,8 +176,9 @@
     <div>
       <h2 class="view-title">Reports &amp; Insights</h2>
       <p class="view-sub">
-        Deep analysis of your Claude Code usage — cache efficiency, model
-        routing, cost spikes, and ready-to-paste fixes.
+        Deep analysis of your {$providerProfile.productName} usage — {$providerProfile.claudeOnlyAnalytics
+          ? "cache efficiency, model routing, cost spikes, and ready-to-paste fixes."
+          : "cost trends, tool mix, prompt complexity, and ready-to-paste fixes."}
       </p>
     </div>
     <div class="controls">
@@ -205,7 +212,7 @@
       <div class="skeleton row short"></div>
     </div>
   {:else}
-    {#if cache}
+    {#if cache && $providerProfile.claudeOnlyAnalytics}
       <section class="card hero-card">
         <div class="hero-left">
           <div
@@ -246,8 +253,8 @@
       </section>
     {/if}
 
-    <div class="two-col">
-      {#if routing}
+    <div class="two-col" class:single={!($providerProfile.claudeOnlyAnalytics && routing)}>
+      {#if routing && $providerProfile.claudeOnlyAnalytics}
         <section class="card">
           <h3 class="card-title">Model Routing</h3>
           <p class="card-sub">{routing.diagnosis}</p>
@@ -321,8 +328,54 @@
       </section>
     </div>
 
+    {#if trace && trace.total_sessions > 0}
+      {@const tracedPct = trace.total_sessions > 0 ? (trace.traced_sessions / trace.total_sessions) * 100 : 0}
+      {@const mcpPct = trace.total_tool_calls > 0 ? (trace.mcp_tool_calls / trace.total_tool_calls) * 100 : 0}
+      <section class="card trace-card">
+        <header class="trace-head">
+          <div>
+            <h3 class="card-title">Session Topology</h3>
+            <p class="card-sub">
+              Telemetry shape across {trace.total_sessions} session{trace.total_sessions === 1 ? "" : "s"} in the last {days}d
+              · {trace.provider_display} · {trace.instruction_file}
+            </p>
+          </div>
+          <div class="trace-badge">
+            <span class="trace-badge-num">{tracedPct.toFixed(0)}%</span>
+            <span class="trace-badge-lbl">traced</span>
+          </div>
+        </header>
+
+        <div class="trace-grid">
+          <div class="mini-kv"><span>Traced sessions</span><strong>{trace.traced_sessions}/{trace.total_sessions}</strong></div>
+          <div class="mini-kv"><span>Tool calls</span><strong>{trace.total_tool_calls.toLocaleString()}</strong></div>
+          <div class="mini-kv"><span>MCP share</span><strong>{mcpPct.toFixed(0)}%</strong></div>
+          <div class="mini-kv"><span>Compactions</span><strong>{trace.total_compactions}</strong></div>
+        </div>
+
+        {#if trace.top_tools.length > 0}
+          <div class="trace-top-tools">
+            <div class="trace-subtitle">Top tools</div>
+            <div class="trace-tool-list">
+              {#each trace.top_tools.slice(0, 6) as t}
+                <div class="trace-tool-row">
+                  <span class="trace-tool-name">{t.name}</span>
+                  <div class="trace-tool-bar-wrap">
+                    <div class="trace-tool-bar" style="width:{Math.min(100, t.share_pct)}%"></div>
+                  </div>
+                  <span class="trace-tool-count">{t.calls}</span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </section>
+    {/if}
+
     {#if health || tools || prompts}
-      <div class="grid-2">
+      {@const healthOn = !!(health && health.available)}
+      {@const toolsOn = !!(tools && tools.available)}
+      <div class="grid-2" class:single={!(healthOn && toolsOn)}>
         {#if health && health.available}
           <section class="card">
             <h3 class="card-title">Session Health</h3>
@@ -459,7 +512,7 @@
                 <div class="rec-footer">
                   <button class="btn-fix" onclick={() => handleFix(rec)}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                    Fix with Claude Code
+                    Fix with {$providerProfile.productName}
                   </button>
                 </div>
               {/if}
@@ -614,6 +667,10 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
+  }
+
+  .two-col.single {
+    grid-template-columns: 1fr;
   }
 
   @media (max-width: 960px) {
@@ -993,6 +1050,7 @@
 
   /* cchubber analyzers — phase 4 */
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-2.single { grid-template-columns: 1fr; }
   @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
 
   .health-hero { display: flex; align-items: baseline; gap: 14px; margin: 6px 0 10px; }
@@ -1025,4 +1083,21 @@
   .prompt-label { color: var(--accent); background: var(--accent-dim); padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; }
   .prompt-scores { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 11px; }
   .prompt-preview { font-size: 11px; color: var(--text-secondary); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+
+  /* Session Topology (trace) */
+  .trace-card { background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%); }
+  .trace-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+  .trace-badge { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding: 8px 14px; background: var(--accent-dim); border: 1px solid var(--accent); border-radius: var(--radius-md); }
+  .trace-badge-num { font-size: 20px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -0.01em; }
+  .trace-badge-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+  .trace-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+  @media (max-width: 700px) { .trace-grid { grid-template-columns: repeat(2, 1fr); } }
+  .trace-top-tools { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .trace-subtitle { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-muted); margin-bottom: 8px; }
+  .trace-tool-list { display: flex; flex-direction: column; gap: 6px; }
+  .trace-tool-row { display: grid; grid-template-columns: 140px 1fr 56px; gap: 12px; align-items: center; font-size: 12px; }
+  .trace-tool-name { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+  .trace-tool-bar-wrap { background: var(--bg-primary); height: 6px; border-radius: 99px; overflow: hidden; }
+  .trace-tool-bar { background: var(--accent); height: 100%; border-radius: 99px; opacity: 0.85; }
+  .trace-tool-count { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 11px; font-weight: 600; }
 </style>
