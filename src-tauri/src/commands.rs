@@ -17,7 +17,7 @@ use cc_discord_presence::cost;
 use cc_discord_presence::discord::DiscordPresence as ClaudeDiscordPresence;
 use cc_discord_presence::provider::Provider;
 use cc_discord_presence::session::{
-    self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, latest_limits_source,
+    self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, Speed, latest_limits_source,
     merge_statusline_into_sessions, preferred_active_session, read_statusline_data,
 };
 use cc_discord_presence::usage::UsageManager;
@@ -520,6 +520,12 @@ pub struct SessionInfo {
     pub output_cost: f64,
     pub cache_write_cost: f64,
     pub cache_read_cost: f64,
+    /// Speed tier of the most recent turn ("fast"/"standard").
+    pub speed: String,
+    /// True when the most recent turn ran in fast mode (priority speed).
+    pub fast: bool,
+    /// Service tier of the most recent turn ("priority"/"standard"), display only.
+    pub service_tier: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -574,23 +580,12 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 .started_at
                 .map(|st| (chrono::Utc::now() - st).num_seconds().max(0) as u64)
                 .unwrap_or(0);
-            let p = s.model.as_ref().map(|m| cost::model_pricing(m));
-            let pure_inp = s
-                .input_tokens
-                .saturating_sub(s.cache_creation_tokens)
-                .saturating_sub(s.cache_read_tokens);
-            let ic = p
-                .as_ref()
-                .map_or(0.0, |p| pure_inp as f64 * p.input_per_million / 1_000_000.0);
-            let oc = p.as_ref().map_or(0.0, |p| {
-                s.output_tokens as f64 * p.output_per_million / 1_000_000.0
-            });
-            let cwc = p.as_ref().map_or(0.0, |p| {
-                s.cache_creation_tokens as f64 * p.cache_write_per_million / 1_000_000.0
-            });
-            let crc = p.as_ref().map_or(0.0, |p| {
-                s.cache_read_tokens as f64 * p.cache_read_per_million / 1_000_000.0
-            });
+            let model_id_for_speed = s.model.clone().unwrap_or_default();
+            let fast = s.speed.is_fast() && cost::is_fast_capable(&model_id_for_speed);
+            let ic = s.input_cost;
+            let oc = s.output_cost;
+            let cwc = s.cache_write_cost;
+            let crc = s.cache_read_cost;
             let tps = if s.total_api_duration_ms > 0 {
                 s.output_tokens as f64 / (s.total_api_duration_ms as f64 / 1000.0)
             } else {
@@ -658,6 +653,9 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 output_cost: oc,
                 cache_write_cost: cwc,
                 cache_read_cost: crc,
+                speed: s.speed.as_str().to_string(),
+                fast,
+                service_tier: s.service_tier.clone(),
             }
         })
         .collect()
@@ -760,6 +758,9 @@ fn build_codex_session_infos(
                 output_cost: s.cost_breakdown.output_cost_usd,
                 cache_write_cost: 0.0,
                 cache_read_cost: s.cost_breakdown.cached_input_cost_usd,
+                speed: Speed::from_fast(fast_mode).as_str().to_string(),
+                fast: fast_mode,
+                service_tier: None,
             }
         })
         .collect()

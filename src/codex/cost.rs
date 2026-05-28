@@ -128,7 +128,7 @@ pub fn resolve_model_pricing(model_id: &str, pricing_config: &PricingConfig) -> 
     PricingResolution {
         pricing: fallback_pricing(),
         source: PricingSource::Fallback,
-        resolved_model: "gpt-5-codex".to_string(),
+        resolved_model: key,
     }
 }
 
@@ -169,7 +169,6 @@ pub fn default_model_context_window(model_id: &str) -> Option<u64> {
 }
 
 fn fallback_pricing() -> ModelPricing {
-    // Official OpenAI API pricing fallback (gpt-5-codex)
     ModelPricing {
         input_per_million: 1.25,
         cached_input_per_million: 0.125,
@@ -179,20 +178,15 @@ fn fallback_pricing() -> ModelPricing {
 
 fn default_alias_target(model: &str) -> Option<&'static str> {
     match model {
-        // Spark variants are internal Codex labels, not standalone API catalog entries.
         "gpt-5.3-codex-spark" | "gpt-5.3-codex-spark-latest" => Some("gpt-5.3-codex"),
         _ => None,
     }
 }
 
 fn default_model_pricing(model: &str) -> Option<ModelPricing> {
-    // Sources:
     // - https://openai.com/api/pricing/
     // - https://developers.openai.com/api/docs/models/gpt-5.3-codex/
     // - https://developers.openai.com/api/docs/models/gpt-5.4/
-    // Prices below reflect standard API rates as of March 7, 2026.
-    // GPT-5.4 has a documented surcharge for prompts with >272K input tokens, which this
-    // aggregate session-level estimator does not currently model per request.
     let pricing = match model {
         "gpt-5.4" | "gpt-5.4-2026-03-05" => ModelPricing {
             input_per_million: 2.5,
@@ -380,5 +374,35 @@ mod tests {
     #[test]
     fn catalog_context_window_for_unknown_model_is_none() {
         assert_eq!(default_model_context_window("unknown-model"), None);
+    }
+
+    #[test]
+    fn known_model_resolves_from_table() {
+        let config = PricingConfig::default();
+        let resolved = resolve_model_pricing("gpt-5-codex", &config);
+        assert_eq!(resolved.source, PricingSource::Exact);
+        assert_eq!(resolved.resolved_model, "gpt-5-codex");
+        assert!((resolved.pricing.input_per_million - 1.25).abs() < 0.0001);
+        assert!((resolved.pricing.cached_input_per_million - 0.125).abs() < 0.0001);
+        assert!((resolved.pricing.output_per_million - 10.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn unknown_model_falls_back_but_preserves_real_model_id() {
+        let config = PricingConfig::default();
+        let resolved = resolve_model_pricing("gpt-9-codex", &config);
+        assert_eq!(resolved.source, PricingSource::Fallback);
+        assert_eq!(resolved.resolved_model, "gpt-9-codex");
+        assert!((resolved.pricing.input_per_million - 1.25).abs() < 0.0001);
+        assert!((resolved.pricing.cached_input_per_million - 0.125).abs() < 0.0001);
+        assert!((resolved.pricing.output_per_million - 10.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn unknown_model_fallback_preserves_normalized_id_through_compute() {
+        let config = PricingConfig::default();
+        let computed = compute_total_cost("GPT-9-Codex", 1_000_000, 0, 0, &config);
+        assert_eq!(computed.source, PricingSource::Fallback);
+        assert_eq!(computed.resolved_model, "gpt-9-codex");
     }
 }
