@@ -217,6 +217,7 @@ fn history_timestamp_expr() -> &'static str {
     "COALESCE(started_at, created_at, updated_at)"
 }
 
+#[allow(clippy::too_many_arguments)]
 fn query_sessions(
     conn: &Connection,
     days: Option<i64>,
@@ -232,7 +233,7 @@ fn query_sessions(
 ) -> Vec<HistoricalSession> {
     let history_ts = history_timestamp_expr();
     let provider = active_provider_slug().to_string();
-    let mut sql = format!(
+    let mut sql = String::from(
         "SELECT id, provider, session_name, project, model, model_id, context_window, branch, effort,
             started_at, ended_at, duration_secs, total_cost,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, total_tokens,

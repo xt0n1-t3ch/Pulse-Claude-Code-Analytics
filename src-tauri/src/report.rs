@@ -146,7 +146,7 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
         .into_iter()
         .map(|(model, (count, cost))| (model, count, cost))
         .collect();
-    models.sort_by(|a, b| b.1.cmp(&a.1));
+    models.sort_by_key(|m| std::cmp::Reverse(m.1));
 
     let total_sessions = sessions.len() as i64;
     let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
@@ -266,12 +266,7 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
         .map(|p| format!("{p} — last {d} days"))
         .unwrap_or_else(|| format!("All projects — last {d} days"));
     let generated = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
-    let md_escape = |value: &str| {
-        value
-            .replace('|', r"\|")
-            .replace('\r', " ")
-            .replace('\n', " ")
-    };
+    let md_escape = |value: &str| value.replace('|', r"\|").replace(['\r', '\n'], " ");
     let truncate = |value: &str, max_chars: usize| {
         let mut out = String::new();
         for (idx, ch) in value.chars().enumerate() {
@@ -821,7 +816,6 @@ body {
 .report-shell { max-width: 1240px; margin: 0 auto; }
 a { color: inherit; }
 
-/* theme toggle */
 .theme-toggle {
   position: fixed; top: 16px; right: 16px; z-index: 100;
   width: 36px; height: 36px;
@@ -841,13 +835,11 @@ a { color: inherit; }
   :root:not([data-theme]) .theme-toggle .icon-moon { display: none; }
 }
 
-/* kicker label */
 .kicker,.summary-label,.info-label,.metric .label,.heat-label,.routing-share {
   font-family: var(--font-mono); font-size: 10px; font-weight: 600;
   letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
 }
 
-/* hero */
 .hero { padding: 8px 0 20px; }
 .hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 4px; }
 .hero h1 {
@@ -859,7 +851,6 @@ a { color: inherit; }
 .generated-at { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); }
 .hero-divider { height: 1px; background: var(--border); margin: 20px 0 24px; }
 
-/* summary grid */
 .summary-grid {
   display: grid; grid-template-columns: repeat(5, minmax(0,1fr));
   gap: 10px;
@@ -878,7 +869,6 @@ a { color: inherit; }
 }
 .summary-meta { color: var(--text-muted); font-size: 11px; line-height: 1.4; font-family: var(--font-mono); }
 
-/* anchor nav (sticky) */
 .anchor-nav {
   position: sticky; top: 0; z-index: 20;
   display: flex; flex-wrap: wrap; gap: 0;
@@ -897,7 +887,6 @@ a { color: inherit; }
 }
 .anchor-nav a:hover { color: var(--text-primary); background: var(--bg-card); }
 
-/* sections */
 .section { margin-bottom: 48px; }
 .section-header {
   display: flex; justify-content: space-between; gap: 20px;
@@ -914,7 +903,6 @@ a { color: inherit; }
 .info-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
 .metric-strip { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-top: 16px; }
 
-/* cards */
 .card,.info-card {
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--radius-lg); padding: 22px;
@@ -927,7 +915,6 @@ a { color: inherit; }
   color: var(--text-muted); margin: 0 0 14px;
 }
 
-/* metric block (inside metric-strip) */
 .metric {
   background: var(--bg-secondary); border: 1px solid var(--border);
   border-radius: var(--radius-md); padding: 14px 16px;
@@ -939,7 +926,6 @@ a { color: inherit; }
   font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
 }
 
-/* cache grade */
 .cache-grade { display: flex; gap: 22px; align-items: center; margin-bottom: 16px; }
 .cache-letter {
   font-family: var(--font-sans); font-weight: 800;
@@ -957,14 +943,12 @@ a { color: inherit; }
 }
 .cache-copy p { color: var(--text-secondary); font-size: 13px; margin-top: 4px; max-width: 48ch; }
 
-/* chart */
 .report-svg { width: 100%; height: 240px; display: block; }
 .token-legend { list-style: none; padding: 0; margin: 14px 0 0 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px 18px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.02em; }
 .token-legend li { display: flex; align-items: center; gap: 8px; }
 .token-legend li b { margin-left: auto; color: var(--text-primary); font-weight: 600; }
 .token-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
-/* routing rows */
 .routing-row + .routing-row { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .routing-label-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .routing-name {
@@ -975,7 +959,6 @@ a { color: inherit; }
 .routing-track { height: 3px; margin-top: 10px; background: var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .routing-fill { height: 100%; background: var(--text-primary); transition: width 1.2s cubic-bezier(.2,.9,.3,1); }
 
-/* inflections */
 .inflection-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
 .inflection-card {
   background: var(--bg-card); border: 1px solid var(--border);
@@ -1009,7 +992,6 @@ a { color: inherit; }
 .inflection-support { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .inflection-card p { color: var(--text-secondary); font-size: 12px; margin-top: 8px; line-height: 1.5; }
 
-/* info card value */
 .info-value {
   font-family: var(--font-sans); font-weight: 700;
   font-size: clamp(20px, 2vw, 26px); color: var(--text-primary);
@@ -1018,7 +1000,6 @@ a { color: inherit; }
 }
 .info-card p { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
 
-/* tables */
 table { width: 100%; border-collapse: collapse; }
 th, td {
   padding: 10px 12px; border-bottom: 1px solid var(--border);
@@ -1042,7 +1023,6 @@ tr:last-child td { border-bottom: none; }
   font-family: var(--font-sans);
 }
 
-/* heatmap */
 .heatmap { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 4px; }
 .heat-cell {
   background: var(--bg-card); border: 1px solid var(--border);
@@ -1057,7 +1037,6 @@ tr:last-child td { border-bottom: none; }
 }
 .heat-meta { color: var(--text-muted); font-size: 10px; font-family: var(--font-mono); }
 
-/* empty state */
 .empty-state {
   padding: 28px; background: var(--bg-card);
   border: 1px dashed var(--border-hover);
@@ -1080,7 +1059,6 @@ tr:last-child td { border-bottom: none; }
   word-break: break-word;
 }
 
-/* recommendations */
 .rec-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
 .rec-item {
   background: var(--bg-card); border: 1px solid var(--border);
@@ -1124,7 +1102,6 @@ tr:last-child td { border-bottom: none; }
 .rec-fix:hover { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
 .rec-fix.copied { background: var(--success); color: #ffffff; border-color: var(--success); }
 
-/* footer */
 .footer {
   margin-top: 48px; padding: 22px 0; border-top: 1px solid var(--border);
   font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
@@ -1141,7 +1118,6 @@ tr:last-child td { border-bottom: none; }
 .footer a { color: var(--text-primary); text-decoration: none; border-bottom: 1px solid var(--border-hover); transition: border-color .15s var(--ease); }
 .footer a:hover { border-bottom-color: var(--text-primary); }
 
-/* responsive */
 @media (max-width: 1100px) {
   .summary-grid, .info-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .section-grid, .inflection-grid { grid-template-columns: 1fr; }
@@ -1155,7 +1131,6 @@ tr:last-child td { border-bottom: none; }
   table { display: block; overflow-x: auto; white-space: nowrap; }
 }
 
-/* print */
 @media print {
   :root {
     color-scheme: light;
@@ -1435,8 +1410,8 @@ fn build_token_composition_svg(input: i64, output: i64, cache_w: i64, cache_r: i
 }
 
 fn build_hourly_heatmap(hourly: &[db::HourlyActivity]) -> String {
-    let mut counts = vec![0i64; 24];
-    let mut costs = vec![0.0f64; 24];
+    let mut counts = [0i64; 24];
+    let mut costs = [0.0f64; 24];
     for h in hourly {
         if h.hour >= 0 && h.hour < 24 {
             counts[h.hour as usize] = h.session_count;

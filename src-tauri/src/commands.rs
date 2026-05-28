@@ -416,8 +416,6 @@ fn current_live_session_infos() -> Vec<SessionInfo> {
     }
 }
 
-// ── Response types ──
-
 #[derive(Serialize)]
 pub struct HealthResponse {
     pub version: &'static str,
@@ -796,8 +794,6 @@ fn persist_live_codex_snapshots(
     persist_live_session_infos(Provider::Codex, &result);
 }
 
-// ── Commands (all instant — read from cache) ──
-
 #[tauri::command]
 pub fn get_health() -> HealthResponse {
     let (discord_status, discord_enabled) = shared()
@@ -1106,8 +1102,6 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
     }
 }
 
-// ── Discord User from local LevelDB ──
-
 #[derive(Serialize)]
 pub struct DiscordUserInfo {
     pub user_id: String,
@@ -1134,7 +1128,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
                 );
             }
         }
-        // Portable/per-user installs land under %LOCALAPPDATA% with PascalCase names.
         if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
             let pascal = ["Discord", "DiscordCanary", "DiscordPTB"];
             for v in &pascal {
@@ -1150,7 +1143,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     if let Ok(home) = std::env::var("HOME") {
         let home_path = PathBuf::from(&home);
-        // Both lowercase and display-name variants have been observed across versions.
         let variants_mac = [
             "discord",
             "discordcanary",
@@ -1172,7 +1164,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
     #[cfg(target_os = "linux")]
     if let Ok(home) = std::env::var("HOME") {
         let home_path = PathBuf::from(&home);
-        // Standard install via package manager or AppImage.
         for v in &variants {
             dirs.push(
                 home_path
@@ -1181,7 +1172,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
                     .join("Local Storage/leveldb"),
             );
         }
-        // Flatpak — sandbox places config under ~/.var/app/<app-id>/config/.
         let flatpak_ids = [
             "com.discordapp.Discord",
             "com.discordapp.DiscordCanary",
@@ -1195,7 +1185,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
                     .join("config/discord/Local Storage/leveldb"),
             );
         }
-        // Snap — config lives under ~/snap/<app>/current/.config/.
         for v in &variants {
             dirs.push(
                 home_path
@@ -1224,7 +1213,6 @@ pub fn get_discord_user() -> Option<DiscordUserInfo> {
         })
         .collect();
 
-    // Sort by modified time descending — newest first for freshest avatar hash
     entries.sort_by(|a, b| {
         let ta = a
             .metadata()
@@ -1247,7 +1235,6 @@ pub fn get_discord_user() -> Option<DiscordUserInfo> {
 }
 
 fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
-    // Search for the MultiAccountStore user JSON pattern
     let needle = b"\"id\":\"";
     let mut pos = 0;
     while pos < data.len().saturating_sub(100) {
@@ -1270,8 +1257,6 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                         }
                     };
 
-                    // "0" discriminator means the account uses the new unique-username
-                    // system (no #tag). Empty / missing → normalize to "0".
                     let discriminator = extract_json_field(&chunk_str, "discriminator")
                         .filter(|d| !d.is_empty())
                         .unwrap_or_else(|| "0".to_string());
@@ -1280,8 +1265,6 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                         .filter(|h| !h.is_empty())
                         .unwrap_or_default();
 
-                    // If the user has no custom avatar, Discord serves a default
-                    // based on (user_id >> 22) % 6 (new usernames) or discriminator % 5 (legacy).
                     let avatar_url = if avatar_hash.is_empty() {
                         default_avatar_url(&user_id, &discriminator)
                     } else {
@@ -1349,8 +1332,6 @@ fn extract_json_field(text: &str, field: &str) -> Option<String> {
     let end = start + text[start..].find('"')?;
     Some(text[start..end].to_string())
 }
-
-// ── Plan Detection ──
 
 #[derive(Serialize)]
 pub struct PlanInfo {
@@ -1510,8 +1491,6 @@ pub fn set_active_provider(provider: String) {
     }
 }
 
-// ── Historical Analytics (SQLite) ──
-
 #[tauri::command]
 pub fn get_session_history(
     days: Option<i64>,
@@ -1565,8 +1544,6 @@ pub fn get_daily_stats(days: Option<i64>) -> Vec<crate::db::DailyStat> {
 pub fn get_analytics_summary() -> crate::db::AnalyticsSummary {
     crate::db::get_analytics_summary()
 }
-
-// ── Context Breakdown (like /context) ──
 
 #[derive(Serialize)]
 pub struct ContextFileEntry {
@@ -1889,7 +1866,7 @@ pub fn get_context_breakdown() -> ContextBreakdown {
                     });
                 }
             }
-            mcp_tools.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+            mcp_tools.sort_by_key(|f| std::cmp::Reverse(f.tokens));
             let mcp_total: u64 = mcp_tools.iter().map(|f| f.tokens).sum();
 
             let system_prompt: u64 = 10_000;
@@ -2081,8 +2058,6 @@ pub fn generate_html_report(days: Option<i64>, project: Option<String>) -> Strin
 pub fn generate_markdown_report(days: Option<i64>, project: Option<String>) -> String {
     crate::report::generate_markdown_report(days, project.as_deref())
 }
-
-// ── cchubber-style analyzers (Phase 3) ──────────────────────────────────
 
 fn analyzer_sessions(days: Option<i64>) -> Vec<crate::db::HistoricalSession> {
     crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))

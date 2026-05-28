@@ -306,4 +306,3 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
 
     recs
 }
-

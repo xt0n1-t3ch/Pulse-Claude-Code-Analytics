@@ -1,39 +1,68 @@
-# Rust build artifacts
 /target/
 /src-tauri/target/
 /src-tauri/target-tauri-build/
 
-# Release binaries (built by CI or locally)
 /releases/
 /dist/
 
-# Svelte frontend build output
 /frontend/dist/
 /frontend/node_modules/
 
-# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# OS
 .DS_Store
 Thumbs.db
 
-# Local Claude Code data
 .claude/
 USERPROFILE
 
-# Logs
 *.log
 
-# Project files
 TODO.md
 .gitnexus
 .codex-*
 
-# Tauri mobile icon outputs (desktop-only build — these are auto-generated
-# by `cargo tauri icon` and only needed for Android/iOS bundles we don't ship)
 src-tauri/icons/android/
 src-tauri/icons/ios/
+
+node_modules/
+
+CLAUDE.md
+claude.md
+AGENTS.md
+agents.md
+GEMINI.md
+gemini.md
+.codex/
+.opencode/
+.aider*
+.specify/
+specs/
+tasks/
+ralph-loop/
+prompts/
+evidence/
+reports/
+handoff-*.md
+*.handoff.md
+state.md
+progress.md
+PRD.md
+PRD-*.md
+RESEARCH.md
+data-model.md
+quickstart.md
+plan.md
+PLAN.md
+spec.md
+SPEC.md
+.commit-msg.txt
+
+.claude-quality/
+.mcp_data/
+artifacts/
+
+src-tauri/gen/

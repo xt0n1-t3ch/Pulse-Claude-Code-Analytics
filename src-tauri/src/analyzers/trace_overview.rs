@@ -135,4 +135,3 @@ fn escape_mermaid(value: &str) -> String {
         .replace('<', "(")
         .replace('>', ")")
 }
-

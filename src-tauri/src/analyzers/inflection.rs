@@ -2,8 +2,8 @@
 //! cost-per-token or cost-per-session shifted by ≥2× versus the prior rolling
 //! baseline. These points are the "something broke / something changed" flags.
 
-use chrono::{DateTime, Utc};
 use cc_discord_presence::provider::Provider;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::db::HistoricalSession;
@@ -25,7 +25,10 @@ pub fn detect(sessions: &[HistoricalSession]) -> Vec<InflectionPoint> {
     detect_for_provider(Provider::Claude, sessions)
 }
 
-pub fn detect_for_provider(provider: Provider, sessions: &[HistoricalSession]) -> Vec<InflectionPoint> {
+pub fn detect_for_provider(
+    provider: Provider,
+    sessions: &[HistoricalSession],
+) -> Vec<InflectionPoint> {
     use std::collections::BTreeMap;
 
     let mut by_day: BTreeMap<String, (f64, usize)> = BTreeMap::new();

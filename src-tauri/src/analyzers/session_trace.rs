@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Timelike, Utc};
 use cc_discord_presence::provider::Provider;
+use chrono::{DateTime, Timelike, Utc};
 use serde_json::Value;
 
 use crate::db::HistoricalSession;
@@ -44,7 +44,10 @@ pub fn load_session_traces(sessions: &[HistoricalSession]) -> HashMap<String, Se
             let raw_id = raw_session_id(session);
             let path = index.get(&(session.provider.clone(), raw_id.clone()))?;
             let provider = Provider::parse(&session.provider)?;
-            Some((session.id.clone(), parse_session_trace(provider, &raw_id, path)))
+            Some((
+                session.id.clone(),
+                parse_session_trace(provider, &raw_id, path),
+            ))
         })
         .collect()
 }
@@ -118,7 +121,9 @@ fn scan_provider_roots(
                     Provider::Claude => remaining.contains(stem).then(|| stem.to_string()),
                     Provider::Codex => remaining
                         .iter()
-                        .find(|session_id| stem == session_id.as_str() || stem.ends_with(session_id.as_str()))
+                        .find(|session_id| {
+                            stem == session_id.as_str() || stem.ends_with(session_id.as_str())
+                        })
                         .cloned(),
                 }) else {
                     continue;
@@ -207,15 +212,11 @@ fn parse_codex_trace_line(value: &Value, trace: &mut SessionTrace) {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    if matches!(outer_type, "compacted")
-        || matches!(payload_type, "context_compacted")
-    {
+    if matches!(outer_type, "compacted") || matches!(payload_type, "context_compacted") {
         trace.compact_commands += 1;
     }
 
-    if outer_type == "response_item"
-        && payload_type == "message"
-    {
+    if outer_type == "response_item" && payload_type == "message" {
         let role = payload
             .and_then(|map| map.get("role"))
             .and_then(|v| v.as_str())
@@ -330,20 +331,22 @@ fn scan_codex_tools(payload: &serde_json::Map<String, Value>, trace: &mut Sessio
         "view_image_tool_call" => Some("view_image".to_string()),
         "web_search_call" => Some("web_search".to_string()),
         "patch_apply_end" => Some("apply_patch".to_string()),
-        "mcp_tool_call_end" => payload
-            .get("invocation")
-            .and_then(|v| v.as_object())
-            .map(|invocation| {
-                let server = invocation
-                    .get("server")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let tool = invocation
-                    .get("tool")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                format!("mcp__{server}__{tool}")
-            }),
+        "mcp_tool_call_end" => {
+            payload
+                .get("invocation")
+                .and_then(|v| v.as_object())
+                .map(|invocation| {
+                    let server = invocation
+                        .get("server")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let tool = invocation
+                        .get("tool")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    format!("mcp__{server}__{tool}")
+                })
+        }
         _ => None,
     };
     let Some(name) = tool_name else {
@@ -448,7 +451,10 @@ mod tests {
             subagent_count: 0,
             is_active: false,
         };
-        assert_eq!(raw_session_id(&session), "019daa02-33ad-7c40-8ea4-6d003a58e803");
+        assert_eq!(
+            raw_session_id(&session),
+            "019daa02-33ad-7c40-8ea4-6d003a58e803"
+        );
     }
 
     #[test]
@@ -478,7 +484,9 @@ mod tests {
         assert_eq!(trace.total_tools, 2);
         assert_eq!(trace.mcp_tool_calls, 1);
         assert_eq!(
-            trace.tool_counts.get("mcp__context-mode__ctx_batch_execute"),
+            trace
+                .tool_counts
+                .get("mcp__context-mode__ctx_batch_execute"),
             Some(&1)
         );
     }

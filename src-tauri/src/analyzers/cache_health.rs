@@ -90,7 +90,10 @@ pub fn analyze(sessions: &[HistoricalSession]) -> CacheHealthReport {
     analyze_for_provider(Provider::Claude, sessions)
 }
 
-pub fn analyze_for_provider(provider: Provider, sessions: &[HistoricalSession]) -> CacheHealthReport {
+pub fn analyze_for_provider(
+    provider: Provider,
+    sessions: &[HistoricalSession],
+) -> CacheHealthReport {
     let overall = overall_ratio(sessions);
     let weighted = trend_weighted_ratio(sessions);
     // Grade off the weighted score so recent behavior dominates.
@@ -103,7 +106,13 @@ pub fn analyze_for_provider(provider: Provider, sessions: &[HistoricalSession]) 
         .map(|s| (s.input_tokens - s.cache_write_tokens - s.cache_read_tokens).max(0))
         .sum();
 
-    let diagnosis = diagnose(provider, grade, weighted, overall, total_cache_read + total_input);
+    let diagnosis = diagnose(
+        provider,
+        grade,
+        weighted,
+        overall,
+        total_cache_read + total_input,
+    );
 
     CacheHealthReport {
         grade,
