@@ -10,8 +10,10 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code, paired with the
 | [architecture.md](architecture.md) | High-level component map: daemon → Tauri → SQLite → Svelte |
 | [discord-assets.md](discord-assets.md) | Upload assets to the Developer Portal so the RP logo actually renders |
 | [opus-4-7-variants.md](opus-4-7-variants.md) | Reasoning-effort tiers (Low / Medium / High / Extra High / Max) + tokenizer note |
+| [opus-4-8.md](opus-4-8.md) | Opus 4.8 — fast mode (priority speed) + billing impact |
 | [analyzers.md](analyzers.md) | How the cchubber-style analyzers work + how to add new recommendations |
-| [cost-calculation.md](cost-calculation.md) | Pricing tiers, cache math, 1M-context surcharge rules |
+| [cost-calculation.md](cost-calculation.md) | Pricing tiers, cache math, 1M-context surcharge + fast-mode rules |
+| [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
 ## Quick links
 
@@ -22,4 +24,4 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code, paired with the
 ## Version
 
 - Schema: **v3** (config + DB)
-- Last docs refresh: 2026-04-17 (Opus 4.7 + cchubber-analyzer overhaul)
+- Last docs refresh: 2026-05-28 (Opus 4.8 + fast-mode cost rules)

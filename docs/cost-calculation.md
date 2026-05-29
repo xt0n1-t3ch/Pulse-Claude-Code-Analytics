@@ -63,6 +63,27 @@ total_cost = input_cost + output_cost + cache_write_cost + cache_read_cost
 - Detection: `max_turn_api_input > 200,000` indicates extended context usage.
 - Model IDs with `[1m]` suffix (e.g., `claude-opus-4-6[1m]`) are stripped before pricing lookup.
 
+## Fast Mode
+
+Fast mode (priority speed) bills every token category at **2x** the standard rate (`cost::FAST_RATE_MULTIPLIER`). It launched with Opus 4.8, so only fast-capable models are eligible — `cost::is_fast_capable()` returns true for Opus >= 4.8 and false for every earlier or non-Opus model. The fast flag is ignored on models that can't run fast, so a stray flag never inflates cost.
+
+Speed is detected **per turn** from `usage.speed`, not per session. A turn's effective multiplier is `cost::FAST_RATE_MULTIPLIER` when it ran fast on a fast-capable model, otherwise `1.0`:
+
+```
+turn_multiplier = 2.0  if (turn ran fast AND is_fast_capable(model))
+                  1.0  otherwise
+
+turn_cost = base_turn_cost × turn_multiplier
+```
+
+Because the multiplier is applied per turn before accumulation, a **mixed session** (some standard turns, some fast turns) totals correctly — fast turns contribute 2x, standard turns 1x, and the session total is their sum.
+
+The per-category breakdown (input / output / cache write / cache read) is **accumulated per turn** using the same per-turn multiplier and the beta 1M-context surcharge, so the four components always sum to the accumulated total — the split reconciles with the headline cost rather than being recomputed independently.
+
+When statusline data is present, its `total_cost_usd` stays **authoritative** for the headline figure. The JSONL-derived category proportions are scaled to that authoritative total, so the breakdown matches Claude Code's own cost while preserving the relative shape (input vs output vs cache).
+
+See [opus-4-8.md](opus-4-8.md) for the model that introduced fast mode.
+
 ## Cache Efficiency Metrics
 
 ### Cache Hit Ratio
@@ -101,6 +122,10 @@ When both sources are available, statusline wins for cost/model/totals while JSO
 | `src/cost.rs` | `model_pricing()` | Returns pricing for a model ID |
 | `src/cost.rs` | `calculate_cost()` | Computes cost from tokens + pricing |
 | `src/cost.rs` | `calculate_cost_with_context()` | Adds 1M context surcharge |
+| `src/cost.rs` | `calculate_cost_with_context_and_speed()` | Adds the fast-mode 2x multiplier |
+| `src/cost.rs` | `calculate_category_costs()` | Per-turn four-category breakdown (surcharge + fast) |
+| `src/cost.rs` | `is_fast_capable()` | Checks if model supports fast mode (Opus >= 4.8) |
+| `src/cost.rs` | `speed_multiplier()` | Returns the per-turn fast multiplier (2x or 1x) |
 | `src/cost.rs` | `is_ga_1m_context()` | Checks if model is GA (no surcharge) |
 | `src-tauri/src/commands.rs` | `get_metrics()` | Aggregates cost breakdown across sessions |
 | `src-tauri/src/commands.rs` | `get_live_sessions()` | Per-session cost breakdown |
