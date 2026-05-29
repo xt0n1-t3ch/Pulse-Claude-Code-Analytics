@@ -185,9 +185,15 @@ fn default_alias_target(model: &str) -> Option<&'static str> {
 
 fn default_model_pricing(model: &str) -> Option<ModelPricing> {
     // - https://openai.com/api/pricing/
+    // - https://developers.openai.com/api/docs/models/gpt-5.5
     // - https://developers.openai.com/api/docs/models/gpt-5.3-codex/
     // - https://developers.openai.com/api/docs/models/gpt-5.4/
     let pricing = match model {
+        "gpt-5.5" | "gpt-5.5-2026-04-23" => ModelPricing {
+            input_per_million: 5.0,
+            cached_input_per_million: 0.5,
+            output_per_million: 30.0,
+        },
         "gpt-5.4" | "gpt-5.4-2026-03-05" => ModelPricing {
             input_per_million: 2.5,
             cached_input_per_million: 0.25,
@@ -233,6 +239,32 @@ fn default_model_pricing(model: &str) -> Option<ModelPricing> {
     };
 
     Some(pricing)
+}
+
+/// Whether a Codex model supports Fast mode (the `service_tier = "fast"` /
+/// `priority` tier toggled with `/fast`). Only the GPT-5.5 and GPT-5.4 families
+/// advertise a Fast tier. Source: https://developers.openai.com/codex/speed
+pub fn is_fast_capable(model_id: &str) -> bool {
+    let key = normalize_model_key(model_id);
+    key.starts_with("gpt-5.5") || key.starts_with("gpt-5.4")
+}
+
+/// The Fast-mode rate multiplier for a Codex turn. Fast mode bills every token
+/// category at this multiple of the standard rate: 2.5x for GPT-5.5, 2x for
+/// GPT-5.4. Standard mode, or any model without a Fast tier, bills at 1x.
+/// Source: https://developers.openai.com/codex/speed
+pub fn speed_multiplier(model_id: &str, fast: bool) -> f64 {
+    if !fast {
+        return 1.0;
+    }
+    let key = normalize_model_key(model_id);
+    if key.starts_with("gpt-5.5") {
+        2.5
+    } else if key.starts_with("gpt-5.4") {
+        2.0
+    } else {
+        1.0
+    }
 }
 
 #[cfg(test)]
@@ -404,5 +436,45 @@ mod tests {
         let computed = compute_total_cost("GPT-9-Codex", 1_000_000, 0, 0, &config);
         assert_eq!(computed.source, PricingSource::Fallback);
         assert_eq!(computed.resolved_model, "gpt-9-codex");
+    }
+
+    #[test]
+    fn resolves_exact_pricing_for_gpt_5_5() {
+        let config = PricingConfig::default();
+        let resolved = resolve_model_pricing("gpt-5.5", &config);
+        assert_eq!(resolved.source, PricingSource::Exact);
+        assert_eq!(resolved.resolved_model, "gpt-5.5");
+        assert!((resolved.pricing.input_per_million - 5.0).abs() < 0.0001);
+        assert!((resolved.pricing.cached_input_per_million - 0.5).abs() < 0.0001);
+        assert!((resolved.pricing.output_per_million - 30.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn resolves_exact_pricing_for_gpt_5_5_snapshot() {
+        let config = PricingConfig::default();
+        let resolved = resolve_model_pricing("gpt-5.5-2026-04-23", &config);
+        assert_eq!(resolved.source, PricingSource::Exact);
+        assert_eq!(resolved.resolved_model, "gpt-5.5-2026-04-23");
+        assert!((resolved.pricing.input_per_million - 5.0).abs() < 0.0001);
+        assert!((resolved.pricing.output_per_million - 30.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn fast_capable_only_for_gpt_5_5_and_gpt_5_4() {
+        assert!(is_fast_capable("gpt-5.5"));
+        assert!(is_fast_capable("gpt-5.5-2026-04-23"));
+        assert!(is_fast_capable("gpt-5.4"));
+        assert!(!is_fast_capable("gpt-5.3-codex"));
+        assert!(!is_fast_capable("gpt-5.2-codex"));
+        assert!(!is_fast_capable("gpt-5-codex"));
+    }
+
+    #[test]
+    fn speed_multiplier_matches_codex_fast_rates() {
+        assert!((speed_multiplier("gpt-5.5", true) - 2.5).abs() < 0.0001);
+        assert!((speed_multiplier("gpt-5.4", true) - 2.0).abs() < 0.0001);
+        assert!((speed_multiplier("gpt-5.3-codex", true) - 1.0).abs() < 0.0001);
+        assert!((speed_multiplier("gpt-5.5", false) - 1.0).abs() < 0.0001);
+        assert!((speed_multiplier("gpt-5.4", false) - 1.0).abs() < 0.0001);
     }
 }

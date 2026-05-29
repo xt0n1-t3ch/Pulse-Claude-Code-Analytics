@@ -690,6 +690,7 @@ fn build_codex_session_infos(
                 s.reasoning_effort,
                 fast_mode,
             );
+            let speed = cc_discord_presence::codex::cost::speed_multiplier(&model_key, fast_mode);
             let context_window = s
                 .context_window
                 .as_ref()
@@ -731,7 +732,7 @@ fn build_codex_session_infos(
                 model: display_name,
                 model_id: model_key,
                 context_window: context_window_label,
-                cost: s.total_cost_usd,
+                cost: s.total_cost_usd * speed,
                 tokens: s
                     .session_total_tokens
                     .unwrap_or(input_total + s.output_tokens_total),
@@ -754,10 +755,10 @@ fn build_codex_session_infos(
                 subagent_count: 0,
                 subagents: Vec::new(),
                 tokens_per_sec: 0.0,
-                input_cost: s.cost_breakdown.input_cost_usd,
-                output_cost: s.cost_breakdown.output_cost_usd,
+                input_cost: s.cost_breakdown.input_cost_usd * speed,
+                output_cost: s.cost_breakdown.output_cost_usd * speed,
                 cache_write_cost: 0.0,
-                cache_read_cost: s.cost_breakdown.cached_input_cost_usd,
+                cache_read_cost: s.cost_breakdown.cached_input_cost_usd * speed,
                 speed: Speed::from_fast(fast_mode).as_str().to_string(),
                 fast: fast_mode,
                 service_tier: None,
@@ -2478,5 +2479,28 @@ mod tests {
         assert_ne!(healthy, watch);
         assert_ne!(watch, soon);
         assert_ne!(soon, now);
+    }
+
+    #[test]
+    fn fast_mode_scales_codex_cost_by_speed_multiplier() {
+        use super::build_codex_session_infos;
+
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.model = Some("gpt-5.5".into());
+        snapshot.total_cost_usd = 4.0;
+        snapshot.cost_breakdown = TokenCostBreakdown {
+            input_cost_usd: 1.0,
+            cached_input_cost_usd: 0.5,
+            output_cost_usd: 2.5,
+        };
+
+        let standard = build_codex_session_infos(&[snapshot.clone()], false, false);
+        let fast = build_codex_session_infos(&[snapshot], true, false);
+
+        assert!((standard[0].cost - 4.0).abs() < 0.0001);
+        assert!((fast[0].cost - 10.0).abs() < 0.0001);
+        assert!((fast[0].input_cost - 2.5).abs() < 0.0001);
+        assert!((fast[0].output_cost - 6.25).abs() < 0.0001);
+        assert!((fast[0].cache_read_cost - 1.25).abs() < 0.0001);
     }
 }

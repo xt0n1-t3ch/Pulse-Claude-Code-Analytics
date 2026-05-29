@@ -8,6 +8,7 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 - Claude Opus 4.8 support: pricing, 1M-context GA, and inflated-tokenizer detection.
 - Fast mode: per-turn `usage.speed` detection, 2x speed-aware pricing, and a fast marker in Sessions, Discord presence, and the HTML report.
+- OpenAI Codex GPT-5.5 pricing ($5 / $30 per Mtok) and Codex Fast mode (`/fast`) cost: GPT-5.5 bills at 2.5x and GPT-5.4 at 2x the standard rate.
 - Per-session Context Window: a session selector, per-session token usage, and tiered compaction hints.
 - Single-scan Reports: `get_reports_bundle` loads every analyzer from one JSONL scan.
 - Centralized test suite: Vitest unit, integration, and component plus Rust integration; see [tests/index.md](../tests/index.md).
