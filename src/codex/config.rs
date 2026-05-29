@@ -111,7 +111,6 @@ pub struct OpenAiPlanDisplayConfig {
 }
 
 impl OpenAiPlanDisplayConfig {
-    // Legacy display helper kept for backwards compatibility; runtime now uses telemetry plan.
     pub fn label(&self) -> String {
         if self.show_price
             && let Some(monthly) = self.tier.monthly_price_usd()
@@ -722,6 +721,7 @@ fn path_key(path: &Path) -> String {
     }
 }
 
+#[cfg(windows)]
 fn sessions_dir_has_entries(path: &Path) -> bool {
     fs::read_dir(path)
         .ok()

@@ -48,6 +48,9 @@ fn storage_session_id(provider: &str, session_id: &str) -> String {
 fn db() -> &'static Arc<Mutex<Connection>> {
     DB.get_or_init(|| {
         let path = db_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let conn = Connection::open(&path).expect("failed to open pulse-analytics.db");
         init_schema(&conn);
         Arc::new(Mutex::new(conn))
