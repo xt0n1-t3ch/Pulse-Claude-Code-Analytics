@@ -84,6 +84,27 @@ When statusline data is present, its `total_cost_usd` stays **authoritative** fo
 
 See [opus-4-8.md](opus-4-8.md) for the model that introduced fast mode.
 
+## Codex (OpenAI) Pricing & Fast Mode
+
+Pulse prices OpenAI Codex sessions from OpenAI's published per-million-token API rates (`src/codex/cost.rs` → `default_model_pricing()`), resolved by normalized model id with alias and override support:
+
+| Model | Input | Cached Input | Output |
+|-------|-------|--------------|--------|
+| GPT-5.5 | $5.00 | $0.50 | $30.00 |
+| GPT-5.4 | $2.50 | $0.25 | $15.00 |
+| GPT-5.3-Codex / 5.2 | $1.75 | $0.175 | $14.00 |
+| GPT-5.1 / 5 (+ codex / max) | $1.25 | $0.125 | $10.00 |
+| GPT-5-mini / 5.1-codex-mini | $0.25 | $0.025 | $2.00 |
+| GPT-5-nano | $0.05 | $0.005 | $0.40 |
+
+Unknown model ids fall back to the GPT-5 base rate while preserving the real id, so a new model is never silently relabeled.
+
+Codex **Fast mode** (`/fast on`, persisted as `service_tier = "fast"`) raises generation speed at a higher credit rate. Only GPT-5.5 and GPT-5.4 expose a Fast tier: GPT-5.5 bills at **2.5x** and GPT-5.4 at **2x** the standard rate (`codex::cost::speed_multiplier`). Unlike Claude's per-turn `usage.speed`, the Codex tier is a **global** setting resolved once from the Codex global-state file, so the multiplier applies to the whole session cost — applied in `build_codex_session_infos` against the resolved `fast_mode` flag.
+
+Codex draws down ChatGPT-plan **credits**, not a USD invoice; Pulse's dollar figure is the API-rate equivalent, with the Fast multiplier surfacing the higher burn. With an API key (not a ChatGPT login) Fast mode is unavailable and standard API rates apply.
+
+Source: <https://developers.openai.com/codex/speed> and <https://openai.com/api/pricing/>
+
 ## Cache Efficiency Metrics
 
 ### Cache Hit Ratio
@@ -127,5 +148,8 @@ When both sources are available, statusline wins for cost/model/totals while JSO
 | `src/cost.rs` | `is_fast_capable()` | Checks if model supports fast mode (Opus >= 4.8) |
 | `src/cost.rs` | `speed_multiplier()` | Returns the per-turn fast multiplier (2x or 1x) |
 | `src/cost.rs` | `is_ga_1m_context()` | Checks if model is GA (no surcharge) |
+| `src/codex/cost.rs` | `default_model_pricing()` | OpenAI Codex per-model API pricing (incl. GPT-5.5) |
+| `src/codex/cost.rs` | `speed_multiplier()` | Codex fast multiplier (2.5x GPT-5.5 / 2x GPT-5.4) |
+| `src-tauri/src/commands.rs` | `build_codex_session_infos()` | Applies the Codex fast multiplier to session cost |
 | `src-tauri/src/commands.rs` | `get_metrics()` | Aggregates cost breakdown across sessions |
 | `src-tauri/src/commands.rs` | `get_live_sessions()` | Per-session cost breakdown |

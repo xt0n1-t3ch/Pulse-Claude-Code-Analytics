@@ -8,7 +8,7 @@
 
 ### See where every Claude Code dollar actually goes.
 
-The open-source **Claude Code analytics dashboard** + **Discord Rich Presence** for devs on **Claude Pro**, **Max**, and **Teams**.<br>Grade your cache A – F, catch runaway sessions before they burn your plan, and copy one-click <i>Fix with Claude Code</i> prompts. Native desktop. 100 % local. Zero telemetry.
+The open-source **Claude Code &amp; OpenAI Codex analytics dashboard** + **Discord Rich Presence** for devs on **Claude Pro / Max / Teams** and **ChatGPT Plus / Pro / Business**.<br>Grade your cache A – F, catch runaway sessions before they burn your plan, and copy one-click <i>Fix with Claude Code</i> prompts. Native desktop. 100 % local. Zero telemetry.
 
 [![CI](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/ci.yml/badge.svg)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/ci.yml)
 [![Release](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/release.yml/badge.svg)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/release.yml)
@@ -37,6 +37,8 @@ You pay for Claude Code every month. Maybe $20 on **Pro**, $100 – $200 on **Ma
 - **Fix-with-Claude prompts** — every recommendation has a **Copy Fix Prompt** button. Paste it into Claude Code. Problem fixed.
 - **Plan usage limits** — live tracking of your current-session, weekly, Sonnet-only, and Extra Usage quotas. Sound alert when Extra Usage spikes.
 - **Discord Rich Presence** — five-tier reasoning effort, live project / model / branch. Your flow state, on your profile.
+
+**Works with OpenAI Codex too.** Flip the provider toggle and Pulse reads your Codex CLI sessions the same way — per-model pricing for the GPT-5 family **including GPT-5.5** ($5 / $30 per Mtok), 400 K context tracking, and reasoning-effort detection. **Fast mode** (`/fast`) is priced correctly on both sides: Codex **GPT-5.5 bills at 2.5×** and **GPT-5.4 at 2×** the standard rate, and Claude **Opus 4.8 Fast** bills at **2×** — each flagged with a ⚡ marker in Sessions and Discord presence.
 
 Written in **Rust** + **Tauri 2** + **Svelte 5**. ≈ 12 MB on Windows, ≈ 18 MB on macOS. Cold-starts in under 200 ms. One-click installers for Windows (NSIS + MSI), macOS (DMG — Apple Silicon + Intel), and Linux (deb, rpm, AppImage). Apache-2.0 licensed (attribution required — see [`NOTICE`](NOTICE)). The data never leaves your machine.
 
@@ -123,6 +125,7 @@ cd src-tauri && cargo tauri build
 | **Plan usage limits** | Current session · weekly all-models · Sonnet-only · Extra Usage monthly spend. Auto-detects Pro / Max / Teams. Sound alert on Extra Usage spikes. |
 | **Heatmap · sparklines · charts** | All-local Chart.js. Zero network. |
 | **Reports export** | Branded HTML + Markdown. One click. |
+| **OpenAI Codex support** | Full GPT-5 family pricing — GPT-5.5, 5.4, 5.3-Codex, 5.2, 5.1 (+ Codex / max / mini), 5, mini, nano. **Fast mode** (`/fast`) surfaced at 2.5× (5.5) / 2× (5.4). One-click provider switch. |
 
 ### Discord Rich Presence
 

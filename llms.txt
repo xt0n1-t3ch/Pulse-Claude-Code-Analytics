@@ -10,6 +10,8 @@ Pulse reads the JSONL transcripts that Claude Code and Codex already write to di
 
 Pulse prices every Claude model correctly, including Claude Opus 4.8 with its fast mode (priority speed at 2x the standard per-token rate, detected per-turn from the transcript's `usage.speed` field), 1M-context GA pricing, and the inflated-tokenizer correction for Opus 4.7+. The headline cost mirrors Claude Code's own statusline total; per-category breakdowns are reconciled to it.
 
+Pulse also prices the full OpenAI Codex GPT-5 family from OpenAI's API rates — including GPT-5.5 ($5 / $30 per million tokens) — and surfaces Codex Fast mode (the `/fast` priority tier): GPT-5.5 bills at 2.5x and GPT-5.4 at 2x the standard rate, marked with a fast indicator in Sessions and Discord presence. Switch between Claude Code and Codex with one toggle.
+
 ## Stack
 
 - Shell: Tauri 2 with the native OS WebView (no bundled Chromium)
@@ -44,4 +46,4 @@ Pulse prices every Claude model correctly, including Claude Opus 4.8 with its fa
 
 ## Keywords
 
-Claude Code analytics, Claude Code cost tracker, Claude Code usage dashboard, Claude Opus 4.8, fast mode pricing, Anthropic token cost, cache hit ratio, prompt caching, 1M context window, context window usage, model routing, Opus Sonnet Haiku, OpenAI Codex usage, Codex analytics, Discord Rich Presence, reasoning effort, Claude Pro, Claude Max, Claude Teams, plan usage limits, Extra Usage, JSONL transcript, local-first, zero telemetry, open source, Rust, Tauri, Svelte, Windows, macOS, Linux desktop app
+Claude Code analytics, Claude Code cost tracker, Claude Code usage dashboard, Claude Opus 4.8, fast mode pricing, Anthropic token cost, cache hit ratio, prompt caching, 1M context window, context window usage, model routing, Opus Sonnet Haiku, OpenAI Codex usage, Codex analytics, GPT-5.5, GPT-5 family, Codex fast mode, /fast, gpt-5.5 pricing, Discord Rich Presence, reasoning effort, Claude Pro, Claude Max, Claude Teams, ChatGPT Plus Pro Business, plan usage limits, Extra Usage, JSONL transcript, local-first, zero telemetry, open source, Rust, Tauri, Svelte, Windows, macOS, Linux desktop app
