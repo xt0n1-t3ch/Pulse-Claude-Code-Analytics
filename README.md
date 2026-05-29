@@ -18,11 +18,22 @@ The open-source **Claude Code &amp; OpenAI Codex analytics dashboard** + **Disco
 [![Stars](https://img.shields.io/github/stars/xt0n1-t3ch/Pulse-Claude-Code-Analytics?style=flat&color=0a0a0a&logo=github)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/stargazers)
 [![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-0a0a0a?logo=githubsponsors)](https://github.com/sponsors/xt0n1-t3ch)
 
-<a href="#install"><b>Download</b></a>&nbsp; · &nbsp;<a href="#about"><b>About</b></a>&nbsp; · &nbsp;<a href="#screenshots"><b>Screenshots</b></a>&nbsp; · &nbsp;<a href="#features"><b>Features</b></a>&nbsp; · &nbsp;<a href="docs/"><b>Docs</b></a>&nbsp; · &nbsp;<a href="https://github.com/sponsors/xt0n1-t3ch"><b>Sponsor</b></a>
+<a href="#install"><b>Download</b></a>&nbsp; · &nbsp;<a href="#whats-new"><b>What's New</b></a>&nbsp; · &nbsp;<a href="#about"><b>About</b></a>&nbsp; · &nbsp;<a href="#screenshots"><b>Screenshots</b></a>&nbsp; · &nbsp;<a href="#features"><b>Features</b></a>&nbsp; · &nbsp;<a href="docs/"><b>Docs</b></a>&nbsp; · &nbsp;<a href="https://github.com/sponsors/xt0n1-t3ch"><b>Sponsor</b></a>
 
 </div>
 
 ---
+
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.1.0</h2>
+
+- **OpenAI Codex support** — flip the provider toggle and Pulse reads Codex sessions too. Full GPT-5 family pricing **including GPT-5.5** ($5 / $30 per Mtok), 400 K context, and reasoning-effort detection.
+- **Claude Opus 4.8** — pricing, 1M-context GA, and inflated-tokenizer detection.
+- **Fast mode, priced right on both sides** — Claude **Opus 4.8 Fast** at 2×; Codex **`/fast`** at 2.5× (GPT-5.5) and 2× (GPT-5.4). Each fast turn is flagged with a ⚡ marker in Sessions and Discord presence.
+- **Per-session Context Window** — a session selector, per-session token usage, and tiered compaction hints.
+- **Reports & Insights no longer hangs** — analyzers run off the UI thread; one scan feeds every view.
+- **Redesigned HTML export** — fully offline, on-brand dark theme, smooth charts, fast-vs-standard split.
+
+**[Download v1.1.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
