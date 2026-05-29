@@ -7,9 +7,27 @@ use serde::Serialize;
 use tracing::{debug, warn};
 
 use cc_discord_presence::config;
+use cc_discord_presence::cost;
 use cc_discord_presence::provider::Provider;
 
 static DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
+
+const WINDOW_TOKENS_1M: i64 = 1_000_000;
+const WINDOW_TOKENS_DEFAULT: i64 = 200_000;
+const CONTEXT_WINDOW_LABEL_1M: &str = "1M";
+
+fn session_window_tokens(s: &super::commands::SessionInfo) -> i64 {
+    let has_1m = s.context_window == CONTEXT_WINDOW_LABEL_1M || cost::is_ga_1m_context(&s.model_id);
+    if has_1m {
+        WINDOW_TOKENS_1M
+    } else {
+        WINDOW_TOKENS_DEFAULT
+    }
+}
+
+fn session_used_tokens(s: &super::commands::SessionInfo) -> i64 {
+    s.input_tokens.max(s.tokens) as i64
+}
 
 fn db_path() -> PathBuf {
     config::claude_home().join("pulse-analytics.db")
@@ -124,6 +142,8 @@ fn init_schema(conn: &Connection) {
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT DEFAULT 'claude';");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN session_name TEXT DEFAULT NULL;");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN created_at TEXT DEFAULT NULL;");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN used_tokens INTEGER DEFAULT 0;");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN window_tokens INTEGER DEFAULT 0;");
     let _ =
         conn.execute_batch("ALTER TABLE daily_stats ADD COLUMN provider TEXT DEFAULT 'claude';");
     let _ = conn.execute(
@@ -170,6 +190,12 @@ fn init_schema(conn: &Connection) {
          WHERE started_at IS NULL",
         [],
     );
+    let _ = conn.execute(
+        "UPDATE sessions
+         SET window_tokens = CASE WHEN context_window = '1M' THEN 1000000 ELSE 200000 END
+         WHERE window_tokens IS NULL OR window_tokens = 0",
+        [],
+    );
     let _ = conn.execute_batch(
         "
         CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
@@ -211,6 +237,8 @@ pub struct HistoricalSession {
     pub has_thinking: bool,
     pub subagent_count: i64,
     pub is_active: bool,
+    pub used_tokens: i64,
+    pub window_tokens: i64,
 }
 
 fn history_timestamp_expr() -> &'static str {
@@ -238,7 +266,7 @@ fn query_sessions(
             started_at, ended_at, duration_secs, total_cost,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, total_tokens,
             input_cost, output_cost, cache_write_cost, cache_read_cost,
-            has_thinking, subagent_count, is_active
+            has_thinking, subagent_count, is_active, used_tokens, window_tokens
          FROM sessions
          WHERE provider = ?1"
     );
@@ -355,6 +383,8 @@ fn query_sessions(
                 has_thinking: row.get::<_, i32>(22)? != 0,
                 subagent_count: row.get(23)?,
                 is_active: row.get::<_, i32>(24)? != 0,
+                used_tokens: row.get(25)?,
+                window_tokens: row.get(26)?,
             })
         })
         .ok();
@@ -425,8 +455,8 @@ pub fn upsert_session(s: &super::commands::SessionInfo) {
             started_at, duration_secs, total_cost, input_tokens, output_tokens,
             cache_write_tokens, cache_read_tokens, total_tokens,
             input_cost, output_cost, cache_write_cost, cache_read_cost,
-            has_thinking, subagent_count, is_active, updated_at)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,1,?24)
+            has_thinking, subagent_count, is_active, updated_at, used_tokens, window_tokens)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,1,?24,?25,?26)
         ON CONFLICT(id) DO UPDATE SET
             provider=?2,
             session_name=COALESCE(?3, session_name),
@@ -439,7 +469,8 @@ pub fn upsert_session(s: &super::commands::SessionInfo) {
             duration_secs=?11, total_cost=?12, input_tokens=?13, output_tokens=?14,
             cache_write_tokens=?15, cache_read_tokens=?16, total_tokens=?17,
             input_cost=?18, output_cost=?19, cache_write_cost=?20, cache_read_cost=?21,
-            has_thinking=?22, subagent_count=?23, is_active=1, updated_at=?24",
+            has_thinking=?22, subagent_count=?23, is_active=1, updated_at=?24,
+            used_tokens=?25, window_tokens=?26",
         params![
             storage_id,
             s.provider,
@@ -465,6 +496,8 @@ pub fn upsert_session(s: &super::commands::SessionInfo) {
             s.has_thinking as i32,
             s.subagent_count as i32,
             now,
+            session_used_tokens(s),
+            session_window_tokens(s),
         ],
     );
     let _ = conn.execute(
@@ -603,7 +636,7 @@ pub fn search_sessions(query: &str, limit: Option<i64>) -> Vec<HistoricalSession
             s.started_at, s.ended_at, s.duration_secs, s.total_cost,
             s.input_tokens, s.output_tokens, s.cache_write_tokens, s.cache_read_tokens, s.total_tokens,
             s.input_cost, s.output_cost, s.cache_write_cost, s.cache_read_cost,
-            s.has_thinking, s.subagent_count, s.is_active
+            s.has_thinking, s.subagent_count, s.is_active, s.used_tokens, s.window_tokens
         FROM sessions_fts fts
         JOIN sessions s ON s.rowid = fts.rowid
         WHERE s.provider = ?1 AND sessions_fts MATCH ?2
@@ -646,6 +679,8 @@ pub fn search_sessions(query: &str, limit: Option<i64>) -> Vec<HistoricalSession
                 has_thinking: row.get::<_, i32>(22)? != 0,
                 subagent_count: row.get(23)?,
                 is_active: row.get::<_, i32>(24)? != 0,
+                used_tokens: row.get(25)?,
+                window_tokens: row.get(26)?,
             })
         })
         .ok();
@@ -1073,6 +1108,69 @@ mod tests {
         conn
     }
 
+    fn sample_session_info(
+        context_window: &str,
+        model_id: &str,
+        input_tokens: u64,
+        tokens: u64,
+    ) -> super::super::commands::SessionInfo {
+        super::super::commands::SessionInfo {
+            provider: "claude".into(),
+            app_name: None,
+            session_id: "session".into(),
+            session_name: None,
+            project: "repo".into(),
+            model: "Claude Opus".into(),
+            model_id: model_id.into(),
+            context_window: context_window.into(),
+            cost: 0.0,
+            tokens,
+            input_tokens,
+            output_tokens: 0,
+            cache_write_tokens: 0,
+            cache_read_tokens: 0,
+            branch: None,
+            activity: "Idle".into(),
+            activity_target: None,
+            effort: "Medium".into(),
+            effort_explicit: false,
+            is_idle: false,
+            started_at: None,
+            duration_secs: 0,
+            has_thinking: false,
+            subagent_count: 0,
+            subagents: Vec::new(),
+            tokens_per_sec: 0.0,
+            input_cost: 0.0,
+            output_cost: 0.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
+            speed: "standard".into(),
+            fast: false,
+            service_tier: None,
+        }
+    }
+
+    #[test]
+    fn session_window_tokens_reports_1m_for_1m_context() {
+        let one_m = sample_session_info("1M", "claude-opus-4-8", 10, 10);
+        assert_eq!(session_window_tokens(&one_m), 1_000_000);
+
+        let ga_1m = sample_session_info("200K", "claude-opus-4-8", 10, 10);
+        assert_eq!(session_window_tokens(&ga_1m), 1_000_000);
+
+        let two_hundred_k = sample_session_info("200K", "claude-sonnet-4-5", 10, 10);
+        assert_eq!(session_window_tokens(&two_hundred_k), 200_000);
+    }
+
+    #[test]
+    fn session_used_tokens_picks_larger_of_input_and_total() {
+        let info = sample_session_info("200K", "claude-sonnet-4-5", 5_000, 7_500);
+        assert_eq!(session_used_tokens(&info), 7_500);
+        let info = sample_session_info("200K", "claude-sonnet-4-5", 9_000, 1_000);
+        assert_eq!(session_used_tokens(&info), 9_000);
+    }
+
     #[test]
     fn history_query_uses_created_at_when_started_at_missing() {
         let conn = test_conn();
@@ -1158,5 +1256,124 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "session-early");
+    }
+
+    #[test]
+    fn init_schema_is_idempotent_and_preserves_rows() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        init_schema(&conn);
+        let provider = active_provider_slug().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO sessions (id, provider, project, model, created_at, updated_at, used_tokens, window_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                "session-keep",
+                provider,
+                "repo-a",
+                "Claude Opus 4.7",
+                now,
+                now,
+                123_456_i64,
+                1_000_000_i64
+            ],
+        )
+        .expect("insert session");
+
+        init_schema(&conn);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .expect("count rows");
+        assert_eq!(count, 1);
+
+        let rows = query_sessions(
+            &conn,
+            Some(7),
+            None,
+            None,
+            Some("repo-a"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].used_tokens, 123_456);
+        assert_eq!(rows[0].window_tokens, 1_000_000);
+    }
+
+    #[test]
+    fn context_tokens_round_trip_through_query() {
+        let conn = test_conn();
+        let provider = active_provider_slug().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO sessions (id, provider, project, model, created_at, updated_at, used_tokens, window_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                "session-ctx",
+                provider,
+                "repo-ctx",
+                "Claude Sonnet 4.6",
+                now,
+                now,
+                90_000_i64,
+                200_000_i64
+            ],
+        )
+        .expect("insert session");
+
+        let rows = query_sessions(
+            &conn,
+            Some(7),
+            None,
+            None,
+            Some("repo-ctx"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].used_tokens, 90_000);
+        assert_eq!(rows[0].window_tokens, 200_000);
+    }
+
+    #[test]
+    fn window_backfill_maps_context_label_when_zero() {
+        let conn = test_conn();
+        let provider = active_provider_slug().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO sessions (id, provider, project, model, context_window, created_at, updated_at, window_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+            params![
+                "session-1m",
+                provider,
+                "repo-1m",
+                "Claude Opus 4.8",
+                "1M",
+                now,
+                now
+            ],
+        )
+        .expect("insert session");
+
+        init_schema(&conn);
+
+        let window: i64 = conn
+            .query_row(
+                "SELECT window_tokens FROM sessions WHERE id = 'session-1m'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read window");
+        assert_eq!(window, 1_000_000);
     }
 }

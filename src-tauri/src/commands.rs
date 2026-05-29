@@ -1570,6 +1570,34 @@ pub struct ContextBreakdown {
     pub mcp_total: u64,
 }
 
+#[derive(Serialize)]
+pub struct SessionContextUsage {
+    pub session_id: String,
+    pub project: String,
+    pub model: String,
+    pub model_display: String,
+    pub used_tokens: u64,
+    pub window_tokens: u64,
+    pub utilization_pct: f64,
+    pub recommendation: String,
+}
+
+const CONTEXT_WATCH_PCT: f64 = 50.0;
+const CONTEXT_COMPACT_SOON_PCT: f64 = 80.0;
+const CONTEXT_COMPACT_NOW_PCT: f64 = 95.0;
+
+fn context_recommendation(utilization_pct: f64) -> String {
+    if utilization_pct >= CONTEXT_COMPACT_NOW_PCT {
+        "Context is nearly full — compact now or start a fresh session before the next turn.".into()
+    } else if utilization_pct >= CONTEXT_COMPACT_SOON_PCT {
+        "Context is filling up — plan to compact soon to avoid an autocompact mid-task.".into()
+    } else if utilization_pct >= CONTEXT_WATCH_PCT {
+        "Context is past half — keep an eye on it and compact when you shift topics.".into()
+    } else {
+        "Context is healthy — plenty of headroom for this session.".into()
+    }
+}
+
 fn estimate_tokens(text: &str) -> u64 {
     (text.len() as f64 / 3.5).ceil() as u64
 }
@@ -1745,14 +1773,17 @@ fn collect_codex_mcp_tools(config_path: &std::path::Path) -> Vec<ContextFileEntr
 }
 
 #[tauri::command]
-pub fn get_context_breakdown() -> ContextBreakdown {
+pub fn get_context_breakdown(session_id: Option<String>) -> ContextBreakdown {
     match current_provider() {
         Provider::Claude => {
             let claude_home = cc_discord_presence::config::claude_home();
             let sessions = read_claude_sessions();
+            let selected = session_id
+                .as_deref()
+                .and_then(|id| sessions.iter().find(|s| s.session_id == id))
+                .or_else(|| sessions.first());
 
-            let (model, ctx_window) = sessions
-                .first()
+            let (model, ctx_window) = selected
                 .map(|s| {
                     let name = s
                         .model_display
@@ -1768,11 +1799,14 @@ pub fn get_context_breakdown() -> ContextBreakdown {
                 })
                 .unwrap_or(("Unknown".into(), 200_000));
 
-            let latest_input: u64 = sessions
-                .iter()
-                .map(|s| s.max_turn_api_input)
-                .max()
-                .unwrap_or(0);
+            let latest_input: u64 = match selected {
+                Some(s) => s.max_turn_api_input,
+                None => sessions
+                    .iter()
+                    .map(|s| s.max_turn_api_input)
+                    .max()
+                    .unwrap_or(0),
+            };
 
             let mut memory_files = Vec::new();
             let global_claude_md = claude_home.join("CLAUDE.md");
@@ -1902,7 +1936,10 @@ pub fn get_context_breakdown() -> ContextBreakdown {
         Provider::Codex => {
             let codex_home = cc_discord_presence::codex::config::codex_home();
             let sessions = read_codex_sessions();
-            let active = codex_session::preferred_active_session(&sessions);
+            let active = session_id
+                .as_deref()
+                .and_then(|id| sessions.iter().find(|s| s.session_id == id))
+                .or_else(|| codex_session::preferred_active_session(&sessions));
             let model = active
                 .and_then(|s| s.model.clone())
                 .map(|model| {
@@ -1995,6 +2032,38 @@ pub fn get_context_breakdown() -> ContextBreakdown {
             }
         }
     }
+}
+
+#[tauri::command]
+pub fn get_sessions_context_usage(days: Option<i64>) -> Vec<SessionContextUsage> {
+    crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
+        .into_iter()
+        .map(|s| {
+            let window_tokens = if s.window_tokens > 0 {
+                s.window_tokens as u64
+            } else if cost::is_ga_1m_context(&s.model_id) || s.context_window == "1M" {
+                1_000_000
+            } else {
+                200_000
+            };
+            let used_tokens = s.used_tokens.max(0) as u64;
+            let utilization_pct = if window_tokens > 0 {
+                (used_tokens as f64 / window_tokens as f64) * 100.0
+            } else {
+                0.0
+            };
+            SessionContextUsage {
+                session_id: s.id,
+                project: s.project,
+                model: s.model_id,
+                model_display: s.model,
+                used_tokens,
+                window_tokens,
+                utilization_pct,
+                recommendation: context_recommendation(utilization_pct),
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -2381,5 +2450,33 @@ mod tests {
     fn codex_total_input_tokens_uses_telemetry_total_without_double_counting_cache() {
         let snapshot = sample_codex_snapshot();
         assert_eq!(codex_total_input_tokens(&snapshot), 54_626_018);
+    }
+
+    #[test]
+    fn context_recommendation_maps_each_tier_at_boundaries() {
+        use super::{
+            CONTEXT_COMPACT_NOW_PCT, CONTEXT_COMPACT_SOON_PCT, CONTEXT_WATCH_PCT,
+            context_recommendation,
+        };
+
+        assert_eq!(CONTEXT_WATCH_PCT, 50.0);
+        assert_eq!(CONTEXT_COMPACT_SOON_PCT, 80.0);
+        assert_eq!(CONTEXT_COMPACT_NOW_PCT, 95.0);
+
+        let healthy = context_recommendation(49.0);
+        let watch = context_recommendation(50.0);
+        let soon = context_recommendation(80.0);
+        let now = context_recommendation(95.0);
+        let full = context_recommendation(100.0);
+
+        assert!(healthy.contains("healthy"));
+        assert!(watch.contains("half"));
+        assert!(soon.contains("compact soon"));
+        assert!(now.contains("compact now"));
+        assert!(full.contains("compact now"));
+
+        assert_ne!(healthy, watch);
+        assert_ne!(watch, soon);
+        assert_ne!(soon, now);
     }
 }

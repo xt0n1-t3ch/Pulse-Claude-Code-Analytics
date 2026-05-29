@@ -96,6 +96,7 @@ fn main() {
             commands::get_daily_stats,
             commands::get_analytics_summary,
             commands::get_context_breakdown,
+            commands::get_sessions_context_usage,
             commands::get_project_stats,
             commands::get_hourly_activity,
             commands::get_top_sessions,

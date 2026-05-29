@@ -512,6 +512,8 @@ mod tests {
             has_thinking: false,
             subagent_count: 0,
             is_active: false,
+            used_tokens: 0,
+            window_tokens: 0,
         };
         assert_eq!(
             raw_session_id(&session),

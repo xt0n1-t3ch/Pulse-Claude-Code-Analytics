@@ -47,6 +47,8 @@ fn claude_session(id: &str, project: &str, model: &str) -> HistoricalSession {
         has_thinking: true,
         subagent_count: 0,
         is_active: false,
+        used_tokens: 120_000,
+        window_tokens: 200_000,
     }
 }
 
