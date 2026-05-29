@@ -69,6 +69,9 @@ export interface SessionInfo {
     output_cost: number;
     cache_write_cost: number;
     cache_read_cost: number;
+    speed: string;
+    fast: boolean;
+    service_tier: string | null;
     app_name?: string | null;
 }
 
@@ -345,8 +348,23 @@ export interface ContextBreakdown {
     mcp_total: number;
 }
 
-export function getContextBreakdown(): Promise<ContextBreakdown> {
-    return invoke("get_context_breakdown");
+export function getContextBreakdown(sessionId?: string): Promise<ContextBreakdown> {
+    return invoke("get_context_breakdown", { sessionId: sessionId ?? null });
+}
+
+export interface SessionContextUsage {
+    session_id: string;
+    project: string;
+    model: string;
+    model_display: string;
+    used_tokens: number;
+    window_tokens: number;
+    utilization_pct: number;
+    recommendation: string;
+}
+
+export function getSessionsContextUsage(days?: number): Promise<SessionContextUsage[]> {
+    return invoke("get_sessions_context_usage", { days: days ?? null });
 }
 
 export function getProjectStats(days?: number): Promise<ProjectStat[]> {
@@ -397,7 +415,6 @@ export function generateMarkdownReport(days?: number, project?: string): Promise
     return invoke("generate_markdown_report", { days: days ?? null, project: project ?? null });
 }
 
-// ── cchubber-style analyzers (Phase 3) ─────────────────────────────────
 
 export type Severity = "critical" | "warning" | "info" | "positive";
 
@@ -473,7 +490,6 @@ export function copyFixPrompt(recId: string): Promise<string> {
     return invoke("copy_fix_prompt", { recId });
 }
 
-// ── cchubber-ported analyzers (Phase 4) ────────────────────────────────
 
 export interface ToolUsageEntry {
     name: string;
@@ -542,7 +558,24 @@ export function getSessionHealth(days?: number): Promise<SessionHealthReport> {
     return invoke("get_session_health", { days: days ?? null });
 }
 
-// ── granular filtering (Phase 5) ────────────────────────────────────────
+
+export interface ReportsBundle {
+    provider: string;
+    days: number;
+    total_sessions: number;
+    recommendations: Recommendation[];
+    trace_overview: TraceOverview;
+    tool_frequency: ToolFrequencyReport;
+    prompt_complexity: PromptComplexityReport;
+    session_health: SessionHealthReport;
+    cache_health: CacheHealthReport;
+    model_routing: ModelRoutingReport;
+    inflection_points: InflectionPoint[];
+}
+
+export function getReportsBundle(days?: number, project?: string): Promise<ReportsBundle> {
+    return invoke("get_reports_bundle", { days: days ?? null, project: project ?? null });
+}
 
 export interface SessionHistoryFilter {
     from_iso?: string | null;

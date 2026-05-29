@@ -1,14 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    getCacheHealth,
-    getRecommendations,
-    getInflectionPoints,
-    getModelRouting,
-    getToolFrequency,
-    getPromptComplexity,
-    getSessionHealth,
-    getTraceOverview,
+    getReportsBundle,
     copyFixPrompt,
     generateHtmlReport,
     generateMarkdownReport,
@@ -38,48 +31,39 @@
   let hasLoaded = $state(false);
   let days = $state(30);
   let severityFilter = $state<"all" | Severity>("all");
-
-  function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T | null> {
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        console.warn(`${label} timed out after ${ms}ms`);
-        resolve(null);
-      }, ms);
-      p.then((v) => {
-        clearTimeout(timer);
-        resolve(v);
-      }).catch((err) => {
-        clearTimeout(timer);
-        console.warn(`${label} failed:`, err);
-        resolve(null);
-      });
-    });
-  }
+  let inFlight = false;
+  let pendingDays: number | null = null;
 
   async function loadReports(): Promise<void> {
+    if (inFlight) {
+      pendingDays = days;
+      return;
+    }
+    inFlight = true;
     loading = true;
+    const requestedDays = days;
     try {
-      const [c, r, i, m, t, p, h, tr] = await Promise.all([
-        withTimeout(getCacheHealth(days), 6000, "cache_health"),
-        withTimeout(getRecommendations(days), 6000, "recommendations"),
-        withTimeout(getInflectionPoints(days), 6000, "inflection"),
-        withTimeout(getModelRouting(days), 6000, "model_routing"),
-        withTimeout(getToolFrequency(days), 8000, "tool_frequency"),
-        withTimeout(getPromptComplexity(days), 8000, "prompt_complexity"),
-        withTimeout(getSessionHealth(days), 8000, "session_health"),
-        withTimeout(getTraceOverview(days), 6000, "trace_overview"),
-      ]);
-      cache = c;
-      recs = r ?? [];
-      inflections = i ?? [];
-      routing = m;
-      tools = t;
-      prompts = p;
-      health = h;
-      trace = tr;
+      const bundle = await getReportsBundle(requestedDays);
+      cache = bundle.cache_health;
+      recs = bundle.recommendations;
+      inflections = bundle.inflection_points;
+      routing = bundle.model_routing;
+      tools = bundle.tool_frequency;
+      prompts = bundle.prompt_complexity;
+      health = bundle.session_health;
+      trace = bundle.trace_overview;
+    } catch (err) {
+      console.warn("reports_bundle failed:", err);
     } finally {
       loading = false;
       hasLoaded = true;
+      inFlight = false;
+      if (pendingDays !== null && pendingDays !== requestedDays) {
+        pendingDays = null;
+        loadReports();
+      } else {
+        pendingDays = null;
+      }
     }
   }
 
@@ -212,6 +196,13 @@
       <div class="skeleton row short"></div>
     </div>
   {:else}
+    {#if loading && hasLoaded}
+      <div class="reload-banner" role="status">
+        <span class="reload-spinner"></span>
+        Refreshing for {days === 365 ? "1y" : `${days}d`}…
+      </div>
+    {/if}
+    <div class="report-body" class:reloading={loading && hasLoaded}>
     {#if cache && $providerProfile.claudeOnlyAnalytics}
       <section class="card hero-card">
         <div class="hero-left">
@@ -521,6 +512,7 @@
         </ul>
       {/if}
     </section>
+    </div>
   {/if}
 </div>
 
@@ -1013,6 +1005,45 @@
   .btn-fix:hover {
     background: var(--accent);
     color: #1a1a1a;
+  }
+
+  .report-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    transition: opacity 0.2s var(--ease);
+  }
+
+  .report-body.reloading {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .reload-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 8px 14px;
+  }
+
+  .reload-spinner {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 
   .skeleton-stack {

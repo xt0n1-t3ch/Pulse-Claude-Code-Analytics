@@ -1,24 +1,79 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fmtTokens, fmtPct } from "../lib/utils";
-  import { getContextBreakdown, type ContextBreakdown, type ContextFileEntry } from "../lib/api";
+  import {
+    getContextBreakdown,
+    getSessionsContextUsage,
+    type ContextBreakdown,
+    type ContextFileEntry,
+    type SessionContextUsage,
+  } from "../lib/api";
   import { addToast } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
+  import { sessions } from "../lib/stores";
 
   let ctx = $state<ContextBreakdown | null>(null);
+  let sessionUsage = $state<SessionContextUsage[]>([]);
+  let selectedSessionId = $state<string | null>(null);
+  let refreshing = $state(false);
+  let loaded = $state(false);
   let showMcp = $state(true);
   let showMemory = $state(true);
   let showSkills = $state(true);
 
-  async function refresh(): Promise<void> {
-    ctx = await getContextBreakdown();
+  let breakdownRequest = 0;
+
+  $effect(() => {
+    const list = $sessions;
+    if (list.length === 0) {
+      selectedSessionId = null;
+      return;
+    }
+    const stillPresent = list.some((s) => s.session_id === selectedSessionId);
+    if (!stillPresent) {
+      const active = list.find((s) => !s.is_idle) ?? list[0];
+      selectedSessionId = active.session_id;
+    }
+  });
+
+  async function loadBreakdown(): Promise<void> {
+    const request = ++breakdownRequest;
+    refreshing = true;
+    try {
+      const next = await getContextBreakdown(selectedSessionId ?? undefined);
+      if (request === breakdownRequest) {
+        ctx = next;
+        loaded = true;
+      }
+    } finally {
+      if (request === breakdownRequest) refreshing = false;
+    }
   }
 
+  async function loadUsage(): Promise<void> {
+    sessionUsage = await getSessionsContextUsage();
+  }
+
+  $effect(() => {
+    void selectedSessionId;
+    loadBreakdown();
+  });
+
   onMount(() => {
-    refresh();
-    const iv = setInterval(refresh, 10000);
+    loadUsage();
+    const iv = setInterval(() => {
+      loadBreakdown();
+      loadUsage();
+    }, 10000);
     return () => clearInterval(iv);
   });
+
+  function utilizationColor(pct: number): string {
+    if (pct >= 95) return "var(--danger)";
+    if (pct >= 80) return "var(--warning)";
+    if (pct >= 50) return "var(--info)";
+    return "var(--success)";
+  }
 
   type CtxSeverity = "critical" | "warning" | "info" | "positive";
 
@@ -212,8 +267,29 @@
   {#if ctx}
     <div class="view-header">
       <h2 class="view-title">Context Window</h2>
-      <span class="model-chip">{ctx.model}</span>
+      <div class="header-meta">
+        {#if refreshing}<span class="refreshing-dot" aria-label="Refreshing"></span>{/if}
+        <span class="model-chip">{ctx.model}</span>
+      </div>
     </div>
+
+    {#if $sessions.length > 0}
+      <div class="session-strip" role="tablist">
+        {#each $sessions as s (s.session_id)}
+          <button
+            class="session-pill"
+            class:active={s.session_id === selectedSessionId}
+            class:idle={s.is_idle}
+            role="tab"
+            aria-selected={s.session_id === selectedSessionId}
+            onclick={() => (selectedSessionId = s.session_id)}
+          >
+            <span class="pill-project">{s.project}</span>
+            <span class="pill-model">{s.model}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <div class="hero-card">
       <div class="hero-top">
@@ -292,7 +368,43 @@
       </div>
     {/if}
 
-    <!-- Sub-sections -->
+    {#if sessionUsage.length > 0}
+      <div class="usage-card">
+        <div class="advice-header">
+          <div class="advice-title-row">
+            <h3 class="advice-title">Per-session utilization</h3>
+            <span class="advice-count">{sessionUsage.length}</span>
+          </div>
+          <p class="advice-sub">
+            Context fill across recent sessions — each with a tailored recommendation.
+          </p>
+        </div>
+        <ul class="usage-list">
+          {#each sessionUsage as row (row.session_id)}
+            <li class="usage-row">
+              <div class="usage-head">
+                <span class="usage-project">{row.project}</span>
+                <span class="usage-model">{row.model_display}</span>
+                <span class="usage-pct" style="color: {utilizationColor(row.utilization_pct)}">
+                  {fmtPct(row.utilization_pct)}
+                </span>
+              </div>
+              <div class="usage-track">
+                <div
+                  class="usage-fill"
+                  style="width: {Math.min(row.utilization_pct, 100)}%; background: {utilizationColor(row.utilization_pct)}"
+                ></div>
+              </div>
+              <div class="usage-meta">
+                <span>{fmtTokens(row.used_tokens)} / {fmtTokens(row.window_tokens)}</span>
+                <span class="usage-rec">{row.recommendation}</span>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
     <div class="sub-grid">
       {#if ctx.mcp_tools.length > 0}
         <div class="sub-card">
@@ -357,10 +469,14 @@
         </div>
       {/if}
     </div>
-  {:else}
+  {:else if !loaded}
     <div class="hero-card loading">
       <div class="spinner"></div>
       <span>Loading context data...</span>
+    </div>
+  {:else}
+    <div class="hero-card loading">
+      <span>No active sessions to inspect.</span>
     </div>
   {/if}
 </div>
@@ -369,6 +485,18 @@
   .ctx-page { display: flex; flex-direction: column; gap: 14px; }
 
   .view-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .header-meta { display: flex; align-items: center; gap: 10px; }
+  .refreshing-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: ctx-refresh-pulse 1s ease-in-out infinite;
+  }
+  @keyframes ctx-refresh-pulse {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.85; }
+  }
   .model-chip {
     font-size: 11px;
     color: var(--text-secondary);
@@ -379,6 +507,82 @@
     border-radius: 99px;
     letter-spacing: 0.01em;
   }
+
+  /* Session pill strip */
+  .session-strip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .session-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 8px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+    text-align: left;
+    font: inherit;
+  }
+  .session-pill:hover { border-color: var(--border-hover); }
+  .session-pill.active { border-color: var(--accent); background: var(--accent-dim); }
+  .session-pill.idle { opacity: 0.6; }
+  .pill-project { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+  .pill-model {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Per-session utilization */
+  .usage-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+  }
+  .usage-list { list-style: none; display: flex; flex-direction: column; gap: 12px; }
+  .usage-row {
+    padding: 12px 14px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-md);
+  }
+  .usage-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+  .usage-project { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+  .usage-model {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .usage-pct {
+    margin-left: auto;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .usage-track {
+    height: 6px;
+    background: var(--bg-primary);
+    border-radius: 99px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .usage-fill { height: 100%; border-radius: 99px; transition: width 0.4s var(--ease); }
+  .usage-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .usage-rec { color: var(--text-secondary); line-height: 1.4; }
 
   /* Hero card */
   .hero-card {
