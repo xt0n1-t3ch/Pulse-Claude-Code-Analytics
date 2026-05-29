@@ -191,7 +191,7 @@
           <span class="top-col">Duration</span>
           <span class="top-col cost">Cost</span>
         </div>
-        {#each topSessions.sort((a, b) => b.total_cost - a.total_cost).slice(0, 10) as h, i (h.id)}
+        {#each [...topSessions].sort((a, b) => b.total_cost - a.total_cost).slice(0, 10) as h, i (h.id)}
           <div class="top-row">
             <span class="top-col rank">{i + 1}</span>
             <span class="top-col project">{h.project}</span>
