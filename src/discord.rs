@@ -31,7 +31,7 @@ struct ResolvedAssets {
 }
 
 /// GitHub repo URL shown as a button on Discord profile popout.
-const GITHUB_REPO_URL: &str = "https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence";
+const GITHUB_REPO_URL: &str = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics";
 
 pub struct DiscordPresence {
     client_id: Option<String>,
@@ -41,7 +41,6 @@ pub struct DiscordPresence {
     last_publish_at: Option<Instant>,
     known_asset_keys: Option<HashSet<String>>,
     last_asset_refresh_at: Option<Instant>,
-    // Keepalive fields
     last_heartbeat_at: Option<Instant>,
     reconnect_backoff: Duration,
     last_reconnect_attempt: Option<Instant>,
@@ -102,7 +101,6 @@ impl DiscordPresence {
             return Ok(());
         }
 
-        // Try to connect; silently skip during backoff period
         if let Err(_err) = self.ensure_connected() {
             return Ok(());
         }
@@ -198,7 +196,6 @@ impl DiscordPresence {
             return Ok(());
         }
 
-        // Clear before update to prevent stale cards during transitions
         if self.last_sent.as_ref() != Some(&payload)
             && let Some(client) = self.client.as_mut()
         {
@@ -273,7 +270,6 @@ impl DiscordPresence {
             return Ok(());
         };
 
-        // Respect reconnection backoff — skip silently if too soon
         if let Some(last_attempt) = self.last_reconnect_attempt
             && last_attempt.elapsed() < self.reconnect_backoff
         {
@@ -291,7 +287,7 @@ impl DiscordPresence {
                 self.client = Some(client);
                 self.consecutive_errors = 0;
                 self.reconnect_backoff = RECONNECT_MIN_BACKOFF;
-                self.last_sent = None; // Force re-send after reconnect
+                self.last_sent = None;
                 self.last_heartbeat_at = None;
                 self.last_status = "Connected".to_string();
                 Ok(())
@@ -421,7 +417,7 @@ fn resolve_presence_assets(
 /// - details: activity + project (line 1)
 /// - state: essential metrics with `·` separator (line 2)
 /// - tooltip: detailed breakdown shown on large image hover
-fn presence_lines(
+pub fn presence_lines(
     session: &ClaudeSessionSnapshot,
     effective_limits: Option<&RateLimits>,
     api_usage: Option<&UsageData>,
@@ -455,7 +451,6 @@ fn presence_lines(
         String::new()
     };
 
-    // ── Details line (line 1): Activity · Project (Branch) ──
     let details = if config.privacy.show_activity {
         if let Some(activity) = &session.activity {
             format!(
@@ -476,12 +471,12 @@ fn presence_lines(
     };
     let details = truncate_for_discord(&details);
 
-    // ── State line (line 2): Model · Plan · Effort · Tokens · Cost ──
     let mut state_parts: Vec<String> = Vec::new();
 
     if config.privacy.show_model {
+        let model_id = session.model.as_deref().unwrap_or("");
+        let is_fast = session.speed.is_fast() && crate::cost::is_fast_capable(model_id);
         let model_label = if let Some(display) = &session.model_display {
-            let model_id = session.model.as_deref().unwrap_or("");
             let model_with_ctx = crate::cost::model_display_with_context(
                 model_id,
                 display,
@@ -497,6 +492,12 @@ fn presence_lines(
             model.clone()
         } else {
             "Unknown".to_string()
+        };
+
+        let model_label = if is_fast {
+            format!("\u{26a1} {model_label}")
+        } else {
+            model_label
         };
 
         state_parts.push(model_label);
@@ -536,7 +537,6 @@ fn presence_lines(
 
     let state = compact_join_prioritized(&state_parts, 128);
 
-    // ── Tooltip: detailed breakdown on large image hover ──
     let mut tooltip_parts: Vec<String> = Vec::new();
 
     if config.privacy.show_tokens {
@@ -580,7 +580,6 @@ fn render_limits_to_state(
     effective_limits: Option<&RateLimits>,
     api_usage: Option<&UsageData>,
 ) {
-    // Prefer API usage data — show REMAINING % (100 - utilization)
     if let Some(usage) = api_usage {
         let five_hr_remaining = (100.0 - usage.five_hour.utilization).max(0.0);
         parts.push(format!("5h {:.0}%", five_hr_remaining));
@@ -589,7 +588,6 @@ fn render_limits_to_state(
         return;
     }
 
-    // Fall back to JSONL limits
     if let Some(limits) = effective_limits {
         if let Some(primary) = &limits.primary {
             parts.push(format!("5h {:.0}%", primary.remaining_percent));
@@ -654,13 +652,12 @@ fn compact_join_prioritized(parts: &[String], max_len: usize) -> String {
         return String::new();
     }
 
-    let sep = " \u{b7} "; // middle dot separator: " · "
+    let sep = " \u{b7} ";
     let joined = parts.join(sep);
     if joined.len() <= max_len {
         return joined;
     }
 
-    // Drop parts from the end until it fits
     for count in (1..parts.len()).rev() {
         let attempt = parts[..count].join(sep);
         if attempt.len() <= max_len {
@@ -700,19 +697,16 @@ fn resolve_image_ref(key: &str, known_keys: Option<&HashSet<String>>) -> Option<
         return None;
     }
 
-    // Tier 0: already a Discord media reference — pass through.
     if trimmed.starts_with("mp:") {
         return Some(trimmed.to_string());
     }
 
-    // Tier 1: asset key confirmed in the Developer Portal.
     if let Some(known) = known_keys
         && known.contains(trimmed)
     {
         return Some(trimmed.to_string());
     }
 
-    // Tier 2: plain https URL → convert to Media Proxy format.
     if let Some(rest) = trimmed.strip_prefix("https://") {
         return Some(format!("mp:external/https/{rest}"));
     }
@@ -720,8 +714,6 @@ fn resolve_image_ref(key: &str, known_keys: Option<&HashSet<String>>) -> Option<
         return Some(format!("mp:external/http/{rest}"));
     }
 
-    // Tier 3: asset key not known (portal fetch may have failed) — return as-is.
-    // Discord will either render it (if the key exists server-side) or drop silently.
     Some(trimmed.to_string())
 }
 
@@ -729,7 +721,6 @@ fn normalize_asset_pair(
     large: Option<String>,
     small: Option<String>,
 ) -> (Option<String>, Option<String>) {
-    // Discord requires large_image if small_image is set
     if small.is_some() && large.is_none() {
         return (small, None);
     }
@@ -814,8 +805,7 @@ mod tests {
 
     #[test]
     fn test_truncate_for_discord_multibyte_boundary() {
-        // Create a string with multi-byte characters that would break at a boundary
-        let s = "a".repeat(124) + "\u{1f600}"; // 124 ASCII + 4-byte emoji = 128 bytes
+        let s = "a".repeat(124) + "\u{1f600}";
         let result = truncate_for_discord(&s);
         // Should not panic and should be valid UTF-8
         assert!(result.len() <= 128);
@@ -849,7 +839,6 @@ mod tests {
             "7d 80%".to_string(),
         ];
         let result = compact_join_prioritized(&parts, 50);
-        // Should drop low-priority tail parts to fit
         assert!(result.len() <= 50);
         assert!(result.contains("Claude Opus 4.6"));
     }
@@ -882,9 +871,6 @@ mod tests {
             resolve_image_ref("claude-code", Some(&known)),
             Some("claude-code".to_string())
         );
-        // Unknown key with a populated portal set: pass through (tier 3)
-        // instead of dropping. Lets Discord attempt resolution even if our
-        // asset-list fetch was stale or partial.
         assert_eq!(
             resolve_image_ref("unknown-key", Some(&known)),
             Some("unknown-key".to_string())
@@ -894,8 +880,6 @@ mod tests {
     #[test]
     fn test_resolve_image_key_direct_url_wraps_as_mp_external() {
         // https:// URLs are wrapped in Discord's Media Proxy format so the
-        // CDN tries to render them. Plain URLs get silently dropped by most
-        // Discord client versions for Rich Presence assets.
         assert_eq!(
             resolve_image_ref(
                 "https://example.com/claude-mascot.jpg",
@@ -915,7 +899,6 @@ mod tests {
 
     #[test]
     fn test_resolve_image_key_mp_prefix_passthrough() {
-        // Already a Discord media reference — return unchanged.
         assert_eq!(
             resolve_image_ref("mp:external/https/cdn.example/x.png", None),
             Some("mp:external/https/cdn.example/x.png".to_string())
@@ -938,7 +921,6 @@ mod tests {
 
     #[test]
     fn test_normalize_asset_pair_promote_small_to_large() {
-        // Discord requires large_image if small_image is set
         let (large, small) = normalize_asset_pair(None, Some("thinking".to_string()));
         assert_eq!(large, Some("thinking".to_string()));
         assert_eq!(small, None);
@@ -970,7 +952,6 @@ mod tests {
             details: "test".to_string(),
             state: "state".to_string(),
         };
-        // Same payload, no heartbeat needed → skip
         assert!(should_skip_publish(Some(&payload), &payload, false));
         // Same payload, heartbeat needed → don't skip
         assert!(!should_skip_publish(Some(&payload), &payload, true));
@@ -1064,7 +1045,6 @@ mod tests {
         let usage = test_usage_data(40.0, 20.0, None);
         render_limits_to_state(&mut parts, None, Some(&usage));
         assert_eq!(parts.len(), 2);
-        // Shows REMAINING % (100 - utilization)
         assert_eq!(parts[0], "5h 60%");
         assert_eq!(parts[1], "7d 80%");
     }

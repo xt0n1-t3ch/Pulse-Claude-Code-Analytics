@@ -7,16 +7,50 @@ use serde::Serialize;
 use tracing::{debug, warn};
 
 use cc_discord_presence::config;
+use cc_discord_presence::cost;
+use cc_discord_presence::provider::Provider;
 
 static DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
+
+const WINDOW_TOKENS_1M: i64 = 1_000_000;
+const WINDOW_TOKENS_DEFAULT: i64 = 200_000;
+const CONTEXT_WINDOW_LABEL_1M: &str = "1M";
+
+fn session_window_tokens(s: &super::commands::SessionInfo) -> i64 {
+    let has_1m = s.context_window == CONTEXT_WINDOW_LABEL_1M || cost::is_ga_1m_context(&s.model_id);
+    if has_1m {
+        WINDOW_TOKENS_1M
+    } else {
+        WINDOW_TOKENS_DEFAULT
+    }
+}
+
+fn session_used_tokens(s: &super::commands::SessionInfo) -> i64 {
+    s.input_tokens.max(s.tokens) as i64
+}
 
 fn db_path() -> PathBuf {
     config::claude_home().join("pulse-analytics.db")
 }
 
+fn active_provider() -> Provider {
+    cc_discord_presence::provider::load_active_provider()
+}
+
+fn active_provider_slug() -> &'static str {
+    active_provider().as_str()
+}
+
+fn storage_session_id(provider: &str, session_id: &str) -> String {
+    format!("{provider}:{session_id}")
+}
+
 fn db() -> &'static Arc<Mutex<Connection>> {
     DB.get_or_init(|| {
         let path = db_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let conn = Connection::open(&path).expect("failed to open pulse-analytics.db");
         init_schema(&conn);
         Arc::new(Mutex::new(conn))
@@ -32,6 +66,7 @@ fn init_schema(conn: &Connection) {
 
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL DEFAULT 'claude',
             project TEXT NOT NULL,
             model TEXT NOT NULL,
             model_id TEXT DEFAULT '',
@@ -83,6 +118,7 @@ fn init_schema(conn: &Connection) {
 
         CREATE TABLE IF NOT EXISTS daily_stats (
             date TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT 'claude',
             project TEXT NOT NULL,
             model TEXT NOT NULL,
             session_count INTEGER DEFAULT 0,
@@ -92,7 +128,7 @@ fn init_schema(conn: &Connection) {
             output_tokens INTEGER DEFAULT 0,
             cache_write_tokens INTEGER DEFAULT 0,
             cache_read_tokens INTEGER DEFAULT 0,
-            PRIMARY KEY (date, project, model)
+            PRIMARY KEY (date, provider, project, model)
         );
 
         CREATE TABLE IF NOT EXISTS budget_config (
@@ -106,8 +142,37 @@ fn init_schema(conn: &Connection) {
     .expect("failed to initialize pulse-analytics schema");
     debug!("Pulse analytics DB initialized at {}", db_path().display());
 
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN provider TEXT DEFAULT 'claude';");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN session_name TEXT DEFAULT NULL;");
     let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN created_at TEXT DEFAULT NULL;");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN used_tokens INTEGER DEFAULT 0;");
+    let _ = conn.execute_batch("ALTER TABLE sessions ADD COLUMN window_tokens INTEGER DEFAULT 0;");
+    let _ =
+        conn.execute_batch("ALTER TABLE daily_stats ADD COLUMN provider TEXT DEFAULT 'claude';");
+    let _ = conn.execute(
+        "UPDATE sessions SET provider = 'claude' WHERE provider IS NULL OR trim(provider) = ''",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE daily_stats SET provider = 'claude' WHERE provider IS NULL OR trim(provider) = ''",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE sessions
+         SET input_tokens = MAX(total_tokens - output_tokens, 0)
+         WHERE provider = 'codex'
+           AND total_tokens > 0
+           AND input_tokens > MAX(total_tokens - output_tokens, 0)",
+        [],
+    );
+    let _ = conn.execute(
+        "UPDATE daily_stats
+         SET input_tokens = MAX(total_tokens - output_tokens, 0)
+         WHERE provider = 'codex'
+           AND total_tokens > 0
+           AND input_tokens > MAX(total_tokens - output_tokens, 0)",
+        [],
+    );
     let _ = conn.execute(
         "UPDATE sessions
          SET created_at = COALESCE(created_at, started_at, updated_at)
@@ -128,12 +193,22 @@ fn init_schema(conn: &Connection) {
          WHERE started_at IS NULL",
         [],
     );
+    let _ = conn.execute(
+        "UPDATE sessions
+         SET window_tokens = CASE WHEN context_window = '1M' THEN 1000000 ELSE 200000 END
+         WHERE window_tokens IS NULL OR window_tokens = 0",
+        [],
+    );
     let _ = conn.execute_batch(
         "
+        CREATE INDEX IF NOT EXISTS idx_sessions_provider ON sessions(provider);
+        CREATE INDEX IF NOT EXISTS idx_sessions_provider_active ON sessions(provider, is_active);
         CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
         CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
         CREATE INDEX IF NOT EXISTS idx_sessions_history_ts
             ON sessions(COALESCE(started_at, created_at, updated_at));
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_stats_provider_key
+            ON daily_stats(provider, date, project, model);
         ",
     );
 }
@@ -141,6 +216,7 @@ fn init_schema(conn: &Connection) {
 #[derive(Debug, Serialize, Clone)]
 pub struct HistoricalSession {
     pub id: String,
+    pub provider: String,
     pub session_name: Option<String>,
     pub project: String,
     pub model: String,
@@ -164,12 +240,15 @@ pub struct HistoricalSession {
     pub has_thinking: bool,
     pub subagent_count: i64,
     pub is_active: bool,
+    pub used_tokens: i64,
+    pub window_tokens: i64,
 }
 
 fn history_timestamp_expr() -> &'static str {
     "COALESCE(started_at, created_at, updated_at)"
 }
 
+#[allow(clippy::too_many_arguments)]
 fn query_sessions(
     conn: &Connection,
     days: Option<i64>,
@@ -184,17 +263,18 @@ fn query_sessions(
     limit: Option<i64>,
 ) -> Vec<HistoricalSession> {
     let history_ts = history_timestamp_expr();
-    let mut sql = format!(
-        "SELECT id, session_name, project, model, model_id, context_window, branch, effort,
+    let provider = active_provider_slug().to_string();
+    let mut sql = String::from(
+        "SELECT id, provider, session_name, project, model, model_id, context_window, branch, effort,
             started_at, ended_at, duration_secs, total_cost,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, total_tokens,
             input_cost, output_cost, cache_write_cost, cache_read_cost,
-            has_thinking, subagent_count, is_active
+            has_thinking, subagent_count, is_active, used_tokens, window_tokens
          FROM sessions
-         WHERE 1=1"
+         WHERE provider = ?1"
     );
-    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    let mut param_idx = 1;
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(provider)];
+    let mut param_idx = 2;
 
     if let Some(d) = days {
         let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
@@ -282,29 +362,32 @@ fn query_sessions(
         .query_map(refs.as_slice(), |row| {
             Ok(HistoricalSession {
                 id: row.get(0)?,
-                session_name: row.get(1)?,
-                project: row.get(2)?,
-                model: row.get(3)?,
-                model_id: row.get(4)?,
-                context_window: row.get(5)?,
-                branch: row.get(6)?,
-                effort: row.get(7)?,
-                started_at: row.get(8)?,
-                ended_at: row.get(9)?,
-                duration_secs: row.get(10)?,
-                total_cost: row.get(11)?,
-                input_tokens: row.get(12)?,
-                output_tokens: row.get(13)?,
-                cache_write_tokens: row.get(14)?,
-                cache_read_tokens: row.get(15)?,
-                total_tokens: row.get(16)?,
-                input_cost: row.get(17)?,
-                output_cost: row.get(18)?,
-                cache_write_cost: row.get(19)?,
-                cache_read_cost: row.get(20)?,
-                has_thinking: row.get::<_, i32>(21)? != 0,
-                subagent_count: row.get(22)?,
-                is_active: row.get::<_, i32>(23)? != 0,
+                provider: row.get(1)?,
+                session_name: row.get(2)?,
+                project: row.get(3)?,
+                model: row.get(4)?,
+                model_id: row.get(5)?,
+                context_window: row.get(6)?,
+                branch: row.get(7)?,
+                effort: row.get(8)?,
+                started_at: row.get(9)?,
+                ended_at: row.get(10)?,
+                duration_secs: row.get(11)?,
+                total_cost: row.get(12)?,
+                input_tokens: row.get(13)?,
+                output_tokens: row.get(14)?,
+                cache_write_tokens: row.get(15)?,
+                cache_read_tokens: row.get(16)?,
+                total_tokens: row.get(17)?,
+                input_cost: row.get(18)?,
+                output_cost: row.get(19)?,
+                cache_write_cost: row.get(20)?,
+                cache_read_cost: row.get(21)?,
+                has_thinking: row.get::<_, i32>(22)? != 0,
+                subagent_count: row.get(23)?,
+                is_active: row.get::<_, i32>(24)? != 0,
+                used_tokens: row.get(25)?,
+                window_tokens: row.get(26)?,
             })
         })
         .ok();
@@ -369,27 +452,31 @@ pub struct BudgetStatus {
 pub fn upsert_session(s: &super::commands::SessionInfo) {
     let Ok(conn) = db().lock() else { return };
     let now = Utc::now().to_rfc3339();
+    let storage_id = storage_session_id(&s.provider, &s.session_id);
     let _ = conn.execute(
-        "INSERT INTO sessions (id, session_name, project, model, model_id, context_window, branch, effort,
+        "INSERT INTO sessions (id, provider, session_name, project, model, model_id, context_window, branch, effort,
             started_at, duration_secs, total_cost, input_tokens, output_tokens,
             cache_write_tokens, cache_read_tokens, total_tokens,
             input_cost, output_cost, cache_write_cost, cache_read_cost,
-            has_thinking, subagent_count, is_active, updated_at)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,1,?23)
+            has_thinking, subagent_count, is_active, updated_at, used_tokens, window_tokens)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,1,?24,?25,?26)
         ON CONFLICT(id) DO UPDATE SET
-            session_name=COALESCE(?2, session_name),
-            project=?3, model=?4, model_id=?5, context_window=?6, branch=?7, effort=?8,
+            provider=?2,
+            session_name=COALESCE(?3, session_name),
+            project=?4, model=?5, model_id=?6, context_window=?7, branch=?8, effort=?9,
             started_at=CASE
-                WHEN sessions.started_at IS NULL OR instr(sessions.started_at, 'T') = 0 THEN ?9
+                WHEN sessions.started_at IS NULL OR instr(sessions.started_at, 'T') = 0 THEN ?10
                 ELSE sessions.started_at
             END,
             ended_at=NULL,
-            duration_secs=?10, total_cost=?11, input_tokens=?12, output_tokens=?13,
-            cache_write_tokens=?14, cache_read_tokens=?15, total_tokens=?16,
-            input_cost=?17, output_cost=?18, cache_write_cost=?19, cache_read_cost=?20,
-            has_thinking=?21, subagent_count=?22, is_active=1, updated_at=?23",
+            duration_secs=?11, total_cost=?12, input_tokens=?13, output_tokens=?14,
+            cache_write_tokens=?15, cache_read_tokens=?16, total_tokens=?17,
+            input_cost=?18, output_cost=?19, cache_write_cost=?20, cache_read_cost=?21,
+            has_thinking=?22, subagent_count=?23, is_active=1, updated_at=?24,
+            used_tokens=?25, window_tokens=?26",
         params![
-            s.session_id,
+            storage_id,
+            s.provider,
             s.session_name,
             s.project,
             s.model,
@@ -412,6 +499,8 @@ pub fn upsert_session(s: &super::commands::SessionInfo) {
             s.has_thinking as i32,
             s.subagent_count as i32,
             now,
+            session_used_tokens(s),
+            session_window_tokens(s),
         ],
     );
     let _ = conn.execute(
@@ -419,26 +508,30 @@ pub fn upsert_session(s: &super::commands::SessionInfo) {
          SET created_at = COALESCE(created_at, started_at, updated_at),
              started_at = COALESCE(started_at, created_at, updated_at)
          WHERE id = ?1",
-        params![s.session_id],
+        params![storage_id],
     );
 }
 
-pub fn mark_inactive(active_ids: &[String]) {
+pub fn mark_inactive(provider: &str, active_ids: &[String]) {
     let Ok(conn) = db().lock() else { return };
+    let storage_ids: Vec<String> = active_ids
+        .iter()
+        .map(|id| storage_session_id(provider, id))
+        .collect();
     if active_ids.is_empty() {
         let _ = conn.execute(
-            "UPDATE sessions SET is_active = 0, ended_at = ?1 WHERE is_active = 1",
-            params![Utc::now().to_rfc3339()],
+            "UPDATE sessions SET is_active = 0, ended_at = ?1 WHERE provider = ?2 AND is_active = 1",
+            params![Utc::now().to_rfc3339(), provider],
         );
         return;
     }
-    let placeholders: Vec<String> = active_ids
+    let placeholders: Vec<String> = storage_ids
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("?{}", i + 2))
+        .map(|(i, _)| format!("?{}", i + 3))
         .collect();
     let sql = format!(
-        "UPDATE sessions SET is_active = 0, ended_at = ?1 WHERE is_active = 1 AND id NOT IN ({})",
+        "UPDATE sessions SET is_active = 0, ended_at = ?1 WHERE provider = ?2 AND is_active = 1 AND id NOT IN ({})",
         placeholders.join(",")
     );
     let mut stmt = match conn.prepare(&sql) {
@@ -446,8 +539,9 @@ pub fn mark_inactive(active_ids: &[String]) {
         Err(_) => return,
     };
     let now = Utc::now().to_rfc3339();
-    let mut p: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(now)];
-    for id in active_ids {
+    let mut p: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(now), Box::new(provider.to_string())];
+    for id in &storage_ids {
         p.push(Box::new(id.clone()));
     }
     let refs: Vec<&dyn rusqlite::types::ToSql> = p.iter().map(|b| b.as_ref()).collect();
@@ -458,16 +552,17 @@ pub fn update_daily_stats(s: &super::commands::SessionInfo) {
     let Ok(conn) = db().lock() else { return };
     let date = Utc::now().format("%Y-%m-%d").to_string();
     let _ = conn.execute(
-        "INSERT INTO daily_stats (date, project, model, session_count, total_cost, total_tokens,
+        "INSERT INTO daily_stats (date, provider, project, model, session_count, total_cost, total_tokens,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens)
-        VALUES (?1,?2,?3,1,?4,?5,?6,?7,?8,?9)
-        ON CONFLICT(date, project, model) DO UPDATE SET
+        VALUES (?1,?2,?3,?4,1,?5,?6,?7,?8,?9,?10)
+        ON CONFLICT(date, provider, project, model) DO UPDATE SET
             session_count = MAX(session_count, 1),
-            total_cost = ?4, total_tokens = ?5,
-            input_tokens = ?6, output_tokens = ?7,
-            cache_write_tokens = ?8, cache_read_tokens = ?9",
+            total_cost = ?5, total_tokens = ?6,
+            input_tokens = ?7, output_tokens = ?8,
+            cache_write_tokens = ?9, cache_read_tokens = ?10",
         params![
             date,
+            s.provider,
             s.project,
             s.model,
             s.cost,
@@ -539,16 +634,17 @@ pub fn search_sessions(query: &str, limit: Option<i64>) -> Vec<HistoricalSession
     };
 
     let lim = limit.unwrap_or(50);
-    let sql = "SELECT s.id, s.session_name, s.project, s.model, s.model_id, s.context_window, s.branch, s.effort,
+    let provider = active_provider_slug().to_string();
+    let sql = "SELECT s.id, s.provider, s.session_name, s.project, s.model, s.model_id, s.context_window, s.branch, s.effort,
             s.started_at, s.ended_at, s.duration_secs, s.total_cost,
             s.input_tokens, s.output_tokens, s.cache_write_tokens, s.cache_read_tokens, s.total_tokens,
             s.input_cost, s.output_cost, s.cache_write_cost, s.cache_read_cost,
-            s.has_thinking, s.subagent_count, s.is_active
+            s.has_thinking, s.subagent_count, s.is_active, s.used_tokens, s.window_tokens
         FROM sessions_fts fts
         JOIN sessions s ON s.rowid = fts.rowid
-        WHERE sessions_fts MATCH ?1
+        WHERE s.provider = ?1 AND sessions_fts MATCH ?2
         ORDER BY bm25(sessions_fts)
-        LIMIT ?2";
+        LIMIT ?3";
 
     let mut stmt = match conn.prepare(sql) {
         Ok(s) => s,
@@ -559,32 +655,35 @@ pub fn search_sessions(query: &str, limit: Option<i64>) -> Vec<HistoricalSession
     };
 
     let rows = stmt
-        .query_map(params![query, lim], |row| {
+        .query_map(params![provider, query, lim], |row| {
             Ok(HistoricalSession {
                 id: row.get(0)?,
-                session_name: row.get(1)?,
-                project: row.get(2)?,
-                model: row.get(3)?,
-                model_id: row.get(4)?,
-                context_window: row.get(5)?,
-                branch: row.get(6)?,
-                effort: row.get(7)?,
-                started_at: row.get(8)?,
-                ended_at: row.get(9)?,
-                duration_secs: row.get(10)?,
-                total_cost: row.get(11)?,
-                input_tokens: row.get(12)?,
-                output_tokens: row.get(13)?,
-                cache_write_tokens: row.get(14)?,
-                cache_read_tokens: row.get(15)?,
-                total_tokens: row.get(16)?,
-                input_cost: row.get(17)?,
-                output_cost: row.get(18)?,
-                cache_write_cost: row.get(19)?,
-                cache_read_cost: row.get(20)?,
-                has_thinking: row.get::<_, i32>(21)? != 0,
-                subagent_count: row.get(22)?,
-                is_active: row.get::<_, i32>(23)? != 0,
+                provider: row.get(1)?,
+                session_name: row.get(2)?,
+                project: row.get(3)?,
+                model: row.get(4)?,
+                model_id: row.get(5)?,
+                context_window: row.get(6)?,
+                branch: row.get(7)?,
+                effort: row.get(8)?,
+                started_at: row.get(9)?,
+                ended_at: row.get(10)?,
+                duration_secs: row.get(11)?,
+                total_cost: row.get(12)?,
+                input_tokens: row.get(13)?,
+                output_tokens: row.get(14)?,
+                cache_write_tokens: row.get(15)?,
+                cache_read_tokens: row.get(16)?,
+                total_tokens: row.get(17)?,
+                input_cost: row.get(18)?,
+                output_cost: row.get(19)?,
+                cache_write_cost: row.get(20)?,
+                cache_read_cost: row.get(21)?,
+                has_thinking: row.get::<_, i32>(22)? != 0,
+                subagent_count: row.get(23)?,
+                is_active: row.get::<_, i32>(24)? != 0,
+                used_tokens: row.get(25)?,
+                window_tokens: row.get(26)?,
             })
         })
         .ok();
@@ -597,6 +696,7 @@ pub fn get_daily_stats(days: Option<i64>) -> Vec<DailyStat> {
     let Ok(conn) = db().lock() else {
         return vec![];
     };
+    let provider = active_provider_slug().to_string();
 
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d))
@@ -606,7 +706,7 @@ pub fn get_daily_stats(days: Option<i64>) -> Vec<DailyStat> {
     let mut stmt = match conn.prepare(
         "SELECT date, project, model, session_count, total_cost, total_tokens,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens
-        FROM daily_stats WHERE date >= ?1
+        FROM daily_stats WHERE provider = ?1 AND date >= ?2
         ORDER BY date DESC",
     ) {
         Ok(s) => s,
@@ -614,7 +714,7 @@ pub fn get_daily_stats(days: Option<i64>) -> Vec<DailyStat> {
     };
 
     let rows = stmt
-        .query_map(params![cutoff], |row| {
+        .query_map(params![provider, cutoff], |row| {
             Ok(DailyStat {
                 date: row.get(0)?,
                 project: row.get(1)?,
@@ -638,47 +738,52 @@ pub fn get_analytics_summary() -> AnalyticsSummary {
     let Ok(conn) = db().lock() else {
         return AnalyticsSummary::default();
     };
+    let provider = active_provider_slug().to_string();
 
     let total_sessions: i64 = conn
-        .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM sessions WHERE provider = ?1",
+            params![provider.clone()],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
 
     let total_cost: f64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(total_cost), 0) FROM sessions",
-            [],
+            "SELECT COALESCE(SUM(total_cost), 0) FROM sessions WHERE provider = ?1",
+            params![provider.clone()],
             |r| r.get(0),
         )
         .unwrap_or(0.0);
 
     let total_tokens: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(total_tokens), 0) FROM sessions",
-            [],
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM sessions WHERE provider = ?1",
+            params![provider.clone()],
             |r| r.get(0),
         )
         .unwrap_or(0);
 
     let total_cache_read: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(cache_read_tokens), 0) FROM sessions",
-            [],
+            "SELECT COALESCE(SUM(cache_read_tokens), 0) FROM sessions WHERE provider = ?1",
+            params![provider.clone()],
             |r| r.get(0),
         )
         .unwrap_or(0);
 
     let total_cache_write: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(cache_write_tokens), 0) FROM sessions",
-            [],
+            "SELECT COALESCE(SUM(cache_write_tokens), 0) FROM sessions WHERE provider = ?1",
+            params![provider.clone()],
             |r| r.get(0),
         )
         .unwrap_or(0);
 
     let avg_duration_secs: f64 = conn
         .query_row(
-            "SELECT COALESCE(AVG(duration_secs), 0) FROM sessions WHERE duration_secs > 0",
-            [],
+            "SELECT COALESCE(AVG(duration_secs), 0) FROM sessions WHERE provider = ?1 AND duration_secs > 0",
+            params![provider.clone()],
             |r| r.get(0),
         )
         .unwrap_or(0.0);
@@ -697,24 +802,26 @@ pub fn get_analytics_summary() -> AnalyticsSummary {
 
     let top_project: String = conn
         .query_row(
-            "SELECT project FROM sessions GROUP BY project ORDER BY SUM(total_cost) DESC LIMIT 1",
-            [],
+            "SELECT project FROM sessions WHERE provider = ?1 GROUP BY project ORDER BY SUM(total_cost) DESC LIMIT 1",
+            params![provider.clone()],
             |r| r.get(0),
         )
         .unwrap_or_else(|_| "—".to_string());
 
     let top_model: String = conn
         .query_row(
-            "SELECT model FROM sessions GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1",
-            [],
+            "SELECT model FROM sessions WHERE provider = ?1 GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1",
+            params![provider.clone()],
             |r| r.get(0),
         )
         .unwrap_or_else(|_| "—".to_string());
 
     let days_tracked: i64 = conn
-        .query_row("SELECT COUNT(DISTINCT date) FROM daily_stats", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT COUNT(DISTINCT date) FROM daily_stats WHERE provider = ?1",
+            params![provider],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
 
     AnalyticsSummary {
@@ -749,6 +856,7 @@ pub struct AnalyticsSummary {
 
 pub fn get_project_stats(days: Option<i64>) -> Vec<ProjectStat> {
     let Ok(conn) = db().lock() else { return vec![] };
+    let provider = active_provider_slug().to_string();
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
     let sql = format!(
@@ -760,10 +868,10 @@ pub fn get_project_stats(days: Option<i64>) -> Vec<ProjectStat> {
             COALESCE(AVG(duration_secs), 0),
             COALESCE(SUM(cache_read_tokens), 0),
             COALESCE(SUM(cache_write_tokens), 0),
-            (SELECT model FROM sessions s2 WHERE s2.project = sessions.project
+            (SELECT model FROM sessions s2 WHERE s2.provider = sessions.provider AND s2.project = sessions.project
              GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1)
         FROM sessions
-        WHERE COALESCE({}, datetime('now')) >= ?1
+        WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2
         GROUP BY project ORDER BY SUM(total_cost) DESC",
         history_timestamp_expr()
     );
@@ -771,7 +879,7 @@ pub fn get_project_stats(days: Option<i64>) -> Vec<ProjectStat> {
         Ok(s) => s,
         Err(_) => return vec![],
     };
-    stmt.query_map(params![cutoff], |row| {
+    stmt.query_map(params![provider, cutoff], |row| {
         Ok(ProjectStat {
             project: row.get(0)?,
             session_count: row.get(1)?,
@@ -791,13 +899,14 @@ pub fn get_project_stats(days: Option<i64>) -> Vec<ProjectStat> {
 
 pub fn get_hourly_activity(days: Option<i64>) -> Vec<HourlyActivity> {
     let Ok(conn) = db().lock() else { return vec![] };
+    let provider = active_provider_slug().to_string();
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
     let sql = format!(
         "SELECT CAST(substr(COALESCE({}, ''), 12, 2) AS INTEGER) as hour,
             COUNT(*), COALESCE(SUM(total_cost), 0)
         FROM sessions
-        WHERE COALESCE({}, datetime('now')) >= ?1
+        WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2
         GROUP BY hour ORDER BY hour",
         history_timestamp_expr(),
         history_timestamp_expr()
@@ -806,7 +915,7 @@ pub fn get_hourly_activity(days: Option<i64>) -> Vec<HourlyActivity> {
         Ok(s) => s,
         Err(_) => return vec![],
     };
-    stmt.query_map(params![cutoff], |row| {
+    stmt.query_map(params![provider, cutoff], |row| {
         Ok(HourlyActivity {
             hour: row.get(0)?,
             session_count: row.get(1)?,
@@ -837,6 +946,7 @@ pub fn get_cost_forecast() -> CostForecast {
             daily_average: 0.0,
         };
     };
+    let provider = active_provider_slug().to_string();
     let now = Utc::now();
     let month_start = now.format("%Y-%m-01T00:00:00+00:00").to_string();
     let days_elapsed = now.day() as i64;
@@ -854,10 +964,10 @@ pub fn get_cost_forecast() -> CostForecast {
     let spent: f64 = conn
         .query_row(
             &format!(
-                "SELECT COALESCE(SUM(total_cost), 0) FROM sessions WHERE COALESCE({}, datetime('now')) >= ?1",
+                "SELECT COALESCE(SUM(total_cost), 0) FROM sessions WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2",
                 history_timestamp_expr()
             ),
-            params![month_start],
+            params![provider, month_start],
             |r| r.get(0),
         )
         .unwrap_or(0.0);
@@ -923,12 +1033,13 @@ pub fn set_budget(monthly_budget: f64, alert_threshold_pct: Option<f64>) {
 
 pub fn get_model_distribution(days: Option<i64>) -> Vec<(String, i64, f64)> {
     let Ok(conn) = db().lock() else { return vec![] };
+    let provider = active_provider_slug().to_string();
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
     let sql = format!(
         "SELECT model, COUNT(*), COALESCE(SUM(total_cost), 0)
         FROM sessions
-        WHERE COALESCE({}, datetime('now')) >= ?1
+        WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2
         GROUP BY model ORDER BY COUNT(*) DESC",
         history_timestamp_expr()
     );
@@ -936,7 +1047,7 @@ pub fn get_model_distribution(days: Option<i64>) -> Vec<(String, i64, f64)> {
         Ok(s) => s,
         Err(_) => return vec![],
     };
-    stmt.query_map(params![cutoff], |row| {
+    stmt.query_map(params![provider, cutoff], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, i64>(1)?,
@@ -962,13 +1073,26 @@ pub fn export_all_data() -> serde_json::Value {
 
 pub fn clear_history() -> i64 {
     let Ok(conn) = db().lock() else { return 0 };
+    let provider = active_provider_slug().to_string();
     let deleted: i64 = conn
-        .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM sessions WHERE provider = ?1",
+            params![provider.clone()],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
-    let _ = conn.execute_batch(
-        "DELETE FROM sessions;
-         DELETE FROM sessions_fts;
-         DELETE FROM daily_stats;",
+    let _ = conn.execute(
+        "DELETE FROM sessions_fts
+         WHERE rowid IN (SELECT rowid FROM sessions WHERE provider = ?1)",
+        params![provider.clone()],
+    );
+    let _ = conn.execute(
+        "DELETE FROM sessions WHERE provider = ?1",
+        params![provider.clone()],
+    );
+    let _ = conn.execute(
+        "DELETE FROM daily_stats WHERE provider = ?1",
+        params![provider],
     );
     deleted
 }
@@ -987,15 +1111,80 @@ mod tests {
         conn
     }
 
+    fn sample_session_info(
+        context_window: &str,
+        model_id: &str,
+        input_tokens: u64,
+        tokens: u64,
+    ) -> super::super::commands::SessionInfo {
+        super::super::commands::SessionInfo {
+            provider: "claude".into(),
+            app_name: None,
+            session_id: "session".into(),
+            session_name: None,
+            project: "repo".into(),
+            model: "Claude Opus".into(),
+            model_id: model_id.into(),
+            context_window: context_window.into(),
+            cost: 0.0,
+            tokens,
+            input_tokens,
+            output_tokens: 0,
+            cache_write_tokens: 0,
+            cache_read_tokens: 0,
+            branch: None,
+            activity: "Idle".into(),
+            activity_target: None,
+            effort: "Medium".into(),
+            effort_explicit: false,
+            is_idle: false,
+            started_at: None,
+            duration_secs: 0,
+            has_thinking: false,
+            subagent_count: 0,
+            subagents: Vec::new(),
+            tokens_per_sec: 0.0,
+            input_cost: 0.0,
+            output_cost: 0.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
+            speed: "standard".into(),
+            fast: false,
+            service_tier: None,
+        }
+    }
+
+    #[test]
+    fn session_window_tokens_reports_1m_for_1m_context() {
+        let one_m = sample_session_info("1M", "claude-opus-4-8", 10, 10);
+        assert_eq!(session_window_tokens(&one_m), 1_000_000);
+
+        let ga_1m = sample_session_info("200K", "claude-opus-4-8", 10, 10);
+        assert_eq!(session_window_tokens(&ga_1m), 1_000_000);
+
+        let two_hundred_k = sample_session_info("200K", "claude-sonnet-4-5", 10, 10);
+        assert_eq!(session_window_tokens(&two_hundred_k), 200_000);
+    }
+
+    #[test]
+    fn session_used_tokens_picks_larger_of_input_and_total() {
+        let info = sample_session_info("200K", "claude-sonnet-4-5", 5_000, 7_500);
+        assert_eq!(session_used_tokens(&info), 7_500);
+        let info = sample_session_info("200K", "claude-sonnet-4-5", 9_000, 1_000);
+        assert_eq!(session_used_tokens(&info), 9_000);
+    }
+
     #[test]
     fn history_query_uses_created_at_when_started_at_missing() {
         let conn = test_conn();
         let created_at = Utc::now().to_rfc3339();
+        let provider = active_provider_slug().to_string();
         conn.execute(
-            "INSERT INTO sessions (id, project, model, created_at, updated_at, total_cost)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO sessions (id, provider, project, model, created_at, updated_at, total_cost)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 "session-a",
+                provider,
                 "repo-a",
                 "Claude Opus 4.7",
                 created_at,
@@ -1026,11 +1215,13 @@ mod tests {
     #[test]
     fn hour_range_filter_uses_fallback_timestamp() {
         let conn = test_conn();
+        let provider = active_provider_slug().to_string();
         conn.execute(
-            "INSERT INTO sessions (id, project, model, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO sessions (id, provider, project, model, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 "session-early",
+                provider.clone(),
                 "repo-a",
                 "Claude Opus 4.7",
                 "2026-04-18T03:15:00+00:00",
@@ -1039,10 +1230,11 @@ mod tests {
         )
         .expect("insert early");
         conn.execute(
-            "INSERT INTO sessions (id, project, model, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO sessions (id, provider, project, model, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 "session-late",
+                provider,
                 "repo-a",
                 "Claude Opus 4.7",
                 "2026-04-18T15:45:00+00:00",
@@ -1067,5 +1259,124 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "session-early");
+    }
+
+    #[test]
+    fn init_schema_is_idempotent_and_preserves_rows() {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        init_schema(&conn);
+        let provider = active_provider_slug().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO sessions (id, provider, project, model, created_at, updated_at, used_tokens, window_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                "session-keep",
+                provider,
+                "repo-a",
+                "Claude Opus 4.7",
+                now,
+                now,
+                123_456_i64,
+                1_000_000_i64
+            ],
+        )
+        .expect("insert session");
+
+        init_schema(&conn);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .expect("count rows");
+        assert_eq!(count, 1);
+
+        let rows = query_sessions(
+            &conn,
+            Some(7),
+            None,
+            None,
+            Some("repo-a"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].used_tokens, 123_456);
+        assert_eq!(rows[0].window_tokens, 1_000_000);
+    }
+
+    #[test]
+    fn context_tokens_round_trip_through_query() {
+        let conn = test_conn();
+        let provider = active_provider_slug().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO sessions (id, provider, project, model, created_at, updated_at, used_tokens, window_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                "session-ctx",
+                provider,
+                "repo-ctx",
+                "Claude Sonnet 4.6",
+                now,
+                now,
+                90_000_i64,
+                200_000_i64
+            ],
+        )
+        .expect("insert session");
+
+        let rows = query_sessions(
+            &conn,
+            Some(7),
+            None,
+            None,
+            Some("repo-ctx"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].used_tokens, 90_000);
+        assert_eq!(rows[0].window_tokens, 200_000);
+    }
+
+    #[test]
+    fn window_backfill_maps_context_label_when_zero() {
+        let conn = test_conn();
+        let provider = active_provider_slug().to_string();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO sessions (id, provider, project, model, context_window, created_at, updated_at, window_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+            params![
+                "session-1m",
+                provider,
+                "repo-1m",
+                "Claude Opus 4.8",
+                "1M",
+                now,
+                now
+            ],
+        )
+        .expect("insert session");
+
+        init_schema(&conn);
+
+        let window: i64 = conn
+            .query_row(
+                "SELECT window_tokens FROM sessions WHERE id = 'session-1m'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("read window");
+        assert_eq!(window, 1_000_000);
     }
 }

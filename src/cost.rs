@@ -15,6 +15,11 @@ pub struct ModelPricing {
     pub cache_read_per_million: f64,
 }
 
+/// Fast-mode (priority speed) rate multiplier. When a turn runs at Fast speed on
+/// a fast-capable model, every token category is billed at this multiple of the
+/// model's standard rate. Opus 4.8 fast mode is exactly 2x standard.
+pub const FAST_RATE_MULTIPLIER: f64 = 2.0;
+
 /// Strips context window suffixes like `[1m]` from model IDs.
 /// e.g. "claude-opus-4-6[1m]" → "claude-opus-4-6"
 fn strip_context_suffix(model_id: &str) -> &str {
@@ -24,7 +29,6 @@ fn strip_context_suffix(model_id: &str) -> &str {
 pub fn model_pricing(model_id: &str) -> ModelPricing {
     let id = strip_context_suffix(model_id).to_lowercase();
     if id.contains("opus") {
-        // Opus 4.5/4.6 have new lower pricing; legacy Opus 4.0/4.1/3 keep old pricing
         if is_new_opus(&id) {
             ModelPricing {
                 input_per_million: 5.0,
@@ -41,7 +45,6 @@ pub fn model_pricing(model_id: &str) -> ModelPricing {
             }
         }
     } else if id.contains("haiku") {
-        // Haiku 4.5+ = $1/$5; Haiku 3.5 = $0.80/$4; Haiku 3 = $0.25/$1.25
         if id.contains("3-5") || id.contains("3.5") {
             ModelPricing {
                 input_per_million: 0.80,
@@ -57,7 +60,6 @@ pub fn model_pricing(model_id: &str) -> ModelPricing {
                 cache_read_per_million: 0.03,
             }
         } else {
-            // Haiku 4.5+ and unknown haiku
             ModelPricing {
                 input_per_million: 1.0,
                 output_per_million: 5.0,
@@ -66,7 +68,6 @@ pub fn model_pricing(model_id: &str) -> ModelPricing {
             }
         }
     } else {
-        // Sonnet and unknown models default to Sonnet pricing
         ModelPricing {
             input_per_million: 3.0,
             output_per_million: 15.0,
@@ -78,18 +79,15 @@ pub fn model_pricing(model_id: &str) -> ModelPricing {
 
 /// Opus 4.5 and 4.6 use new pricing ($5/$25). Detected by version segments after "opus".
 fn is_new_opus(id: &str) -> bool {
-    // Match: opus-4-5, opus-4-6, opus-4-5-20251101, opus-4-6-20260213
     // Don't match: opus-4, opus-4-0, opus-4-1, opus-3, opus (bare)
     let after = match id.find("opus") {
         Some(pos) => &id[pos + 4..],
         None => return false,
     };
-    // Parse version segments: take only short numeric parts (<=3 chars), skip dates (8+ digits)
     let segments: Vec<&str> = after
         .split('-')
         .filter(|s| !s.is_empty() && s.len() <= 3 && s.chars().all(|c| c.is_ascii_digit()))
         .collect();
-    // Need at least 2 version segments where second is 5+
     if segments.len() >= 2
         && let (Ok(major), Ok(minor)) = (segments[0].parse::<u32>(), segments[1].parse::<u32>())
     {
@@ -124,7 +122,6 @@ pub fn model_display_name(model_id: &str) -> String {
         return "Claude".to_string();
     }
 
-    // Determine the family name
     let family = if id.contains("opus") {
         "Opus"
     } else if id.contains("haiku") {
@@ -132,8 +129,6 @@ pub fn model_display_name(model_id: &str) -> String {
     } else if id.contains("sonnet") {
         "Sonnet"
     } else {
-        // Unknown family — clean up the raw ID into something readable
-        // e.g. "claude-unknown-model-20260101" → "claude-unknown-model"
         let cleaned = id
             .trim_end_matches(|c: char| c == '-' || c.is_ascii_digit())
             .trim_end_matches('-');
@@ -145,18 +140,12 @@ pub fn model_display_name(model_id: &str) -> String {
         return format!("Claude ({})", display);
     };
 
-    // Extract version from the ID by finding the family name and parsing the numbers after it.
-    // e.g. "claude-opus-4-6-20260213" -> after "opus" we get "-4-6-20260213"
-    //      "claude-sonnet-4-5-20250929" -> after "sonnet" we get "-4-5-20250929"
-    //      "claude-opus-4-6" -> after "opus" we get "-4-6"
-    //      "haiku" -> after "haiku" we get ""
     let family_lower = family.to_lowercase();
     let after_family = id
         .find(&family_lower)
         .map(|pos| &id[pos + family_lower.len()..])
         .unwrap_or("");
 
-    // Parse version segments: take leading dash-separated numbers, skip trailing date (8+ digits)
     let segments: Vec<&str> = after_family
         .split('-')
         .filter(|s| !s.is_empty())
@@ -174,7 +163,6 @@ pub fn model_display_name(model_id: &str) -> String {
 /// Supported: Opus 4.5+, Sonnet 4.6/4.5/4. Not supported: Haiku, legacy Opus, Sonnet 3.x.
 /// Also returns true if the model ID contains a `[1m]` suffix (explicit 1M context indicator).
 pub fn supports_1m_context(model_id: &str) -> bool {
-    // Explicit [1m] suffix is an immediate indicator
     if model_id.contains("[1m]") {
         return true;
     }
@@ -186,7 +174,6 @@ pub fn supports_1m_context(model_id: &str) -> bool {
         return is_new_opus(&id);
     }
     if id.contains("sonnet") {
-        // Old format: "claude-3-7-sonnet-..." — version number appears BEFORE "sonnet"
         let sonnet_pos = id.find("sonnet").unwrap_or(id.len());
         let before = &id[..sonnet_pos];
         let prefix_version: Option<u32> = before
@@ -197,16 +184,15 @@ pub fn supports_1m_context(model_id: &str) -> bool {
         if let Some(v) = prefix_version
             && v < 4
         {
-            return false; // Claude 3.x Sonnet — no 1M support
+            return false;
         }
-        // New format: "claude-sonnet-4-6-..." — version appears AFTER "sonnet"
         let after = &id[sonnet_pos + 6..];
         let first_seg = after
             .split('-')
             .find(|s| !s.is_empty() && s.len() <= 3 && s.chars().all(|c| c.is_ascii_digit()));
         return match first_seg {
             Some(seg) => seg.parse::<u32>().map(|v| v >= 4).unwrap_or(true),
-            None => true, // bare "sonnet" — assume modern
+            None => true,
         };
     }
     false
@@ -285,7 +271,6 @@ pub fn calculate_cost_with_context(
     cache_read_tokens: u64,
 ) -> f64 {
     let total_api_input = input_tokens + cache_creation_tokens + cache_read_tokens;
-    // GA models never get surcharge; beta models get surcharge when >200K
     if supports_1m_context(model_id) && !is_ga_1m_context(model_id) && total_api_input > 200_000 {
         let p = model_pricing(model_id);
         (input_tokens as f64 / 1_000_000.0) * p.input_per_million * 2.0
@@ -343,6 +328,115 @@ pub fn has_inflated_tokenizer(model_id: &str) -> bool {
     is_version_at_least(&id, "opus", 4, 7)
 }
 
+/// True when the model supports fast mode (priority speed) billing.
+/// Fast mode launched with Opus 4.8 — Opus 4.8+ only.
+pub fn is_fast_capable(model_id: &str) -> bool {
+    let id = strip_context_suffix(model_id).to_lowercase();
+    if !id.contains("opus") {
+        return false;
+    }
+    is_version_at_least(&id, "opus", 4, 8)
+}
+
+/// The effective rate multiplier for a turn: `FAST_RATE_MULTIPLIER` when the turn
+/// ran at fast speed on a fast-capable model, otherwise `1.0`.
+pub fn speed_multiplier(model_id: &str, fast: bool) -> f64 {
+    if fast && is_fast_capable(model_id) {
+        FAST_RATE_MULTIPLIER
+    } else {
+        1.0
+    }
+}
+
+/// Speed- and context-aware cost split into the four billable token categories.
+/// The four components always sum to `calculate_cost_with_context_and_speed` for
+/// the same inputs, so per-turn accumulation of these components reconciles with
+/// the accumulated total cost.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TurnCostBreakdown {
+    pub input_cost: f64,
+    pub output_cost: f64,
+    pub cache_write_cost: f64,
+    pub cache_read_cost: f64,
+}
+
+impl TurnCostBreakdown {
+    pub fn total(&self) -> f64 {
+        self.input_cost + self.output_cost + self.cache_write_cost + self.cache_read_cost
+    }
+}
+
+/// Per-category form of `calculate_cost_with_context_and_speed`: returns the four
+/// billable components for a turn, each already scaled by the beta 1M-context
+/// surcharge (beta models above the threshold) and the fast-mode multiplier.
+///
+/// `pure_input_tokens` is the non-cached input (input minus cache write/read);
+/// the beta threshold is evaluated on total API input (`pure_input + cache_write
+/// + cache_read`) to match `calculate_cost_with_context`.
+pub fn calculate_category_costs(
+    model_id: &str,
+    pure_input_tokens: u64,
+    output_tokens: u64,
+    cache_write_tokens: u64,
+    cache_read_tokens: u64,
+    fast: bool,
+) -> TurnCostBreakdown {
+    let pricing = model_pricing(model_id);
+    let total_api_input = pure_input_tokens + cache_write_tokens + cache_read_tokens;
+    let beta_surcharge =
+        supports_1m_context(model_id) && !is_ga_1m_context(model_id) && total_api_input > 200_000;
+    let (input_factor, output_factor, cache_factor) = if beta_surcharge {
+        (2.0, 1.5, 2.0)
+    } else {
+        (1.0, 1.0, 1.0)
+    };
+    let speed = speed_multiplier(model_id, fast);
+
+    TurnCostBreakdown {
+        input_cost: (pure_input_tokens as f64 / 1_000_000.0)
+            * pricing.input_per_million
+            * input_factor
+            * speed,
+        output_cost: (output_tokens as f64 / 1_000_000.0)
+            * pricing.output_per_million
+            * output_factor
+            * speed,
+        cache_write_cost: (cache_write_tokens as f64 / 1_000_000.0)
+            * pricing.cache_write_per_million
+            * cache_factor
+            * speed,
+        cache_read_cost: (cache_read_tokens as f64 / 1_000_000.0)
+            * pricing.cache_read_per_million
+            * cache_factor
+            * speed,
+    }
+}
+
+/// Like `calculate_cost_with_context` but applies the fast-mode surcharge when the
+/// turn ran at fast speed on a fast-capable model.
+///
+/// Fast mode bills every token category at `FAST_RATE_MULTIPLIER`x the standard
+/// rate. The 1M context surcharge (beta models only) is computed first, then the
+/// fast multiplier scales the whole turn — so a fast turn always costs exactly
+/// `FAST_RATE_MULTIPLIER`x its standard-speed equivalent for identical tokens.
+pub fn calculate_cost_with_context_and_speed(
+    model_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+    fast: bool,
+) -> f64 {
+    let base = calculate_cost_with_context(
+        model_id,
+        input_tokens,
+        output_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
+    );
+    base * speed_multiplier(model_id, fast)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,35 +444,26 @@ mod tests {
     #[test]
     fn cost_calculation_sonnet() {
         let cost = calculate_cost("claude-sonnet-4-20250514", 1_000_000, 500_000, 0, 0);
-        assert!((cost - 10.5).abs() < 0.001); // 3.0 + 7.5
+        assert!((cost - 10.5).abs() < 0.001);
     }
 
     #[test]
     fn cost_calculation_opus_new() {
-        // Opus 4.5: input $5/M, output $25/M
         let cost = calculate_cost("claude-opus-4-5-20251101", 1_000_000, 100_000, 0, 0);
-        let expected = 5.0 + 2.5; // 1M * $5 + 0.1M * $25
+        let expected = 5.0 + 2.5;
         assert!((cost - expected).abs() < 0.001);
     }
 
     #[test]
     fn cost_calculation_opus_legacy() {
-        // Opus 4.1: input $15/M, output $75/M
         let cost = calculate_cost("claude-opus-4-1-20250414", 1_000_000, 100_000, 0, 0);
-        let expected = 15.0 + 7.5; // 1M * $15 + 0.1M * $75
+        let expected = 15.0 + 7.5;
         assert!((cost - expected).abs() < 0.001);
     }
 
     #[test]
     fn cost_with_cache_tokens_new_opus() {
-        // Opus 4.6: input $5/M, output $25/M, cache write $6.25/M, cache read $0.50/M
-        let cost = calculate_cost(
-            "claude-opus-4-6-20260213",
-            3,      // input
-            9,      // output
-            12_487, // cache creation
-            22_766, // cache read
-        );
+        let cost = calculate_cost("claude-opus-4-6-20260213", 3, 9, 12_487, 22_766);
         let expected = (3.0 * 5.0 / 1_000_000.0)
             + (9.0 * 25.0 / 1_000_000.0)
             + (12_487.0 * 6.25 / 1_000_000.0)
@@ -388,7 +473,6 @@ mod tests {
 
     #[test]
     fn cost_with_cache_tokens_legacy_opus() {
-        // Opus 4.0: input $15/M, output $75/M, cache write $18.75/M, cache read $1.50/M
         let cost = calculate_cost(
             "claude-opus-4-20250414",
             1_000_000,
@@ -409,7 +493,6 @@ mod tests {
 
     #[test]
     fn pricing_opus_generation_detection() {
-        // New Opus (4.5, 4.6) → $5/$25
         let p1 = model_pricing("claude-opus-4-5-20251101");
         assert!((p1.input_per_million - 5.0).abs() < 0.001);
         assert!((p1.output_per_million - 25.0).abs() < 0.001);
@@ -420,7 +503,6 @@ mod tests {
         let p3 = model_pricing("claude-opus-4-6");
         assert!((p3.input_per_million - 5.0).abs() < 0.001);
 
-        // Legacy Opus (4.0, 4.1, 4, 3) → $15/$75
         let p4 = model_pricing("claude-opus-4-1-20250414");
         assert!((p4.input_per_million - 15.0).abs() < 0.001);
         assert!((p4.output_per_million - 75.0).abs() < 0.001);
@@ -434,21 +516,17 @@ mod tests {
 
     #[test]
     fn pricing_haiku_generations() {
-        // Haiku 4.5 → $1/$5
         let p1 = model_pricing("claude-haiku-4-5-20251001");
         assert!((p1.input_per_million - 1.0).abs() < 0.001);
 
-        // Haiku 3.5 → $0.80/$4
         let p2 = model_pricing("claude-haiku-3-5-20241022");
         assert!((p2.input_per_million - 0.80).abs() < 0.001);
         assert!((p2.output_per_million - 4.0).abs() < 0.001);
 
-        // Haiku 3 → $0.25/$1.25
         let p3 = model_pricing("claude-haiku-3-20240307");
         assert!((p3.input_per_million - 0.25).abs() < 0.001);
         assert!((p3.output_per_million - 1.25).abs() < 0.001);
 
-        // Bare haiku → default haiku 4.5 pricing
         let p4 = model_pricing("haiku");
         assert!((p4.input_per_million - 1.0).abs() < 0.001);
     }
@@ -488,35 +566,22 @@ mod tests {
 
     #[test]
     fn cost_1m_ga_no_surcharge() {
-        // Sonnet 4.6 is GA — no surcharge even with >200K total API input
-        let cost = calculate_cost_with_context(
-            "claude-sonnet-4-6",
-            50_000,  // input
-            5_000,   // output
-            100_000, // cache_creation
-            100_000, // cache_read  (total_api_input = 250K > 200K)
-        );
+        let cost =
+            calculate_cost_with_context("claude-sonnet-4-6", 50_000, 5_000, 100_000, 100_000);
         let standard = calculate_cost("claude-sonnet-4-6", 50_000, 5_000, 100_000, 100_000);
         assert!((cost - standard).abs() < 0.0001);
     }
 
     #[test]
     fn cost_1m_beta_still_has_surcharge() {
-        // Sonnet 4.5 is beta — surcharge applies when >200K
-        let cost = calculate_cost_with_context(
-            "claude-sonnet-4-5",
-            50_000,  // input
-            5_000,   // output
-            100_000, // cache_creation
-            100_000, // cache_read  (total_api_input = 250K > 200K)
-        );
+        let cost =
+            calculate_cost_with_context("claude-sonnet-4-5", 50_000, 5_000, 100_000, 100_000);
         let standard = calculate_cost("claude-sonnet-4-5", 50_000, 5_000, 100_000, 100_000);
         assert!(cost > standard);
     }
 
     #[test]
     fn cost_1m_below_threshold_uses_standard() {
-        // 100K total API input → standard rates
         let cost_std = calculate_cost("claude-sonnet-4-6", 50_000, 5_000, 25_000, 25_000);
         let cost_ctx =
             calculate_cost_with_context("claude-sonnet-4-6", 50_000, 5_000, 25_000, 25_000);
@@ -525,7 +590,6 @@ mod tests {
 
     #[test]
     fn cost_1m_haiku_no_surcharge() {
-        // Haiku doesn't support 1M context → always standard pricing
         let cost_std = calculate_cost("claude-haiku-4-5", 50_000, 5_000, 100_000, 100_000);
         let cost_ctx =
             calculate_cost_with_context("claude-haiku-4-5", 50_000, 5_000, 100_000, 100_000);
@@ -543,7 +607,6 @@ mod tests {
 
     #[test]
     fn context_suffix_stripped_for_pricing() {
-        // [1m] suffix must not affect pricing detection
         let p = model_pricing("claude-opus-4-6[1m]");
         assert!((p.input_per_million - 5.0).abs() < 0.001);
         assert!((p.output_per_million - 25.0).abs() < 0.001);
@@ -551,49 +614,39 @@ mod tests {
 
     #[test]
     fn test_is_ga_1m_context() {
-        // GA: Opus 4.6+, Sonnet 4.6+
         assert!(is_ga_1m_context("claude-opus-4-6"));
         assert!(is_ga_1m_context("claude-opus-4-6-20260213"));
         assert!(is_ga_1m_context("claude-opus-4-6[1m]"));
         assert!(is_ga_1m_context("claude-sonnet-4-6"));
         assert!(is_ga_1m_context("claude-sonnet-4-6-20260213"));
-        // Beta: Opus 4.5, Sonnet 4.5/4
         assert!(!is_ga_1m_context("claude-opus-4-5"));
         assert!(!is_ga_1m_context("claude-sonnet-4-5"));
         assert!(!is_ga_1m_context("claude-sonnet-4"));
-        // Not supported at all
         assert!(!is_ga_1m_context("claude-haiku-4-5"));
         assert!(!is_ga_1m_context("opus"));
     }
 
     #[test]
     fn test_supports_1m_context() {
-        // Explicit [1m] suffix — always yes
         assert!(supports_1m_context("claude-opus-4-6[1m]"));
         assert!(supports_1m_context("claude-sonnet-4-6[1m]"));
-        // Opus 4.5 / 4.6 — yes
         assert!(supports_1m_context("claude-opus-4-6-20260213"));
         assert!(supports_1m_context("claude-opus-4-5-20251101"));
         assert!(supports_1m_context("claude-opus-4-6"));
-        // Legacy Opus — no
         assert!(!supports_1m_context("claude-opus-4-1-20250414"));
         assert!(!supports_1m_context("claude-opus-4-20250514"));
-        // Sonnet 4.x — yes
         assert!(supports_1m_context("claude-sonnet-4-6-20260213"));
         assert!(supports_1m_context("claude-sonnet-4-5-20250929"));
         assert!(supports_1m_context("claude-sonnet-4-20250514"));
         assert!(supports_1m_context("claude-sonnet-4-6"));
-        // Sonnet 3.x (old format) — no
         assert!(!supports_1m_context("claude-3-7-sonnet-20250219"));
         assert!(!supports_1m_context("claude-3-5-sonnet-20241022"));
-        // Haiku — never
         assert!(!supports_1m_context("claude-haiku-4-5-20251001"));
         assert!(!supports_1m_context("claude-haiku-3-5-20241022"));
     }
 
     #[test]
     fn test_model_display_with_context() {
-        // GA model (Sonnet 4.6) → always shows "(1M)" regardless of turn size
         assert_eq!(
             model_display_with_context("claude-sonnet-4-6", "Claude Sonnet 4.6", 300_000),
             "Claude Sonnet 4.6 (1M)"
@@ -602,12 +655,10 @@ mod tests {
             model_display_with_context("claude-sonnet-4-6", "Claude Sonnet 4.6", 0),
             "Claude Sonnet 4.6 (1M)"
         );
-        // GA model with [1m] suffix
         assert_eq!(
             model_display_with_context("claude-opus-4-6[1m]", "Claude Opus 4.6", 0),
             "Claude Opus 4.6 (1M)"
         );
-        // Beta model (Sonnet 4.5) → only shows when turn > 200K
         assert_eq!(
             model_display_with_context("claude-sonnet-4-5", "Claude Sonnet 4.5", 300_000),
             "Claude Sonnet 4.5 (1M Context)"
@@ -616,7 +667,6 @@ mod tests {
             model_display_with_context("claude-sonnet-4-5", "Claude Sonnet 4.5", 150_000),
             "Claude Sonnet 4.5"
         );
-        // Haiku never supports 1M context
         assert_eq!(
             model_display_with_context("claude-haiku-4-5", "Claude Haiku 4.5", 500_000),
             "Claude Haiku 4.5"
@@ -628,11 +678,9 @@ mod tests {
         assert_eq!(strip_claude_prefix("Claude Opus 4.6"), "Opus 4.6");
         assert_eq!(strip_claude_prefix("Claude Sonnet 4.5"), "Sonnet 4.5");
         assert_eq!(strip_claude_prefix("Claude Haiku 4.5"), "Haiku 4.5");
-        assert_eq!(strip_claude_prefix("Claude"), "Claude"); // bare "Claude" stays
+        assert_eq!(strip_claude_prefix("Claude"), "Claude");
         assert_eq!(strip_claude_prefix("Unknown Model"), "Unknown Model");
     }
-
-    // ── Opus 4.7 explicit coverage ──
 
     #[test]
     fn opus_4_7_pricing_matches_4_6() {
@@ -658,7 +706,6 @@ mod tests {
 
     #[test]
     fn opus_4_7_is_ga_1m_context() {
-        // Opus 4.7 ≥ 4.6 threshold → GA no-surcharge
         assert!(is_ga_1m_context("claude-opus-4-7"));
         assert!(is_ga_1m_context("claude-opus-4-7-20260301"));
         assert!(is_ga_1m_context("claude-opus-4-7[1m]"));
@@ -694,14 +741,7 @@ mod tests {
 
     #[test]
     fn opus_4_7_no_1m_surcharge() {
-        // GA model: calculate_cost_with_context must equal calculate_cost at any size
-        let with = calculate_cost_with_context(
-            "claude-opus-4-7",
-            50_000,
-            5_000,
-            100_000,
-            100_000, // total API input 250K > 200K
-        );
+        let with = calculate_cost_with_context("claude-opus-4-7", 50_000, 5_000, 100_000, 100_000);
         let plain = calculate_cost("claude-opus-4-7", 50_000, 5_000, 100_000, 100_000);
         assert!((with - plain).abs() < 0.0001);
     }
@@ -737,5 +777,203 @@ mod tests {
             "Claude (totally-unknown)"
         );
         assert_eq!(model_display_name("<synthetic>"), "Claude");
+    }
+
+    #[test]
+    fn opus_4_8_pricing_matches_new_opus_rates() {
+        let p = model_pricing("claude-opus-4-8");
+        assert!((p.input_per_million - 5.0).abs() < 0.001);
+        assert!((p.output_per_million - 25.0).abs() < 0.001);
+        assert!((p.cache_write_per_million - 6.25).abs() < 0.001);
+        assert!((p.cache_read_per_million - 0.50).abs() < 0.001);
+    }
+
+    #[test]
+    fn opus_4_8_pricing_dated_and_suffix_variants() {
+        let dated = model_pricing("claude-opus-4-8-20260528");
+        assert!((dated.input_per_million - 5.0).abs() < 0.001);
+        assert!((dated.output_per_million - 25.0).abs() < 0.001);
+
+        let suffixed = model_pricing("claude-opus-4-8[1m]");
+        assert!((suffixed.input_per_million - 5.0).abs() < 0.001);
+        assert!((suffixed.output_per_million - 25.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn opus_4_8_display_name() {
+        assert_eq!(model_display_name("claude-opus-4-8"), "Claude Opus 4.8");
+        assert_eq!(
+            model_display_name("claude-opus-4-8-20260528"),
+            "Claude Opus 4.8"
+        );
+        assert_eq!(model_display_name("claude-opus-4-8[1m]"), "Claude Opus 4.8");
+    }
+
+    #[test]
+    fn opus_4_8_is_ga_1m_context() {
+        assert!(is_ga_1m_context("claude-opus-4-8"));
+        assert!(is_ga_1m_context("claude-opus-4-8-20260528"));
+        assert!(is_ga_1m_context("claude-opus-4-8[1m]"));
+    }
+
+    #[test]
+    fn opus_4_8_has_inflated_tokenizer() {
+        assert!(has_inflated_tokenizer("claude-opus-4-8"));
+        assert!(has_inflated_tokenizer("claude-opus-4-8-20260528"));
+        assert!(has_inflated_tokenizer("claude-opus-4-8[1m]"));
+    }
+
+    #[test]
+    fn opus_4_8_dated_and_suffix_price_identically() {
+        let short = calculate_cost("claude-opus-4-8", 12_345, 6_789, 4_321, 9_876);
+        let dated = calculate_cost("claude-opus-4-8-20260528", 12_345, 6_789, 4_321, 9_876);
+        let suffixed = calculate_cost("claude-opus-4-8[1m]", 12_345, 6_789, 4_321, 9_876);
+        assert!((short - dated).abs() < 0.0000001);
+        assert!((short - suffixed).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn opus_4_8_is_fast_capable() {
+        assert!(is_fast_capable("claude-opus-4-8"));
+        assert!(is_fast_capable("claude-opus-4-8-20260528"));
+        assert!(is_fast_capable("claude-opus-4-8[1m]"));
+    }
+
+    #[test]
+    fn older_models_are_not_fast_capable() {
+        assert!(!is_fast_capable("claude-opus-4-7"));
+        assert!(!is_fast_capable("claude-opus-4-6"));
+        assert!(!is_fast_capable("claude-opus-4-5"));
+        assert!(!is_fast_capable("claude-sonnet-4-6"));
+        assert!(!is_fast_capable("claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn opus_4_8_fast_is_exactly_2x_standard() {
+        let model = "claude-opus-4-8";
+        let (input, output, cache_write, cache_read) =
+            (123_456u64, 78_901u64, 45_678u64, 234_567u64);
+
+        let standard = calculate_cost_with_context_and_speed(
+            model,
+            input,
+            output,
+            cache_write,
+            cache_read,
+            false,
+        );
+        let fast = calculate_cost_with_context_and_speed(
+            model,
+            input,
+            output,
+            cache_write,
+            cache_read,
+            true,
+        );
+
+        assert!((fast - standard * FAST_RATE_MULTIPLIER).abs() < 0.0000001);
+        assert!((fast - standard * 2.0).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn opus_4_8_fast_doubles_every_token_category() {
+        let model = "claude-opus-4-8";
+        let std_in = calculate_cost_with_context_and_speed(model, 1_000_000, 0, 0, 0, false);
+        let fast_in = calculate_cost_with_context_and_speed(model, 1_000_000, 0, 0, 0, true);
+        assert!((fast_in - std_in * 2.0).abs() < 0.0000001);
+        let std_out = calculate_cost_with_context_and_speed(model, 0, 1_000_000, 0, 0, false);
+        let fast_out = calculate_cost_with_context_and_speed(model, 0, 1_000_000, 0, 0, true);
+        assert!((fast_out - std_out * 2.0).abs() < 0.0000001);
+        let std_cw = calculate_cost_with_context_and_speed(model, 0, 0, 1_000_000, 0, false);
+        let fast_cw = calculate_cost_with_context_and_speed(model, 0, 0, 1_000_000, 0, true);
+        assert!((fast_cw - std_cw * 2.0).abs() < 0.0000001);
+        let std_cr = calculate_cost_with_context_and_speed(model, 0, 0, 0, 1_000_000, false);
+        let fast_cr = calculate_cost_with_context_and_speed(model, 0, 0, 0, 1_000_000, true);
+        assert!((fast_cr - std_cr * 2.0).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn fast_flag_is_ignored_on_non_fast_capable_models() {
+        let std = calculate_cost_with_context_and_speed(
+            "claude-opus-4-7",
+            50_000,
+            5_000,
+            10_000,
+            20_000,
+            false,
+        );
+        let fast = calculate_cost_with_context_and_speed(
+            "claude-opus-4-7",
+            50_000,
+            5_000,
+            10_000,
+            20_000,
+            true,
+        );
+        assert!((std - fast).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn category_costs_sum_to_headline_total_standard_and_fast() {
+        let model = "claude-opus-4-8";
+        let (input, output, cache_write, cache_read) =
+            (123_456u64, 78_901u64, 45_678u64, 234_567u64);
+
+        for fast in [false, true] {
+            let bd = calculate_category_costs(model, input, output, cache_write, cache_read, fast);
+            let headline = calculate_cost_with_context_and_speed(
+                model,
+                input,
+                output,
+                cache_write,
+                cache_read,
+                fast,
+            );
+            assert!((bd.total() - headline).abs() < 0.0000001, "fast={fast}");
+        }
+    }
+
+    #[test]
+    fn category_costs_fast_doubles_every_component() {
+        let model = "claude-opus-4-8";
+        let std = calculate_category_costs(model, 100_000, 20_000, 8_000, 60_000, false);
+        let fast = calculate_category_costs(model, 100_000, 20_000, 8_000, 60_000, true);
+        assert!((fast.input_cost - std.input_cost * 2.0).abs() < 0.0000001);
+        assert!((fast.output_cost - std.output_cost * 2.0).abs() < 0.0000001);
+        assert!((fast.cache_write_cost - std.cache_write_cost * 2.0).abs() < 0.0000001);
+        assert!((fast.cache_read_cost - std.cache_read_cost * 2.0).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn category_costs_beta_surcharge_matches_headline() {
+        let model = "claude-sonnet-4-5";
+        let (input, output, cache_write, cache_read) =
+            (50_000u64, 5_000u64, 100_000u64, 100_000u64);
+        let bd = calculate_category_costs(model, input, output, cache_write, cache_read, false);
+        let headline = calculate_cost_with_context(model, input, output, cache_write, cache_read);
+        assert!((bd.total() - headline).abs() < 0.0000001);
+    }
+
+    #[test]
+    fn standard_matrix_prices_every_model_correctly() {
+        let cases = [
+            ("claude-opus-4-5-20251101", 5.0, 25.0),
+            ("claude-opus-4-6-20260213", 5.0, 25.0),
+            ("claude-opus-4-7-20260301", 5.0, 25.0),
+            ("claude-opus-4-8-20260528", 5.0, 25.0),
+            ("claude-sonnet-4-5-20250929", 3.0, 15.0),
+            ("claude-haiku-4-5-20251001", 1.0, 5.0),
+        ];
+        for (model, input_rate, output_rate) in cases {
+            let p = model_pricing(model);
+            assert!(
+                (p.input_per_million - input_rate).abs() < 0.001,
+                "{model} input rate"
+            );
+            assert!(
+                (p.output_per_million - output_rate).abs() < 0.001,
+                "{model} output rate"
+            );
+        }
     }
 }

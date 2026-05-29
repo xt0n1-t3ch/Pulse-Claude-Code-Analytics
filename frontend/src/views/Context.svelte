@@ -1,23 +1,79 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fmtTokens, fmtPct } from "../lib/utils";
-  import { getContextBreakdown, type ContextBreakdown, type ContextFileEntry } from "../lib/api";
+  import {
+    getContextBreakdown,
+    getSessionsContextUsage,
+    type ContextBreakdown,
+    type ContextFileEntry,
+    type SessionContextUsage,
+  } from "../lib/api";
   import { addToast } from "../lib/stores";
+  import { providerProfile } from "../lib/provider";
+  import { sessions } from "../lib/stores";
 
   let ctx = $state<ContextBreakdown | null>(null);
+  let sessionUsage = $state<SessionContextUsage[]>([]);
+  let selectedSessionId = $state<string | null>(null);
+  let refreshing = $state(false);
+  let loaded = $state(false);
   let showMcp = $state(true);
   let showMemory = $state(true);
   let showSkills = $state(true);
 
-  async function refresh(): Promise<void> {
-    ctx = await getContextBreakdown();
+  let breakdownRequest = 0;
+
+  $effect(() => {
+    const list = $sessions;
+    if (list.length === 0) {
+      selectedSessionId = null;
+      return;
+    }
+    const stillPresent = list.some((s) => s.session_id === selectedSessionId);
+    if (!stillPresent) {
+      const active = list.find((s) => !s.is_idle) ?? list[0];
+      selectedSessionId = active.session_id;
+    }
+  });
+
+  async function loadBreakdown(): Promise<void> {
+    const request = ++breakdownRequest;
+    refreshing = true;
+    try {
+      const next = await getContextBreakdown(selectedSessionId ?? undefined);
+      if (request === breakdownRequest) {
+        ctx = next;
+        loaded = true;
+      }
+    } finally {
+      if (request === breakdownRequest) refreshing = false;
+    }
   }
 
+  async function loadUsage(): Promise<void> {
+    sessionUsage = await getSessionsContextUsage();
+  }
+
+  $effect(() => {
+    void selectedSessionId;
+    loadBreakdown();
+  });
+
   onMount(() => {
-    refresh();
-    const iv = setInterval(refresh, 10000);
+    loadUsage();
+    const iv = setInterval(() => {
+      loadBreakdown();
+      loadUsage();
+    }, 10000);
     return () => clearInterval(iv);
   });
+
+  function utilizationColor(pct: number): string {
+    if (pct >= 95) return "var(--danger)";
+    if (pct >= 80) return "var(--warning)";
+    if (pct >= 50) return "var(--info)";
+    return "var(--success)";
+  }
 
   type CtxSeverity = "critical" | "warning" | "info" | "positive";
 
@@ -49,6 +105,10 @@
   let advice = $derived.by<CtxAdvice[]>(() => {
     if (!ctx) return [];
     const out: CtxAdvice[] = [];
+    const profile = $providerProfile;
+    const product = profile.productName;
+    const memoryFile = profile.instructionFile;
+    const home = profile.homeDir;
     const usedPctValue = (ctx.used_tokens / ctx.context_window) * 100;
     const freePctValue = (ctx.free_space / ctx.context_window) * 100;
 
@@ -59,11 +119,11 @@
         title: `Context is ${usedPctValue.toFixed(0)}% full`,
         description:
           `You're ${fmtTokens(ctx.used_tokens)} of ${fmtTokens(ctx.context_window)} tokens in — ` +
-          `Claude will auto-compact soon, which loses detail. Clearing or compacting now keeps you in control.`,
+          `${product} will auto-compact soon, which loses detail. Clearing or compacting now keeps you in control.`,
         fix_prompt:
-          `My Claude Code session is ${usedPctValue.toFixed(0)}% full ` +
+          `My ${product} session is ${usedPctValue.toFixed(0)}% full ` +
           `(${ctx.used_tokens} of ${ctx.context_window} tokens). Summarize what we've accomplished, what's left, ` +
-          `and any key decisions or file paths I'll need — then I'll run /clear and paste your summary back in to keep context.`,
+          `and any key decisions or file paths I'll need — then I'll clear the session and paste your summary back in to keep context.`,
       });
     } else if (usedPctValue >= 70) {
       out.push({
@@ -71,10 +131,10 @@
         severity: "warning",
         title: `Context is ${usedPctValue.toFixed(0)}% full`,
         description:
-          "Still workable but starting to shrink. If you're about to tackle something big, a /compact now gives you more headroom.",
+          "Still workable but starting to shrink. If you're about to tackle something big, compacting now gives you more headroom.",
         fix_prompt:
-          `My Claude Code context is ${usedPctValue.toFixed(0)}% used and I want to keep working without losing detail. ` +
-          "Give me a concise summary of the current state of this task (decisions, open threads, relevant files) so I can /compact safely.",
+          `My ${product} context is ${usedPctValue.toFixed(0)}% used and I want to keep working without losing detail. ` +
+          "Give me a concise summary of the current state of this task (decisions, open threads, relevant files) so I can compact safely.",
       });
     }
 
@@ -85,7 +145,7 @@
         severity: "warning",
         title: `Memory files use ${fmtTokens(ctx.memory_total)} tokens`,
         description:
-          `CLAUDE.md + rules get re-read every turn. Heaviest: ${describeList(heavy)}. ` +
+          `${memoryFile} + rules get re-read every turn. Heaviest: ${describeList(heavy)}. ` +
           "Trimming them pays back on every single message.",
         fix_prompt:
           `My memory files (${ctx.memory_files.map((f) => f.name).join(", ")}) currently total ` +
@@ -106,7 +166,7 @@
         fix_prompt:
           `I have ${ctx.skills.length} skills loaded consuming ${ctx.skills_total} tokens total. ` +
           `The heaviest are: ${describeList(heavy)}. Help me audit which of these I actually need for my current work ` +
-          "and which I can disable — check ~/.claude/skills/<name>/SKILL.md descriptions to decide.",
+          `and which I can disable — check ${home}/skills/<name>/SKILL.md descriptions to decide.`,
       });
     } else if (ctx.skills_total > 15_000) {
       out.push({
@@ -132,7 +192,7 @@
           "Unused servers are silent token drag.",
         fix_prompt:
           `My MCP servers (${ctx.mcp_tools.map((t) => t.name).join(", ")}) consume ${ctx.mcp_total} tokens. ` +
-          "Read ~/.claude/settings.json and tell me which servers I can disable for typical coding work — " +
+          `Read ${home}/settings.json (or the equivalent MCP config) and tell me which servers I can disable for typical coding work — ` +
           "keep essentials (like context7 for docs) and flag the ones that are rarely useful.",
       });
     }
@@ -143,7 +203,7 @@
         severity: "info",
         title: `System prompt + tools: ${fmtTokens(ctx.system_prompt + ctx.system_tools)} tokens`,
         description:
-          "This is Claude Code's baseline cost — you can't trim it directly, but it's the floor under every session. " +
+          `This is ${product}'s baseline cost — you can't trim it directly, but it's the floor under every session. ` +
           "Worth knowing when budgeting context.",
         fix_prompt: "",
       });
@@ -170,7 +230,7 @@
     }
     try {
       await navigator.clipboard.writeText(item.fix_prompt);
-      addToast("Fix prompt copied — paste into Claude Code.", "success", 3000);
+      addToast(`Fix prompt copied — paste into ${$providerProfile.productName}.`, "success", 3000);
     } catch (err) {
       addToast(`Copy failed: ${String(err)}`, "danger", 3500);
     }
@@ -190,7 +250,7 @@
     { label: "Messages", tokens: ctx.messages, pct: (ctx.messages / ctx.context_window) * 100, icon: "filled", color: "#7cb9e8" },
     { label: "Free space", tokens: ctx.free_space, pct: freePct, icon: "hollow", color: "var(--text-muted)" },
     { label: "Autocompact buffer", tokens: ctx.autocompact_buffer, pct: autocompactPct, icon: "cross", color: "var(--text-muted)" },
-  ] : []);
+  ].filter((c) => c.tokens > 0 || c.icon !== "filled") : []);
 
   let barSegs = $derived<{ pct: number; color: string }[]>(ctx ? [
     { pct: (ctx.system_prompt / ctx.context_window) * 100, color: "var(--info)" },
@@ -205,11 +265,42 @@
 
 <div class="ctx-page">
   {#if ctx}
-    <!-- Main context card -->
+    <div class="view-header">
+      <h2 class="view-title">Context Window</h2>
+      <div class="header-meta">
+        {#if refreshing}<span class="refreshing-dot" aria-label="Refreshing"></span>{/if}
+        <span class="model-chip">{ctx.model}</span>
+      </div>
+    </div>
+
+    {#if $sessions.length > 0}
+      <div class="session-strip" role="tablist">
+        {#each $sessions as s (s.session_id)}
+          <button
+            class="session-pill"
+            class:active={s.session_id === selectedSessionId}
+            class:idle={s.is_idle}
+            role="tab"
+            aria-selected={s.session_id === selectedSessionId}
+            onclick={() => (selectedSessionId = s.session_id)}
+          >
+            <span class="pill-project">{s.project}</span>
+            <span class="pill-model">{s.model}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     <div class="hero-card">
       <div class="hero-top">
-        <div class="hero-label">Context Usage</div>
-        <div class="hero-model">{ctx.model}</div>
+        <div class="hero-numbers">
+          <span class="hero-used">{fmtTokens(ctx.used_tokens)}</span>
+          <span class="hero-sep">/ {fmtTokens(ctx.context_window)}</span>
+          <span class="hero-unit">tokens used</span>
+        </div>
+        <div class="hero-pct-badge" class:warn={usedPct >= 70} class:crit={usedPct >= 85}>
+          {fmtPct(usedPct)}
+        </div>
       </div>
 
       <div class="progress-track">
@@ -223,24 +314,19 @@
         <div class="progress-autocompact" style="width:{autocompactPct}%"></div>
       </div>
 
-      <div class="hero-stats">
-        <span class="hero-used">{fmtTokens(ctx.used_tokens)}</span>
-        <span class="hero-sep">/</span>
-        <span class="hero-total">{fmtTokens(ctx.context_window)} tokens</span>
-        <span class="hero-pct">({fmtPct(usedPct)})</span>
+      <div class="hero-sub">
+        <span class="hero-free">{fmtTokens(ctx.free_space)} free</span>
+        <span class="hero-sep-sm">·</span>
+        <span class="hero-buffer">{fmtTokens(ctx.autocompact_buffer)} autocompact buffer</span>
       </div>
-
-      <div class="divider"></div>
-
-      <div class="section-hint">Estimated usage by category</div>
 
       <div class="cat-grid">
         {#each categories as cat}
           <div class="cat-row" class:dim={cat.icon !== "filled"}>
             <span class="cat-icon" class:hollow={cat.icon === "hollow"} class:cross={cat.icon === "cross"} style={cat.icon === "filled" ? `background:${cat.color}` : ""}></span>
-            <span class="cat-label">{cat.label}:</span>
-            <span class="cat-val"><strong>{fmtTokens(cat.tokens)}</strong> tokens</span>
-            <span class="cat-pct">({fmtPct(cat.pct)})</span>
+            <span class="cat-label">{cat.label}</span>
+            <span class="cat-val">{fmtTokens(cat.tokens)}</span>
+            <span class="cat-pct">{fmtPct(cat.pct)}</span>
           </div>
         {/each}
       </div>
@@ -249,14 +335,13 @@
     {#if advice.length > 0}
       <div class="advice-card">
         <div class="advice-header">
-          <div>
+          <div class="advice-title-row">
             <h3 class="advice-title">Recommendations</h3>
-            <p class="advice-sub">
-              Concrete improvements derived from your real context breakdown — each with a
-              ready-to-paste prompt for Claude Code.
-            </p>
+            <span class="advice-count">{advice.length}</span>
           </div>
-          <span class="advice-count">{advice.length}</span>
+          <p class="advice-sub">
+            Derived from your real context breakdown — each ships with a ready-to-paste prompt for {$providerProfile.productName}.
+          </p>
         </div>
         <ul class="advice-list">
           {#each advice as item}
@@ -274,7 +359,7 @@
               {#if item.fix_prompt}
                 <button class="advice-btn" onclick={() => handleFix(item)}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                  Fix with Claude Code
+                  Fix with {$providerProfile.productName}
                 </button>
               {/if}
             </li>
@@ -283,7 +368,43 @@
       </div>
     {/if}
 
-    <!-- Sub-sections -->
+    {#if sessionUsage.length > 0}
+      <div class="usage-card">
+        <div class="advice-header">
+          <div class="advice-title-row">
+            <h3 class="advice-title">Per-session utilization</h3>
+            <span class="advice-count">{sessionUsage.length}</span>
+          </div>
+          <p class="advice-sub">
+            Context fill across recent sessions — each with a tailored recommendation.
+          </p>
+        </div>
+        <ul class="usage-list">
+          {#each sessionUsage as row (row.session_id)}
+            <li class="usage-row">
+              <div class="usage-head">
+                <span class="usage-project">{row.project}</span>
+                <span class="usage-model">{row.model_display}</span>
+                <span class="usage-pct" style="color: {utilizationColor(row.utilization_pct)}">
+                  {fmtPct(row.utilization_pct)}
+                </span>
+              </div>
+              <div class="usage-track">
+                <div
+                  class="usage-fill"
+                  style="width: {Math.min(row.utilization_pct, 100)}%; background: {utilizationColor(row.utilization_pct)}"
+                ></div>
+              </div>
+              <div class="usage-meta">
+                <span>{fmtTokens(row.used_tokens)} / {fmtTokens(row.window_tokens)}</span>
+                <span class="usage-rec">{row.recommendation}</span>
+              </div>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
     <div class="sub-grid">
       {#if ctx.mcp_tools.length > 0}
         <div class="sub-card">
@@ -348,10 +469,14 @@
         </div>
       {/if}
     </div>
-  {:else}
+  {:else if !loaded}
     <div class="hero-card loading">
       <div class="spinner"></div>
       <span>Loading context data...</span>
+    </div>
+  {:else}
+    <div class="hero-card loading">
+      <span>No active sessions to inspect.</span>
     </div>
   {/if}
 </div>
@@ -359,18 +484,161 @@
 <style>
   .ctx-page { display: flex; flex-direction: column; gap: 14px; }
 
+  .view-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .header-meta { display: flex; align-items: center; gap: 10px; }
+  .refreshing-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: ctx-refresh-pulse 1s ease-in-out infinite;
+  }
+  @keyframes ctx-refresh-pulse {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.85; }
+  }
+  .model-chip {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 99px;
+    letter-spacing: 0.01em;
+  }
+
+  /* Session pill strip */
+  .session-strip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .session-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 8px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.15s var(--ease);
+    text-align: left;
+    font: inherit;
+  }
+  .session-pill:hover { border-color: var(--border-hover); }
+  .session-pill.active { border-color: var(--accent); background: var(--accent-dim); }
+  .session-pill.idle { opacity: 0.6; }
+  .pill-project { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+  .pill-model {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Per-session utilization */
+  .usage-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+  }
+  .usage-list { list-style: none; display: flex; flex-direction: column; gap: 12px; }
+  .usage-row {
+    padding: 12px 14px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-md);
+  }
+  .usage-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+  .usage-project { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+  .usage-model {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .usage-pct {
+    margin-left: auto;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .usage-track {
+    height: 6px;
+    background: var(--bg-primary);
+    border-radius: 99px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .usage-fill { height: 100%; border-radius: 99px; transition: width 0.4s var(--ease); }
+  .usage-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .usage-rec { color: var(--text-secondary); line-height: 1.4; }
+
   /* Hero card */
   .hero-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: 24px;
+    padding: 22px 24px;
   }
   .hero-card.loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 60px; color: var(--text-muted); font-size: 13px; }
 
-  .hero-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
-  .hero-label { font-size: 18px; font-weight: 700; }
-  .hero-model { font-size: 12px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; background: var(--bg-elevated); padding: 3px 10px; border-radius: 99px; }
+  .hero-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 14px;
+  }
+  .hero-numbers {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-used {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    color: var(--text-primary);
+  }
+  .hero-sep { color: var(--text-muted); font-size: 16px; font-weight: 500; }
+  .hero-unit { color: var(--text-muted); font-size: 12px; margin-left: 2px; }
+  .hero-pct-badge {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: var(--success);
+    background: var(--success-dim);
+    padding: 6px 12px;
+    border-radius: 99px;
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-pct-badge.warn { color: var(--warning); background: var(--warning-dim); }
+  .hero-pct-badge.crit { color: var(--danger); background: var(--danger-dim); }
+
+  .hero-sub {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 18px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .hero-sep-sm { color: var(--border-strong); }
+  .hero-free { color: var(--text-secondary); }
 
   /* Progress bar */
   .progress-track {
@@ -399,35 +667,46 @@
     border-left: 1px solid rgba(255,255,255,0.08);
   }
 
-  .hero-stats { display: flex; align-items: baseline; gap: 4px; font-size: 14px; font-variant-numeric: tabular-nums; margin-bottom: 20px; }
-  .hero-used { font-weight: 700; font-size: 16px; }
-  .hero-sep { color: var(--text-muted); }
-  .hero-total { color: var(--text-muted); }
-  .hero-pct { color: var(--text-muted); font-size: 13px; margin-left: 4px; }
-
-  .divider { height: 1px; background: var(--border); margin-bottom: 16px; }
-
-  .section-hint { font-size: 11px; color: var(--text-muted); font-style: italic; margin-bottom: 10px; letter-spacing: 0.02em; }
-
   /* Category list */
-  .cat-grid { display: flex; flex-direction: column; gap: 1px; }
-  .cat-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); padding: 5px 8px; border-radius: var(--radius-sm); transition: background 0.1s ease; }
-  .cat-row:hover { background: rgba(255,255,255,0.02); }
+  .cat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .cat-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    transition: background 0.12s ease;
+  }
+  .cat-row:hover { background: var(--bg-elevated); }
   .cat-row.dim { color: var(--text-muted); }
-  .cat-row strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
-  .cat-icon { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .cat-icon { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .cat-icon.hollow { background: none !important; border: 1.5px solid var(--text-muted); }
-  .cat-icon.cross { background: none !important; position: relative; }
+  .cat-icon.cross { background: none !important; position: relative; width: 10px; height: 10px; }
   .cat-icon.cross::before, .cat-icon.cross::after {
     content: ""; position: absolute; background: var(--text-muted); border-radius: 1px;
   }
   .cat-icon.cross::before { width: 10px; height: 1.5px; top: 4px; left: 0; transform: rotate(45deg); }
-  .cat-icon.cross::after { width: 10px; height: 1.5px; top: 4px; left: 0; transform: rotate(-45deg); }
+  .cat-icon.cross::after  { width: 10px; height: 1.5px; top: 4px; left: 0; transform: rotate(-45deg); }
 
-  .cat-label { min-width: 150px; font-weight: 500; }
-  .cat-val { font-size: 13px; }
-  .cat-pct { color: var(--text-muted); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  .cat-label { font-weight: 500; }
+  .cat-val {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+  .cat-row.dim .cat-val { color: var(--text-secondary); font-weight: 500; }
+  .cat-pct { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; min-width: 36px; text-align: right; }
 
   /* Sub-cards */
   .sub-grid { display: flex; flex-direction: column; gap: 8px; }
@@ -473,18 +752,16 @@
   }
   .advice-header {
     display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
+    flex-direction: column;
+    gap: 6px;
     margin-bottom: 14px;
   }
+  .advice-title-row { display: flex; align-items: center; gap: 10px; }
   .advice-title {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--accent);
-    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
   }
   .advice-sub {
     font-size: 12px;
@@ -493,13 +770,19 @@
     max-width: 640px;
   }
   .advice-count {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    color: var(--accent);
-    background: var(--accent-dim);
-    padding: 3px 10px;
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
     border-radius: 99px;
-    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-variant-numeric: tabular-nums;
   }
   .advice-list {
     list-style: none;

@@ -14,8 +14,6 @@ use walkdir::WalkDir;
 use crate::config;
 use crate::cost;
 
-// ── Public Types ──────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {
@@ -26,6 +24,46 @@ pub enum ActivityKind {
     EditingFile,
     RunningCommand,
     WaitingInput,
+}
+
+/// Per-turn API speed tier reported in each assistant message's `usage.speed`.
+/// Fast mode (Opus 4.8+) bills at `cost::FAST_RATE_MULTIPLIER`x standard rates.
+/// Defaults to Standard when absent. Orthogonal to `service_tier` (priority),
+/// which affects routing/display but not price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Speed {
+    #[default]
+    Standard,
+    Fast,
+}
+
+impl Speed {
+    /// Case-insensitive parse from the JSONL `usage.speed` label. Any value other
+    /// than "fast" (including absent/unknown) resolves to Standard.
+    pub fn from_label(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fast" => Self::Fast,
+            _ => Self::Standard,
+        }
+    }
+
+    /// Build a `Speed` from a fast-mode boolean so the wire label has a single
+    /// source of truth (`as_str`) rather than inline `if fast { "fast" } …`.
+    pub fn from_fast(fast: bool) -> Self {
+        if fast { Self::Fast } else { Self::Standard }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Fast => "fast",
+        }
+    }
+
+    pub fn is_fast(&self) -> bool {
+        matches!(self, Self::Fast)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -228,7 +266,26 @@ pub struct ClaudeSessionSnapshot {
     #[serde(default)]
     pub reasoning_effort_explicit: bool,
     pub has_thinking_blocks: bool,
+    /// Speed of the most recent assistant turn (for display). Cost accumulation
+    /// is speed-correct per turn even when speed varies mid-session.
+    #[serde(default)]
+    pub speed: Speed,
+    /// Service tier of the most recent assistant turn ("priority"/"standard").
+    /// Tracked for display only — orthogonal to speed and does not change price.
+    #[serde(default)]
+    pub service_tier: Option<String>,
     pub total_cost: f64,
+    /// Speed-aware per-turn accumulation of each billable category. Mirrors how
+    /// `total_cost` is accumulated, so `input_cost + output_cost +
+    /// cache_write_cost + cache_read_cost == total_cost` to f64 tolerance.
+    #[serde(default)]
+    pub input_cost: f64,
+    #[serde(default)]
+    pub output_cost: f64,
+    #[serde(default)]
+    pub cache_write_cost: f64,
+    #[serde(default)]
+    pub cache_read_cost: f64,
     pub total_api_duration_ms: u64,
     pub limits: RateLimits,
     pub activity: Option<ActivitySnapshot>,
@@ -254,8 +311,6 @@ impl ClaudeSessionSnapshot {
         self.has_thinking_blocks && matches!(self.reasoning_effort, ReasoningEffort::Max)
     }
 }
-
-// ── Git Branch Cache ──────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
 pub struct GitBranchCache {
@@ -316,7 +371,6 @@ fn fetch_git_branch(project_path: &Path) -> Option<String> {
 
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if branch.is_empty() || branch == "HEAD" {
-        // Detached HEAD — try short SHA
         let sha_output = crate::util::silent_command("git")
             .args(["rev-parse", "--short", "HEAD"])
             .current_dir(project_path)
@@ -338,8 +392,6 @@ fn fetch_git_branch(project_path: &Path) -> Option<String> {
 
     Some(branch)
 }
-
-// ── Session Parse Cache ───────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
 pub struct SessionParseCache {
@@ -375,8 +427,6 @@ impl CachedSessionEntry {
     }
 }
 
-// ── Session Accumulator ───────────────────────────────────────────────────
-
 #[derive(Debug, Default)]
 struct SessionAccumulator {
     #[allow(dead_code)]
@@ -391,6 +441,10 @@ struct SessionAccumulator {
     /// Maximum per-turn API input (input + cache_creation + cache_read) seen so far.
     max_turn_api_input: u64,
     total_cost: f64,
+    input_cost: f64,
+    output_cost: f64,
+    cache_write_cost: f64,
+    cache_read_cost: f64,
     session_total_tokens: Option<u64>,
     previous_session_total_tokens: Option<u64>,
     last_turn_tokens: Option<u64>,
@@ -400,6 +454,10 @@ struct SessionAccumulator {
     reasoning_effort: ReasoningEffort,
     reasoning_effort_explicitly_set: bool,
     has_thinking_blocks: bool,
+    /// Speed of the most recent assistant turn (for display).
+    speed: Speed,
+    /// Service tier of the most recent assistant turn (for display).
+    service_tier: Option<String>,
     /// Most recent full file path from Read/Write/Edit tool calls.
     /// Used to determine active workspace in multi-workspace VS Code setups.
     last_file_target: Option<PathBuf>,
@@ -413,8 +471,6 @@ impl SessionAccumulator {
         }
     }
 }
-
-// ── Activity Tracker ──────────────────────────────────────────────────────
 
 const IDLE_DEBOUNCE_SECS: i64 = 45;
 
@@ -558,8 +614,6 @@ fn max_datetime(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> Option<Da
     }
 }
 
-// ── Statusline Data Reader ────────────────────────────────────────────────
-
 #[derive(Debug, Deserialize)]
 struct StatusLineData {
     session_id: String,
@@ -608,7 +662,6 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
     let file_info = fs::metadata(&data_path).ok()?;
     let modified = file_info.modified().ok()?;
 
-    // If file hasn't been modified in 60 seconds, session is likely closed
     let age = SystemTime::now()
         .duration_since(modified)
         .unwrap_or_default();
@@ -619,7 +672,6 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
     let data = fs::read_to_string(&data_path).ok()?;
     let status: StatusLineData = serde_json::from_str(&data).ok()?;
 
-    // Validate session_id
     if status.session_id.is_empty()
         || status.session_id.len() < 10
         || !status.session_id.contains('-')
@@ -638,7 +690,6 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
     let sanitized_model_id = non_synthetic_model(&status.model.id);
     let sanitized_display_name = non_synthetic_display_name(&status.model.display_name);
 
-    // Validate model
     if sanitized_model_id.is_none() && sanitized_display_name.is_none() {
         return None;
     }
@@ -652,7 +703,6 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
     let total_tokens =
         status.context_window.total_input_tokens + status.context_window.total_output_tokens;
 
-    // Calculate session start from duration
     let started_at = if status.cost.total_duration_ms > 0 {
         Some(Utc::now() - chrono::Duration::milliseconds(status.cost.total_duration_ms))
     } else {
@@ -675,13 +725,19 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
         session_delta_tokens: None,
         input_tokens: status.context_window.total_input_tokens,
         output_tokens: status.context_window.total_output_tokens,
-        cache_creation_tokens: 0, // statusline doesn't expose cache breakdown
+        cache_creation_tokens: 0,
         cache_read_tokens: 0,
-        max_turn_api_input: 0, // statusline doesn't expose per-turn data
+        max_turn_api_input: 0,
         reasoning_effort: read_claude_effort_level(),
         reasoning_effort_explicit: false,
         has_thinking_blocks: false,
+        speed: Speed::default(),
+        service_tier: None,
         total_cost: status.cost.total_cost_usd,
+        input_cost: 0.0,
+        output_cost: 0.0,
+        cache_write_cost: 0.0,
+        cache_read_cost: 0.0,
         total_api_duration_ms: status.cost.total_api_duration_ms.max(0) as u64,
         limits: RateLimits::default(),
         activity: None,
@@ -696,8 +752,22 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
     })
 }
 
+/// Apportion an authoritative session total across the JSONL-derived per-category cost
+/// proportions. Returns the multiplier to apply to each JSONL category so the four
+/// categories sum to `authoritative_total`; `0.0` when there is no JSONL cost basis.
+fn category_scale(authoritative_total: f64, jsonl_total: f64) -> f64 {
+    if jsonl_total.abs() <= f64::EPSILON {
+        0.0
+    } else {
+        authoritative_total / jsonl_total
+    }
+}
+
 /// Merge a statusline-sourced session into JSONL-parsed sessions.
-/// Statusline wins for cost/model/totals; JSONL wins for granular token data + activity.
+/// The statusline `total_cost_usd` is Claude Code's own authoritative billed total (it
+/// already reflects fast mode, priority tier, and anything the CLI knows), so it wins the
+/// headline total + model. JSONL supplies the speed-aware per-category cost proportions —
+/// scaled to reconcile with that authoritative total — plus granular tokens + activity.
 pub fn merge_statusline_into_sessions(
     sessions: &mut Vec<ClaudeSessionSnapshot>,
     statusline: ClaudeSessionSnapshot,
@@ -712,6 +782,7 @@ pub fn merge_statusline_into_sessions(
             .model_display
             .clone()
             .or_else(|| jsonl.model_display.clone());
+        let scale = category_scale(statusline.total_cost, jsonl.total_cost);
         let merged = ClaudeSessionSnapshot {
             last_turn_tokens: statusline.last_turn_tokens.or(jsonl.last_turn_tokens),
             session_delta_tokens: statusline
@@ -722,10 +793,15 @@ pub fn merge_statusline_into_sessions(
             last_token_event_at: statusline.last_token_event_at.or(jsonl.last_token_event_at),
             model: merged_model,
             model_display: merged_model_display,
-            // JSONL wins — statusline doesn't expose these fields
             reasoning_effort: jsonl.reasoning_effort,
             reasoning_effort_explicit: jsonl.reasoning_effort_explicit,
             has_thinking_blocks: jsonl.has_thinking_blocks,
+            speed: jsonl.speed,
+            service_tier: jsonl.service_tier.clone(),
+            input_cost: jsonl.input_cost * scale,
+            output_cost: jsonl.output_cost * scale,
+            cache_write_cost: jsonl.cache_write_cost * scale,
+            cache_read_cost: jsonl.cache_read_cost * scale,
             ..statusline
         };
         sessions[idx] = merged;
@@ -733,8 +809,6 @@ pub fn merge_statusline_into_sessions(
         sessions.insert(0, statusline);
     }
 }
-
-// ── JSONL Session Parsing ─────────────────────────────────────────────────
 
 /// Claude Code JSONL message format
 #[derive(Debug, Deserialize)]
@@ -774,6 +848,10 @@ struct JsonlUsage {
     cache_creation_input_tokens: u64,
     #[serde(default)]
     cache_read_input_tokens: u64,
+    #[serde(default)]
+    speed: Option<String>,
+    #[serde(default)]
+    service_tier: Option<String>,
 }
 
 pub fn collect_active_sessions(
@@ -845,7 +923,6 @@ pub fn collect_active_sessions_multi(
                 Err(_) => continue,
             };
 
-            // Extract encoded directory name for session ID
             let encoded_dir = path
                 .parent()
                 .and_then(|p| p.file_name())
@@ -862,26 +939,20 @@ pub fn collect_active_sessions_multi(
                 default_effort,
                 ide_workspaces,
             )? {
-                // Mark subagent sessions with parent info
                 if is_subagent_file {
                     snapshot.is_subagent = true;
-                    // Parent session ID = directory name above "subagents/"
-                    // Path: .../projects/{slug}/{session-uuid}/subagents/agent-{id}.jsonl
                     snapshot.parent_session_id = path
-                        .parent() // subagents/
-                        .and_then(|p| p.parent()) // {session-uuid}/
+                        .parent()
+                        .and_then(|p| p.parent())
                         .and_then(|p| p.file_name())
                         .map(|n| n.to_string_lossy().to_string())
                         .filter(|id| is_valid_session_id(id));
-                    // Read agent type from .meta.json sibling
                     let meta_path = path.with_extension("meta.json");
                     if let Ok(meta_data) = fs::read_to_string(&meta_path)
                         && let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_data)
                         && let Some(agent_type) =
                             meta_json.get("agentType").and_then(|v| v.as_str())
                     {
-                        // Store agent type in a temporary field via project_name
-                        // We'll use it during merge; project_name will be overridden by parent
                         snapshot.project_name = format!("subagent:{}", agent_type);
                     }
                 }
@@ -900,7 +971,6 @@ pub fn collect_active_sessions_multi(
         .retain(|path, _| seen_paths.contains(path));
     sessions = dedupe_sessions_by_id(sessions);
 
-    // Post-process: merge subagent data into parent sessions
     merge_subagents_into_parents(&mut sessions);
 
     sessions.sort_by_key(|session| Reverse(session_rank_key(session)));
@@ -926,17 +996,14 @@ fn parse_session_file_cached(
         .entry(path_buf.clone())
         .or_insert_with(|| CachedSessionEntry::new(modified, default_effort));
 
-    // Reset if file was truncated or modified time changed significantly
     if file_len < entry.file_len || modified != entry.modified {
         entry.reset(modified, default_effort);
     }
 
-    // No new data
     if file_len == entry.cursor && entry.snapshot.is_some() {
         return Ok(entry.snapshot.clone());
     }
 
-    // Read new lines from cursor
     let mut file =
         std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
 
@@ -958,7 +1025,7 @@ fn parse_session_file_cached(
             Ok(l) => l,
             Err(_) => break,
         };
-        new_cursor += line.len() as u64 + 1; // +1 for newline
+        new_cursor += line.len() as u64 + 1;
 
         if line.trim().is_empty() {
             continue;
@@ -975,7 +1042,6 @@ fn parse_session_file_cached(
     entry.cursor = new_cursor;
     entry.file_len = file_len;
 
-    // Build snapshot from accumulator — extract values before mutable borrow
     let model_id = match entry.accumulator.model.as_deref() {
         Some(id) if !id.is_empty() => id.to_string(),
         _ => {
@@ -990,8 +1056,6 @@ fn parse_session_file_cached(
         .clone()
         .unwrap_or_else(|| decode_project_path(encoded_dir));
 
-    // Smart project name: if cwd is a drive root (multi-workspace VS Code),
-    // use IDE workspace folders + recent file activity for accurate detection.
     let effective_project_root = if config::is_drive_root(&cwd) {
         entry
             .accumulator
@@ -1035,11 +1099,16 @@ fn parse_session_file_cached(
     let cache_read_tokens = entry.accumulator.total_cache_read_tokens;
     let max_turn_api_input = entry.accumulator.max_turn_api_input;
     let total_cost = entry.accumulator.total_cost;
+    let input_cost = entry.accumulator.input_cost;
+    let output_cost = entry.accumulator.output_cost;
+    let cache_write_cost = entry.accumulator.cache_write_cost;
+    let cache_read_cost = entry.accumulator.cache_read_cost;
+    let speed = entry.accumulator.speed;
+    let service_tier = entry.accumulator.service_tier.clone();
     let limits = entry.accumulator.limits.clone();
     let started_at = entry.accumulator.started_at;
     let last_token_event_at = entry.accumulator.last_token_event_at;
 
-    // Apply idle debounce (mutable borrow)
     entry
         .accumulator
         .activity_tracker
@@ -1063,7 +1132,13 @@ fn parse_session_file_cached(
         reasoning_effort: infer_effort(&entry.accumulator),
         reasoning_effort_explicit: entry.accumulator.reasoning_effort_explicitly_set,
         has_thinking_blocks: entry.accumulator.has_thinking_blocks,
+        speed,
+        service_tier,
         total_cost,
+        input_cost,
+        output_cost,
+        cache_write_cost,
+        cache_read_cost,
         total_api_duration_ms: 0,
         limits,
         activity: entry.accumulator.activity_tracker.finalize(),
@@ -1082,19 +1157,16 @@ fn parse_session_file_cached(
 }
 
 fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
-    // Extract timestamp
     let observed_at = msg
         .timestamp
         .as_deref()
         .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
-    // Track first timestamp as session start
     if acc.started_at.is_none() {
         acc.started_at = observed_at;
     }
 
-    // Extract cwd from any message
     if acc.cwd.is_none()
         && let Some(ref cwd) = msg.cwd
         && !cwd.is_empty()
@@ -1110,7 +1182,6 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
 
     let msg_type = msg.msg_type.as_deref().unwrap_or("");
 
-    // Extract message content for processing
     let Some(ref message) = msg.message else {
         acc.activity_tracker.observe_timestamp(observed_at);
         return;
@@ -1118,7 +1189,6 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
 
     match msg_type {
         "assistant" => {
-            // Extract model
             if let Some(ref model) = message.model
                 && !model.is_empty()
                 && !msg.is_api_error_message
@@ -1127,17 +1197,22 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
                 acc.model = Some(model.clone());
             }
 
-            // Extract token usage (including prompt cache tokens)
             if let Some(ref usage) = message.usage {
                 let input = usage.input_tokens;
                 let output = usage.output_tokens;
                 let cache_creation = usage.cache_creation_input_tokens;
                 let cache_read = usage.cache_read_input_tokens;
 
-                // All input-side tokens (non-cached + cache write + cache read)
+                let turn_speed = usage
+                    .speed
+                    .as_deref()
+                    .map(Speed::from_label)
+                    .unwrap_or_default();
+                acc.speed = turn_speed;
+                acc.service_tier = usage.service_tier.clone();
+
                 let all_input = input + cache_creation + cache_read;
 
-                // Track the largest single-turn API input for 1M context detection
                 acc.max_turn_api_input = acc.max_turn_api_input.max(all_input);
 
                 acc.total_input_tokens += all_input;
@@ -1145,28 +1220,28 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
                 acc.total_cache_creation_tokens += cache_creation;
                 acc.total_cache_read_tokens += cache_read;
 
-                // Calculate cost with cache-aware pricing
                 let model_id = acc.model.as_deref().unwrap_or("claude-sonnet-4-20250514");
-                acc.total_cost += cost::calculate_cost_with_context(
+                let turn_costs = cost::calculate_category_costs(
                     model_id,
                     input,
                     output,
                     cache_creation,
                     cache_read,
+                    turn_speed.is_fast(),
                 );
+                acc.input_cost += turn_costs.input_cost;
+                acc.output_cost += turn_costs.output_cost;
+                acc.cache_write_cost += turn_costs.cache_write_cost;
+                acc.cache_read_cost += turn_costs.cache_read_cost;
+                acc.total_cost += turn_costs.total();
 
-                // Track last turn tokens (all tokens for this message)
                 acc.last_turn_tokens = Some(all_input + output);
                 acc.last_token_event_at = observed_at;
 
-                // Track session total for delta calculation
                 acc.previous_session_total_tokens = acc.session_total_tokens;
                 acc.session_total_tokens = Some(acc.total_input_tokens + acc.total_output_tokens);
             }
 
-            // Scan message.content[] for tool_use entries (activity tracking).
-            // JSONL wraps tool calls inside message.content as an array of objects,
-            // each with a "type" field. The top-level "type" stays "assistant".
             if let Some(ref content_val) = message.content {
                 process_content_for_activity(acc, content_val, observed_at);
             } else {
@@ -1174,12 +1249,8 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
             }
         }
         "user" => {
-            // New turn — reset per-turn state so values only reflect the current turn
             acc.has_thinking_blocks = false;
-            // reasoning_effort is sticky: once set by a system-reminder, it persists
-            // across turns until explicitly changed by another system-reminder injection.
             extract_reasoning_effort(acc, message);
-            // User messages may contain tool_result entries inside message.content[]
             if let Some(ref content_val) = message.content {
                 process_content_for_activity(acc, content_val, observed_at);
             } else {
@@ -1213,7 +1284,6 @@ fn process_content_for_activity(
         match item_type {
             "tool_use" => {
                 let (kind, target) = classify_tool_call(item);
-                // Track full file path for workspace detection
                 if matches!(kind, ActivityKind::ReadingFile | ActivityKind::EditingFile)
                     && let Some(full_path) = extract_full_file_path(item.get("input"))
                 {
@@ -1276,7 +1346,6 @@ fn extract_reasoning_effort(acc: &mut SessionAccumulator, message: &JsonlMessage
     };
 
     let mut set_effort = |text: &str| {
-        // Pattern 1: plain text "reasoning effort level: high"
         if let Some(pos) = text.find("reasoning effort level: ") {
             let after = &text[pos + 24..];
             let level = after
@@ -1288,12 +1357,10 @@ fn extract_reasoning_effort(acc: &mut SessionAccumulator, message: &JsonlMessage
                 acc.reasoning_effort_explicitly_set = true;
             }
         }
-        // Pattern 2: XML tag <reasoning_effort>99</reasoning_effort>
         if let Some(pos) = text.find("antml:reasoning_effort>") {
             let after = &text[pos + 23..];
             let value = after.split('<').next().unwrap_or("").trim();
             if let Ok(n) = value.parse::<u32>() {
-                // 5-tier numeric mapping aligned with API effort levels.
                 let effort = match n {
                     0..=25 => ReasoningEffort::Low,
                     26..=55 => ReasoningEffort::Medium,
@@ -1396,7 +1463,7 @@ fn truncate_target(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        let suffix_len = 3; // "..."
+        let suffix_len = 3;
         let mut end = max_len.saturating_sub(suffix_len);
         while end > 0 && !s.is_char_boundary(end) {
             end -= 1;
@@ -1446,7 +1513,6 @@ fn non_synthetic_display_name(display_name: &str) -> Option<String> {
 /// 4. Drive label — "C: Drive" for drive roots
 /// 5. "Unknown Project" fallback
 fn derive_project_name(cwd: &Path) -> String {
-    // Strategy 1: simple file_name (works for most paths)
     if let Some(name) = cwd.file_name() {
         let s = name.to_string_lossy();
         if !s.is_empty() {
@@ -1454,20 +1520,16 @@ fn derive_project_name(cwd: &Path) -> String {
         }
     }
 
-    // Strategy 2: project metadata (walk up max 3 levels)
     if let Some(name) = read_project_name_from_ancestors(cwd, 3) {
         return name;
     }
 
-    // Strategy 3: git repo name — folder containing .git
     if let Some(name) = find_git_repo_name(cwd, 3) {
         return name;
     }
 
-    // Strategy 4: drive label for root paths like C:\
     let path_str = cwd.to_string_lossy();
     if path_str.len() <= 3 {
-        // Looks like a drive root: "C:\", "D:\", "C:/", etc.
         let drive = path_str
             .chars()
             .next()
@@ -1497,18 +1559,15 @@ fn read_project_name_from_ancestors(dir: &Path, max_levels: usize) -> Option<Str
 
 /// Try to extract a project name from metadata files in a single directory.
 fn read_project_name_from_metadata(dir: &Path) -> Option<String> {
-    // package.json — {"name": "..."}
     let pkg = dir.join("package.json");
     if let Some(name) = read_json_name_field(&pkg) {
         return Some(name);
     }
 
-    // Cargo.toml — name = "..."
     if let Some(name) = read_toml_name_field(&dir.join("Cargo.toml")) {
         return Some(name);
     }
 
-    // pyproject.toml — name = "..."
     if let Some(name) = read_toml_name_field(&dir.join("pyproject.toml")) {
         return Some(name);
     }
@@ -1582,15 +1641,12 @@ fn decode_project_path(encoded: &str) -> PathBuf {
         return PathBuf::from(".");
     }
 
-    // Use placeholder for escaped literal dashes
     let decoded = encoded.replace("--", "\x00");
     let decoded = decoded.replace('-', std::path::MAIN_SEPARATOR_STR);
     let decoded = decoded.replace('\x00', "-");
 
     PathBuf::from(decoded)
 }
-
-// ── Session Selection ─────────────────────────────────────────────────────
 
 pub fn preferred_active_session(
     sessions: &[ClaudeSessionSnapshot],
@@ -1626,7 +1682,6 @@ pub fn limits_present(limits: &RateLimits) -> bool {
 /// Subagent sessions remain in the list (for Recent Sessions display) but inherit parent's project name.
 #[allow(clippy::too_many_arguments)]
 fn merge_subagents_into_parents(sessions: &mut [ClaudeSessionSnapshot]) {
-    // Collect subagent info indexed by parent session ID
     let mut subagent_data: HashMap<String, Vec<(usize, SubagentInfo)>> = HashMap::new();
     for (idx, session) in sessions.iter().enumerate() {
         if !session.is_subagent {
@@ -1654,7 +1709,6 @@ fn merge_subagents_into_parents(sessions: &mut [ClaudeSessionSnapshot]) {
             .push((idx, info));
     }
 
-    // Apply subagent data to parent sessions
     for session in sessions.iter_mut() {
         if session.is_subagent {
             continue;
@@ -1663,13 +1717,12 @@ fn merge_subagents_into_parents(sessions: &mut [ClaudeSessionSnapshot]) {
             continue;
         };
         for (_, info) in &subagents {
-            session.input_tokens += info.tokens.saturating_sub(info.cost as u64); // approx — tokens already counted
+            session.input_tokens += info.tokens.saturating_sub(info.cost as u64);
             session.total_cost += info.cost;
             session.subagents.push(info.clone());
         }
     }
 
-    // Inherit parent project name for subagent sessions
     let parent_names: HashMap<String, String> = sessions
         .iter()
         .filter(|s| !s.is_subagent)
@@ -1823,8 +1876,6 @@ fn datetime_to_system_time(ts: DateTime<Utc>) -> Option<SystemTime> {
 mod tests {
     use super::*;
 
-    // ── ReasoningEffort (5-tier Opus 4.7) ──
-
     #[test]
     fn effort_label_all_variants() {
         assert_eq!(ReasoningEffort::Low.label(), "Low");
@@ -1917,17 +1968,14 @@ mod tests {
 
     #[test]
     fn decode_project_paths() {
-        // On any platform, test the logic
         let decoded = decode_project_path("home-user-projects-my--app");
         let decoded_str = decoded.to_string_lossy();
-        // Should have decoded dashes to separators and double-dashes to literal dashes
         assert!(decoded_str.contains("my-app") || decoded_str.contains("my-app"));
     }
 
     #[test]
     fn git_branch_cache_ttl() {
         let mut cache = GitBranchCache::new(Duration::from_secs(30));
-        // Just verify it doesn't crash on non-existent path
         assert_eq!(cache.get(Path::new("/nonexistent/path")), None);
     }
 
@@ -1939,7 +1987,6 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(snap.action_text(), "Editing");
-        // to_text shortens the path to just the filename
         assert_eq!(snap.to_text(true), "Editing main.rs");
         assert_eq!(snap.to_text(false), "Editing");
     }
@@ -1979,7 +2026,6 @@ mod tests {
 
     #[test]
     fn classify_edit_tool() {
-        // POSIX path — works on both Windows and Unix runners.
         let content = serde_json::json!({
             "name": "Edit",
             "input": {"file_path": "/home/dev/project/main.rs"}
@@ -2036,26 +2082,21 @@ mod tests {
 
     #[test]
     fn extract_filename_from_path_variants() {
-        // file_path field
         let input = serde_json::json!({"file_path": "/a/b/c.rs"});
         assert_eq!(extract_filename(Some(&input)), Some("c.rs".to_string()));
 
-        // path field
         let input = serde_json::json!({"path": "/a/b/d.ts"});
         assert_eq!(extract_filename(Some(&input)), Some("d.ts".to_string()));
 
-        // notebook_path field
         let input = serde_json::json!({"notebook_path": "/a/b/notebook.ipynb"});
         assert_eq!(
             extract_filename(Some(&input)),
             Some("notebook.ipynb".to_string())
         );
 
-        // No path field
         let input = serde_json::json!({"other": "value"});
         assert_eq!(extract_filename(Some(&input)), None);
 
-        // None input
         assert_eq!(extract_filename(None), None);
     }
 
@@ -2138,6 +2179,215 @@ mod tests {
     }
 
     #[test]
+    fn speed_from_label_is_case_insensitive() {
+        assert_eq!(Speed::from_label("fast"), Speed::Fast);
+        assert_eq!(Speed::from_label("FAST"), Speed::Fast);
+        assert_eq!(Speed::from_label(" Fast "), Speed::Fast);
+        assert_eq!(Speed::from_label("standard"), Speed::Standard);
+        assert_eq!(Speed::from_label("anything-else"), Speed::Standard);
+        assert_eq!(Speed::Fast.as_str(), "fast");
+        assert_eq!(Speed::Standard.as_str(), "standard");
+    }
+
+    fn assistant_usage_message(
+        model: &str,
+        input: u64,
+        output: u64,
+        speed: Option<&str>,
+        service_tier: Option<&str>,
+    ) -> JsonlMessage {
+        let mut usage = serde_json::json!({
+            "input_tokens": input,
+            "output_tokens": output,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        });
+        if let Some(speed) = speed {
+            usage["speed"] = serde_json::json!(speed);
+        }
+        if let Some(tier) = service_tier {
+            usage["service_tier"] = serde_json::json!(tier);
+        }
+        serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "model": model,
+                "type": "message",
+                "role": "assistant",
+                "usage": usage,
+                "content": [{"type": "text", "text": "ok"}]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn mixed_fast_and_standard_session_sums_cost_speed_correctly() {
+        let model = "claude-opus-4-8";
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+
+        let fast_msg =
+            assistant_usage_message(model, 100_000, 20_000, Some("fast"), Some("priority"));
+        let standard_msg =
+            assistant_usage_message(model, 50_000, 10_000, Some("standard"), Some("standard"));
+        let absent_speed_msg = assistant_usage_message(model, 30_000, 5_000, None, None);
+
+        process_jsonl_message(&mut acc, &fast_msg);
+        process_jsonl_message(&mut acc, &standard_msg);
+        process_jsonl_message(&mut acc, &absent_speed_msg);
+
+        let expected =
+            cost::calculate_cost_with_context_and_speed(model, 100_000, 20_000, 0, 0, true)
+                + cost::calculate_cost_with_context_and_speed(model, 50_000, 10_000, 0, 0, false)
+                + cost::calculate_cost_with_context_and_speed(model, 30_000, 5_000, 0, 0, false);
+
+        assert!((acc.total_cost - expected).abs() < 0.0000001);
+        assert_eq!(acc.speed, Speed::Standard);
+        assert_eq!(acc.service_tier, None);
+    }
+
+    fn assistant_usage_message_with_cache(
+        model: &str,
+        input: u64,
+        output: u64,
+        cache_write: u64,
+        cache_read: u64,
+        speed: Option<&str>,
+    ) -> JsonlMessage {
+        let mut usage = serde_json::json!({
+            "input_tokens": input,
+            "output_tokens": output,
+            "cache_creation_input_tokens": cache_write,
+            "cache_read_input_tokens": cache_read,
+        });
+        if let Some(speed) = speed {
+            usage["speed"] = serde_json::json!(speed);
+        }
+        serde_json::from_value(serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "model": model,
+                "type": "message",
+                "role": "assistant",
+                "usage": usage,
+                "content": [{"type": "text", "text": "ok"}]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn fast_opus_48_session_categories_reconcile_and_double_standard() {
+        let model = "claude-opus-4-8";
+        let (input, output, cache_write, cache_read) = (100_000u64, 20_000u64, 8_000u64, 60_000u64);
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(
+                model,
+                input,
+                output,
+                cache_write,
+                cache_read,
+                Some("fast"),
+            ),
+        );
+
+        let sum = acc.input_cost + acc.output_cost + acc.cache_write_cost + acc.cache_read_cost;
+        assert!((sum - acc.total_cost).abs() < 1e-7);
+
+        let standard =
+            cost::calculate_category_costs(model, input, output, cache_write, cache_read, false);
+        assert!((acc.input_cost - standard.input_cost * 2.0).abs() < 1e-7);
+        assert!((acc.output_cost - standard.output_cost * 2.0).abs() < 1e-7);
+        assert!((acc.cache_write_cost - standard.cache_write_cost * 2.0).abs() < 1e-7);
+        assert!((acc.cache_read_cost - standard.cache_read_cost * 2.0).abs() < 1e-7);
+    }
+
+    #[test]
+    fn mixed_speed_session_categories_sum_to_total_per_turn() {
+        let model = "claude-opus-4-8";
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(
+                model,
+                100_000,
+                20_000,
+                8_000,
+                60_000,
+                Some("fast"),
+            ),
+        );
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(
+                model,
+                50_000,
+                10_000,
+                4_000,
+                30_000,
+                Some("standard"),
+            ),
+        );
+
+        let sum = acc.input_cost + acc.output_cost + acc.cache_write_cost + acc.cache_read_cost;
+        assert!((sum - acc.total_cost).abs() < 1e-7);
+
+        let fast_turn = cost::calculate_category_costs(model, 100_000, 20_000, 8_000, 60_000, true);
+        let std_turn = cost::calculate_category_costs(model, 50_000, 10_000, 4_000, 30_000, false);
+        let expected_total = fast_turn.total() + std_turn.total();
+        assert!((acc.total_cost - expected_total).abs() < 1e-7);
+        assert!((acc.input_cost - (fast_turn.input_cost + std_turn.input_cost)).abs() < 1e-7);
+        assert!((acc.output_cost - (fast_turn.output_cost + std_turn.output_cost)).abs() < 1e-7);
+        assert!(
+            (acc.cache_write_cost - (fast_turn.cache_write_cost + std_turn.cache_write_cost)).abs()
+                < 1e-7
+        );
+        assert!(
+            (acc.cache_read_cost - (fast_turn.cache_read_cost + std_turn.cache_read_cost)).abs()
+                < 1e-7
+        );
+    }
+
+    #[test]
+    fn category_scale_apportions_authoritative_total_and_reconciles() {
+        let jsonl_total = 10.0_f64;
+        let authoritative_total = 12.0_f64;
+        let scale = category_scale(authoritative_total, jsonl_total);
+        assert!((scale - 1.2).abs() < 1e-12);
+        let categories = [3.0_f64, 5.0, 1.0, 1.0];
+        assert!((categories.iter().sum::<f64>() - jsonl_total).abs() < 1e-12);
+        let scaled_sum: f64 = categories.iter().map(|c| c * scale).sum();
+        assert!((scaled_sum - authoritative_total).abs() < 1e-7);
+    }
+
+    #[test]
+    fn category_scale_is_zero_without_a_jsonl_cost_basis() {
+        assert_eq!(category_scale(9.99, 0.0), 0.0);
+    }
+
+    #[test]
+    fn most_recent_turn_speed_and_service_tier_win_for_display() {
+        let model = "claude-opus-4-8";
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message(model, 10_000, 1_000, Some("standard"), Some("standard")),
+        );
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message(model, 10_000, 1_000, Some("fast"), Some("priority")),
+        );
+
+        assert_eq!(acc.speed, Speed::Fast);
+        assert_eq!(acc.service_tier.as_deref(), Some("priority"));
+    }
+
+    #[test]
     fn session_id_validation_accepts_uuid_shape() {
         assert!(is_valid_session_id("4ccf0482-61c0-4611-9d22-becaf1781231"));
         assert!(!is_valid_session_id("encoded_c--foo"));
@@ -2177,8 +2427,6 @@ mod tests {
             r#"{"name": "my-cool-app", "version": "1.0.0"}"#,
         )
         .unwrap();
-        // Create a subdirectory with no file_name fallback scenario
-        // For normal dirs, file_name() works — test metadata fallback via helper directly
         assert_eq!(
             read_project_name_from_metadata(dir.path()),
             Some("my-cool-app".to_string())

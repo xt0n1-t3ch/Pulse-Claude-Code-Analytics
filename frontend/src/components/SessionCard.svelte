@@ -18,6 +18,8 @@
       ? (session.cache_read_tokens / (session.cache_read_tokens + pureInput)) * 100
       : 0,
   );
+
+  let hasInflatedTokenizer = $derived(/opus-4-(?:[7-9]|\d{2,})/.test(session.model_id.toLowerCase()));
 </script>
 
 <div
@@ -34,7 +36,13 @@
     {#if session.branch}
       <span class="badge branch">{session.branch}</span>
     {/if}
-    <span class="badge model">{session.model}</span>
+    <span class="badge model">{session.model}{#if hasInflatedTokenizer}<span
+          class="inflated-marker"
+          title="Inflated tokenizer — Opus 4.7+ produces up to ~35% more tokens than 4.6 for the same text, raising cost at unchanged per-token rates."
+        >⚠</span>{/if}</span>
+    {#if session.fast}
+      <span class="badge fast" title="Fast mode — priority speed billing on this turn">⚡ Fast</span>
+    {/if}
     <span class="badge ctx" class:ctx-1m={session.context_window === "1M"}>{session.context_window}</span>
     <span
       class="badge effort"
@@ -182,6 +190,14 @@
   .badge.effort.effort-implicit { opacity: 0.65; font-style: italic; cursor: help; }
   .badge.thinking { color: #c3b1e1; background: rgba(195, 177, 225, 0.12); }
   .badge.subagent { color: #7cb9e8; background: rgba(124, 185, 232, 0.12); }
+  .badge.fast { color: var(--warning); background: var(--warning-dim); }
+
+  .inflated-marker {
+    margin-left: 4px;
+    color: var(--warning);
+    cursor: help;
+    font-weight: 700;
+  }
 
   .session-body {
     display: flex;

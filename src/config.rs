@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -25,10 +26,9 @@ pub const DEFAULT_DISCORD_CLIENT_ID: &str = "1466664856261230716";
 /// unreliable (silently dropped by Discord on many client versions).
 pub const DEFAULT_LARGE_IMAGE_KEY: &str = "claude-code";
 
-/// Legacy fallback URL (kept for reference + mp:external fallback pathway).
-/// Historically used as `large_image_key` default but pointed to a file that
-/// was never committed to origin/main, causing the "logo not loading" bug.
-pub const DEFAULT_MASCOT_ASSET_URL: &str = "https://raw.githubusercontent.com/xt0n1-t3ch/Claude-Code-Discord-Presence/main/assets/branding/claude-mascot.jpg";
+/// Fallback URL for the `mp:external` asset pathway. Points at the committed
+/// mascot under the canonical repo so it resolves on a fresh clone.
+pub const DEFAULT_MASCOT_ASSET_URL: &str = "https://raw.githubusercontent.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/main/assets/branding/claude-mascot.jpg";
 
 /// Default small activity asset keys — each must exist in the Developer Portal.
 /// Users who host custom assets can override via `activity_small_image_keys` in
@@ -297,16 +297,11 @@ impl PresenceConfig {
             changed = true;
         }
 
-        // v2 → v3: the legacy GitHub-raw URL was never hosted (the mascot file
-        // wasn't committed to origin/main), so Discord Rich Presence returned 404
-        // and the large image silently didn't render. Migrate to asset-key default.
         if previous_version < 3 && self.display.large_image_key.trim() == DEFAULT_MASCOT_ASSET_URL {
             self.display.large_image_key = DEFAULT_LARGE_IMAGE_KEY.to_string();
             changed = true;
         }
 
-        // v2 → v3: fill missing activity small image keys with the new defaults
-        // so users benefit from the per-activity icons immediately.
         if previous_version < 3 {
             let defaults = ActivitySmallImageKeys::defaults();
             let slots = [
@@ -360,8 +355,6 @@ impl PresenceConfig {
             self.display.large_text = DisplayConfig::default().large_text;
             changed = true;
         }
-        // small_image_key and small_text are intentionally allowed to be empty
-        // (empty = no small image displayed in Discord)
         for item in [
             &mut self.display.activity_small_image_keys.thinking,
             &mut self.display.activity_small_image_keys.reading,
@@ -683,8 +676,6 @@ fn decode_windows_text_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).to_string()
 }
 
-// ── IDE Workspace Detection ──────────────────────────────────────────────
-
 /// Read workspace folders from VS Code IDE lock files (`~/.claude/ide/*.lock`).
 /// Returns non-root workspace paths sorted longest-first (most specific first).
 /// Filters out drive roots (e.g., `C:\`) and validates the IDE process is alive.
@@ -709,7 +700,6 @@ pub fn read_ide_workspace_folders() -> Vec<PathBuf> {
             continue;
         };
 
-        // Validate PID is alive (skip stale lock files)
         if let Some(pid) = lock.get("pid").and_then(|v| v.as_u64())
             && !is_process_alive(pid as u32)
         {
@@ -725,7 +715,6 @@ pub fn read_ide_workspace_folders() -> Vec<PathBuf> {
                 continue;
             };
             let folder_path = PathBuf::from(folder_str);
-            // Skip drive roots (e.g., "C:\", "D:\")
             if is_drive_root(&folder_path) {
                 continue;
             }
@@ -736,7 +725,6 @@ pub fn read_ide_workspace_folders() -> Vec<PathBuf> {
         }
     }
 
-    // Sort longest path first → most specific workspace matched first
     workspaces.sort_by_key(|path| std::cmp::Reverse(path.as_os_str().len()));
     workspaces
 }
@@ -744,7 +732,6 @@ pub fn read_ide_workspace_folders() -> Vec<PathBuf> {
 /// Find the deepest (most specific) workspace folder that is an ancestor of `file_path`.
 /// Returns `None` if no workspace matches.
 pub fn find_best_workspace(file_path: &Path, workspaces: &[PathBuf]) -> Option<PathBuf> {
-    // Normalize for case-insensitive comparison on Windows
     let file_key = path_key(file_path);
     workspaces
         .iter()
@@ -759,7 +746,6 @@ pub fn find_best_workspace(file_path: &Path, workspaces: &[PathBuf]) -> Option<P
 pub fn is_drive_root(path: &Path) -> bool {
     let s = path.to_string_lossy();
     let trimmed = s.trim_end_matches(['/', '\\']);
-    // Windows drive root: single letter or "X:"
     trimmed.len() <= 2
         && trimmed
             .chars()
@@ -772,7 +758,6 @@ pub fn is_drive_root(path: &Path) -> bool {
 fn is_process_alive(pid: u32) -> bool {
     #[cfg(windows)]
     {
-        // Use tasklist to check if the PID exists — avoids adding windows-sys dependency
         crate::util::silent_command("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
             .stdout(Stdio::piped())
@@ -787,7 +772,6 @@ fn is_process_alive(pid: u32) -> bool {
 
     #[cfg(not(windows))]
     {
-        // Check /proc/{pid} existence — works on Linux without libc dependency
         Path::new(&format!("/proc/{pid}")).exists()
     }
 }
@@ -858,13 +842,11 @@ mod tests {
         assert_eq!(cfg.display.terminal_logo_path, None);
         assert_eq!(cfg.display.theme_preset, ThemePreset::PremiumTerminal);
         assert_eq!(cfg.display.hero_animation, HeroAnimationMode::Subtle);
-        // Schema v3: default switched from GitHub-raw URL (404) to asset key.
         assert_eq!(cfg.display.large_image_key, DEFAULT_LARGE_IMAGE_KEY);
     }
 
     #[test]
     fn migration_v2_url_to_v3_asset_key() {
-        // Legacy v2 config that still points at the 404 URL gets auto-migrated.
         let mut cfg = PresenceConfig {
             schema_version: 2,
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
@@ -884,7 +866,6 @@ mod tests {
 
     #[test]
     fn migration_preserves_custom_large_image_key() {
-        // A user who set their own custom key shouldn't get overwritten.
         let mut cfg = PresenceConfig {
             schema_version: 2,
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
@@ -968,14 +949,12 @@ mod tests {
             PathBuf::from("D:\\X\\Web Development\\MCP Servers"),
             PathBuf::from("D:\\X"),
         ];
-        // File in Property Alpha → should match Property Alpha (deepest)
         let result = find_best_workspace(
             Path::new("D:\\X\\Work\\Property Alpha\\src\\index.ts"),
             &workspaces,
         );
         assert_eq!(result, Some(PathBuf::from("D:\\X\\Work\\Property Alpha")));
 
-        // File in MCP Servers → should match MCP Servers
         let result = find_best_workspace(
             Path::new("D:\\X\\Web Development\\MCP Servers\\cc-discord-presence\\src\\main.rs"),
             &workspaces,
@@ -985,11 +964,9 @@ mod tests {
             Some(PathBuf::from("D:\\X\\Web Development\\MCP Servers"))
         );
 
-        // File in D:\X but not in any specific sub-workspace → matches D:\X
         let result = find_best_workspace(Path::new("D:\\X\\random\\file.txt"), &workspaces);
         assert_eq!(result, Some(PathBuf::from("D:\\X")));
 
-        // File outside all workspaces → None
         let result = find_best_workspace(Path::new("E:\\other\\file.txt"), &workspaces);
         assert_eq!(result, None);
     }

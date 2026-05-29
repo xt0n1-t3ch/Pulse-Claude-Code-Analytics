@@ -1,11 +1,13 @@
 pub mod app;
 pub mod chrome_session;
 pub mod cli;
+pub mod codex;
 pub mod config;
 pub mod cost;
 pub mod discord;
 pub mod metrics;
 pub mod process_guard;
+pub mod provider;
 pub mod session;
 pub mod sound;
 pub mod usage;

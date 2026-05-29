@@ -141,6 +141,33 @@ jobs:
           echo "Generated assets:"
           ls -lah
 
+      - name: Install git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --version
+
+      - name: Compose release notes
+        id: notes
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          python3 scripts/extract-changelog-section.py "$VERSION" CHANGELOG.md > notes-body.md || : > notes-body.md
+          if [ ! -s notes-body.md ] || [ "$(wc -c < notes-body.md)" -lt 40 ]; then
+            echo "CHANGELOG.md section for $VERSION missing or too short; falling back to git-cliff."
+            git-cliff --config cliff.toml --tag "$TAG" --strip header --latest -o notes-body.md || : > notes-body.md
+          fi
+          if [ ! -s notes-body.md ]; then
+            printf "Release **%s**. See the [full changelog](https://github.com/%s/blob/main/CHANGELOG.md) for details.\n" "$TAG" "$REPO" > notes-body.md
+          fi
+          echo "::group::notes-body.md"
+          cat notes-body.md
+          echo "::endgroup::"
+
       - name: Compose release body
         id: body
         shell: bash
@@ -186,11 +213,11 @@ jobs:
             echo
             echo "### What's new"
             echo
-            echo "<!-- gh-auto-notes -->"
+            cat notes-body.md
             echo
             echo "---"
             echo
-            echo "**Full changelog:** https://github.com/${REPO}/compare/...${TAG}"
+            echo "**Full changelog:** https://github.com/${REPO}/blob/main/CHANGELOG.md"
           } > body.md
 
           echo "body_path=body.md" >> "$GITHUB_OUTPUT"
@@ -201,8 +228,8 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: Pulse ${{ github.event.inputs.tag || github.ref_name }}
           body_path: body.md
-          append_body: true
-          generate_release_notes: true
+          append_body: false
+          generate_release_notes: false
           draft: false
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           files: release-assets/*

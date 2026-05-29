@@ -1,39 +1,75 @@
-# Rust build artifacts
-/target/
-/src-tauri/target/
-/src-tauri/target-tauri-build/
+target/
+src-tauri/target/
+src-tauri/target-tauri-build/
+src-tauri/tauri-build.log
+**/*.rs.bk
+Cargo.lock.bak
 
-# Release binaries (built by CI or locally)
-/releases/
-/dist/
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+releases/
+.svelte-kit/
+.pnpm-store/
+.pnpm-debug.log
 
-# Svelte frontend build output
-/frontend/dist/
-/frontend/node_modules/
+src-tauri/gen/
+src-tauri/icons/android/
+src-tauri/icons/ios/
 
-# IDE
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
 
-# OS
 .DS_Store
 Thumbs.db
 
-# Local Claude Code data
-.claude/
-USERPROFILE
-
-# Logs
+.env
+.env.local
+.env.*.local
 *.log
 
-# Project files
-TODO.md
+~
+USERPROFILE
 .gitnexus
 .codex-*
+TODO.md
 
-# Tauri mobile icon outputs (desktop-only build — these are auto-generated
-# by `cargo tauri icon` and only needed for Android/iOS bundles we don't ship)
-src-tauri/icons/android/
-src-tauri/icons/ios/
+CLAUDE.md
+claude.md
+AGENTS.md
+agents.md
+GEMINI.md
+gemini.md
+.claude/
+.claude-quality/
+.codegraph/
+.cursor/
+.codex/
+.opencode/
+.aider*
+.specify/
+.mcp_data/
+artifacts/
+specs/
+tasks/
+ralph-loop/
+prompts/
+evidence/
+reports/
+handoff-*.md
+*.handoff.md
+.commit-msg.txt
+state.md
+progress.md
+PRD.md
+PRD-*.md
+RESEARCH.md
+data-model.md
+quickstart.md
+plan.md
+PLAN.md
+spec.md
+SPEC.md

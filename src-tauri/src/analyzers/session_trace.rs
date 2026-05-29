@@ -2,10 +2,26 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use cc_discord_presence::provider::Provider;
 use chrono::{DateTime, Timelike, Utc};
 use serde_json::Value;
 
 use crate::db::HistoricalSession;
+
+pub const MAX_JSONL_BYTES: u64 = 25 * 1024 * 1024;
+pub const MAX_JSONL_FILES: usize = 4000;
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static SCAN_PASSES: AtomicUsize = AtomicUsize::new(0);
+
+pub fn scan_passes() -> usize {
+    SCAN_PASSES.load(Ordering::SeqCst)
+}
+
+pub fn reset_scan_passes() {
+    SCAN_PASSES.store(0, Ordering::SeqCst);
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct SessionTrace {
@@ -32,26 +48,86 @@ impl SessionTrace {
 }
 
 pub fn load_session_traces(sessions: &[HistoricalSession]) -> HashMap<String, SessionTrace> {
-    let wanted: HashSet<String> = sessions.iter().map(|s| s.id.clone()).collect();
-    if wanted.is_empty() {
+    load_session_traces_from_roots(
+        sessions,
+        cc_discord_presence::config::projects_paths(),
+        cc_discord_presence::codex::config::sessions_paths(),
+    )
+}
+
+pub fn load_session_traces_from_roots(
+    sessions: &[HistoricalSession],
+    claude_roots: Vec<PathBuf>,
+    codex_roots: Vec<PathBuf>,
+) -> HashMap<String, SessionTrace> {
+    if sessions.is_empty() {
         return HashMap::new();
     }
 
-    let index = build_jsonl_index(&wanted);
-    wanted
-        .into_iter()
-        .filter_map(|session_id| {
-            let path = index.get(&session_id)?;
-            Some((session_id.clone(), parse_session_trace(&session_id, path)))
+    let index = build_jsonl_index(sessions, claude_roots, codex_roots);
+    sessions
+        .iter()
+        .filter_map(|session| {
+            let raw_id = raw_session_id(session);
+            let path = index.get(&(session.provider.clone(), raw_id.clone()))?;
+            let provider = Provider::parse(&session.provider)?;
+            Some((
+                session.id.clone(),
+                parse_session_trace(provider, &raw_id, path),
+            ))
         })
         .collect()
 }
 
-fn build_jsonl_index(wanted: &HashSet<String>) -> HashMap<String, PathBuf> {
-    let mut remaining = wanted.clone();
-    let mut found = HashMap::new();
+fn build_jsonl_index(
+    sessions: &[HistoricalSession],
+    claude_roots: Vec<PathBuf>,
+    codex_roots: Vec<PathBuf>,
+) -> HashMap<(String, String), PathBuf> {
+    let mut wanted_by_provider: HashMap<Provider, HashSet<String>> = HashMap::new();
+    for session in sessions {
+        if let Some(provider) = Provider::parse(&session.provider) {
+            wanted_by_provider
+                .entry(provider)
+                .or_default()
+                .insert(raw_session_id(session));
+        }
+    }
 
-    for root in cc_discord_presence::config::projects_paths() {
+    let mut found = HashMap::new();
+    let mut budget = MAX_JSONL_FILES;
+    if let Some(wanted) = wanted_by_provider.get(&Provider::Claude).cloned() {
+        scan_provider_roots(
+            Provider::Claude,
+            claude_roots,
+            wanted,
+            &mut found,
+            &mut budget,
+        );
+    }
+    if let Some(wanted) = wanted_by_provider.get(&Provider::Codex).cloned() {
+        scan_provider_roots(
+            Provider::Codex,
+            codex_roots,
+            wanted,
+            &mut found,
+            &mut budget,
+        );
+    }
+
+    found
+}
+
+fn scan_provider_roots(
+    provider: Provider,
+    roots: Vec<PathBuf>,
+    mut remaining: HashSet<String>,
+    found: &mut HashMap<(String, String), PathBuf>,
+    budget: &mut usize,
+) {
+    SCAN_PASSES.fetch_add(1, Ordering::SeqCst);
+
+    for root in roots {
         if remaining.is_empty() || !root.exists() {
             continue;
         }
@@ -75,20 +151,61 @@ fn build_jsonl_index(wanted: &HashSet<String>) -> HashMap<String, PathBuf> {
                 if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                     continue;
                 }
+                if *budget == 0 {
+                    tracing::warn!(
+                        provider = provider.as_str(),
+                        cap = MAX_JSONL_FILES,
+                        "session-trace scan hit MAX_JSONL_FILES cap; remaining files skipped"
+                    );
+                    return;
+                }
                 let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                if remaining.remove(stem) {
-                    found.insert(stem.to_string(), path);
+                let Some(matched_id) = (match provider {
+                    Provider::Claude => remaining.contains(stem).then(|| stem.to_string()),
+                    Provider::Codex => remaining
+                        .iter()
+                        .find(|session_id| {
+                            stem == session_id.as_str() || stem.ends_with(session_id.as_str())
+                        })
+                        .cloned(),
+                }) else {
+                    continue;
+                };
+                if file_exceeds_size_cap(&path) {
+                    tracing::warn!(
+                        provider = provider.as_str(),
+                        path = %path.display(),
+                        cap_bytes = MAX_JSONL_BYTES,
+                        "session-trace JSONL exceeds MAX_JSONL_BYTES; file skipped"
+                    );
+                    remaining.remove(&matched_id);
+                    continue;
                 }
+                *budget -= 1;
+                remaining.remove(&matched_id);
+                found.insert((provider.as_str().to_string(), matched_id), path);
             }
         }
     }
-
-    found
 }
 
-fn parse_session_trace(session_id: &str, path: &Path) -> SessionTrace {
+fn file_exceeds_size_cap(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|meta| meta.len() > MAX_JSONL_BYTES)
+        .unwrap_or(false)
+}
+
+fn raw_session_id(session: &HistoricalSession) -> String {
+    session
+        .id
+        .split_once(':')
+        .and_then(|(prefix, value)| Provider::parse(prefix).map(|_| value.to_string()))
+        .unwrap_or_else(|| session.id.clone())
+}
+
+fn parse_session_trace(provider: Provider, session_id: &str, path: &Path) -> SessionTrace {
     let mut trace = SessionTrace {
         session_id: session_id.to_string(),
         ..Default::default()
@@ -101,22 +218,80 @@ fn parse_session_trace(session_id: &str, path: &Path) -> SessionTrace {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        match provider {
+            Provider::Claude => parse_claude_trace_line(&value, &mut trace),
+            Provider::Codex => parse_codex_trace_line(&value, &mut trace),
+        }
+    }
 
-        let msg_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let timestamp = value
-            .get("timestamp")
+    trace
+}
+
+fn parse_claude_trace_line(value: &Value, trace: &mut SessionTrace) {
+    let msg_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let timestamp = value
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .and_then(parse_timestamp_hour);
+    if matches!(msg_type, "user" | "assistant")
+        && let Some(hour) = timestamp
+    {
+        trace.hour_distribution[hour as usize] += 1;
+    }
+
+    let content = value.get("message").and_then(|m| m.get("content"));
+    if msg_type == "user" {
+        trace.user_messages += 1;
+        let prompt_text = content.and_then(extract_text);
+        if trace.first_prompt.is_none()
+            && let Some(prompt) = prompt_text.clone()
+        {
+            trace.first_prompt = Some(truncate_prompt(&prompt));
+        }
+        if let Some(prompt) = prompt_text
+            && prompt.contains("/compact")
+        {
+            trace.compact_commands += 1;
+        }
+    } else if msg_type == "assistant" {
+        trace.assistant_messages += 1;
+    }
+
+    if let Some(content) = content {
+        scan_claude_tools(content, trace);
+    }
+}
+
+fn parse_codex_trace_line(value: &Value, trace: &mut SessionTrace) {
+    let outer_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let timestamp = value
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .and_then(parse_timestamp_hour);
+    let payload = value.get("payload").and_then(|v| v.as_object());
+    let payload_type = payload
+        .and_then(|map| map.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if matches!(outer_type, "compacted") || matches!(payload_type, "context_compacted") {
+        trace.compact_commands += 1;
+    }
+
+    if outer_type == "response_item" && payload_type == "message" {
+        let role = payload
+            .and_then(|map| map.get("role"))
             .and_then(|v| v.as_str())
-            .and_then(parse_timestamp_hour);
-        if matches!(msg_type, "user" | "assistant")
+            .unwrap_or("");
+        let content = payload.and_then(|map| map.get("content"));
+        if matches!(role, "user" | "assistant")
             && let Some(hour) = timestamp
         {
             trace.hour_distribution[hour as usize] += 1;
         }
-
-        let content = value.get("message").and_then(|m| m.get("content"));
-        if msg_type == "user" {
+        if role == "user" {
             trace.user_messages += 1;
-            let prompt_text = content.and_then(extract_text);
+            let prompt_text = content.and_then(extract_codex_text);
             if trace.first_prompt.is_none()
                 && let Some(prompt) = prompt_text.clone()
             {
@@ -127,16 +302,14 @@ fn parse_session_trace(session_id: &str, path: &Path) -> SessionTrace {
             {
                 trace.compact_commands += 1;
             }
-        } else if msg_type == "assistant" {
+        } else if role == "assistant" {
             trace.assistant_messages += 1;
-        }
-
-        if let Some(content) = content {
-            scan_tools(content, &mut trace);
         }
     }
 
-    trace
+    if let Some(payload) = payload {
+        scan_codex_tools(payload, trace);
+    }
 }
 
 fn parse_timestamp_hour(input: &str) -> Option<u32> {
@@ -184,7 +357,7 @@ fn truncate_prompt(prompt: &str) -> String {
     format!("{}...", &prompt[..end])
 }
 
-fn scan_tools(content: &Value, trace: &mut SessionTrace) {
+fn scan_claude_tools(content: &Value, trace: &mut SessionTrace) {
     let items: Vec<&Value> = if let Some(arr) = content.as_array() {
         arr.iter().collect()
     } else if content.is_object() {
@@ -210,12 +383,81 @@ fn scan_tools(content: &Value, trace: &mut SessionTrace) {
     }
 }
 
+fn scan_codex_tools(payload: &serde_json::Map<String, Value>, trace: &mut SessionTrace) {
+    let payload_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let tool_name = match payload_type {
+        "function_call" | "custom_tool_call" => payload
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        "view_image_tool_call" => Some("view_image".to_string()),
+        "web_search_call" => Some("web_search".to_string()),
+        "patch_apply_end" => Some("apply_patch".to_string()),
+        "mcp_tool_call_end" => {
+            payload
+                .get("invocation")
+                .and_then(|v| v.as_object())
+                .map(|invocation| {
+                    let server = invocation
+                        .get("server")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let tool = invocation
+                        .get("tool")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    format!("mcp__{server}__{tool}")
+                })
+        }
+        _ => None,
+    };
+    let Some(name) = tool_name else {
+        return;
+    };
+    let normalized = normalize_tool_name(&name);
+    *trace.tool_counts.entry(normalized.clone()).or_insert(0) += 1;
+    trace.total_tools += 1;
+    if normalized.starts_with("mcp__") {
+        trace.mcp_tool_calls += 1;
+    }
+}
+
 fn normalize_tool_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         "unknown".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+fn extract_codex_text(content: &Value) -> Option<String> {
+    let arr = content.as_array()?;
+    let mut parts = Vec::new();
+    for item in arr {
+        if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
+        }
+        if let Some(text) = item.get("input").and_then(|v| v.as_str()) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
+        }
+        if let Some(text) = item.get("content").and_then(|v| v.as_str()) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
     }
 }
 
@@ -240,5 +482,76 @@ mod tests {
         trace.hour_distribution[12] = 3;
         trace.hour_distribution[8] = 3;
         assert_eq!(trace.peak_overlap_pct(), 50);
+    }
+
+    #[test]
+    fn raw_session_id_strips_provider_prefix() {
+        let session = HistoricalSession {
+            id: "codex:019daa02-33ad-7c40-8ea4-6d003a58e803".into(),
+            provider: "codex".into(),
+            session_name: None,
+            project: "pulse".into(),
+            model: "gpt-5.4".into(),
+            model_id: "gpt-5.4".into(),
+            context_window: "1.0M".into(),
+            branch: None,
+            effort: "High".into(),
+            started_at: None,
+            ended_at: None,
+            duration_secs: 0,
+            total_cost: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_tokens: 0,
+            cache_read_tokens: 0,
+            total_tokens: 0,
+            input_cost: 0.0,
+            output_cost: 0.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
+            has_thinking: false,
+            subagent_count: 0,
+            is_active: false,
+            used_tokens: 0,
+            window_tokens: 0,
+        };
+        assert_eq!(
+            raw_session_id(&session),
+            "019daa02-33ad-7c40-8ea4-6d003a58e803"
+        );
+    }
+
+    #[test]
+    fn parse_codex_counts_function_and_mcp_tools() {
+        let line = serde_json::json!({
+            "timestamp": "2026-04-20T08:33:16.695Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "shell_command"
+            }
+        });
+        let mcp = serde_json::json!({
+            "timestamp": "2026-04-20T08:33:17.695Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "mcp_tool_call_end",
+                "invocation": {
+                    "server": "context-mode",
+                    "tool": "ctx_batch_execute"
+                }
+            }
+        });
+        let mut trace = SessionTrace::default();
+        parse_codex_trace_line(&line, &mut trace);
+        parse_codex_trace_line(&mcp, &mut trace);
+        assert_eq!(trace.total_tools, 2);
+        assert_eq!(trace.mcp_tool_calls, 1);
+        assert_eq!(
+            trace
+                .tool_counts
+                .get("mcp__context-mode__ctx_batch_execute"),
+            Some(&1)
+        );
     }
 }

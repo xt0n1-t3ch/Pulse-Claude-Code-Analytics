@@ -50,7 +50,7 @@
 
 {#if open}
   <div class="modal-backdrop" role="button" tabindex="-1" onclick={onclose} onkeydown={(e) => e.key === "Escape" && onclose()} transition:fly={{ duration: 150 }}>
-    <div class="modal" role="dialog" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} transition:fly={{ y: 20, duration: 200 }}>
+    <div class="modal" role="dialog" tabindex="-1" aria-modal="true" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} transition:fly={{ y: 20, duration: 200 }}>
       <div class="modal-header">
         <h3>{title}</h3>
         <button class="close-btn" onclick={onclose}>✕</button>

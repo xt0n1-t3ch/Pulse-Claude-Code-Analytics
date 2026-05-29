@@ -99,7 +99,7 @@
   .bar-fill {
     height: 100%;
     border-radius: 99px;
-    background: #5b7bd5;
+    background: var(--accent);
     transition: width 600ms var(--ease);
   }
 
