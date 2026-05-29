@@ -1117,6 +1117,7 @@ pub struct DiscordUserInfo {
 
 fn discord_leveldb_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let variants = ["discord", "discordcanary", "discordptb"];
 
     #[cfg(target_os = "windows")]
