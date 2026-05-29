@@ -17,9 +17,11 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code, paired with the
 
 ## Quick links
 
-- **Install**: see [README](../README.md#installation)
-- **Main CLAUDE.md** (full project context): [../CLAUDE.md](../CLAUDE.md)
-- **Bug / feature requests**: https://github.com/xt0n1-t3ch/Claude-Code-Discord-Presence/issues
+- **Install**: see [README](../README.md#install)
+- **Architecture** (full component map): [architecture.md](architecture.md)
+- **Contributing + local dev**: [../CONTRIBUTING.md](../CONTRIBUTING.md)
+- **Test suite**: [../tests/index.md](../tests/index.md)
+- **Bug / feature requests**: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/issues
 
 ## Version
 

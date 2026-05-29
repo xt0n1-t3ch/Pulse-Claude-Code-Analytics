@@ -1,34 +1,41 @@
-/target/
-/src-tauri/target/
-/src-tauri/target-tauri-build/
+target/
+src-tauri/target/
+src-tauri/target-tauri-build/
+src-tauri/tauri-build.log
+**/*.rs.bk
+Cargo.lock.bak
 
-/releases/
-/dist/
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+releases/
+.svelte-kit/
+.pnpm-store/
+.pnpm-debug.log
 
-/frontend/dist/
-/frontend/node_modules/
+src-tauri/gen/
+src-tauri/icons/android/
+src-tauri/icons/ios/
 
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
 
 .DS_Store
 Thumbs.db
 
-.claude/
-USERPROFILE
-
+.env
+.env.local
+.env.*.local
 *.log
 
-TODO.md
+~
+USERPROFILE
 .gitnexus
 .codex-*
-
-src-tauri/icons/android/
-src-tauri/icons/ios/
-
-node_modules/
+TODO.md
 
 CLAUDE.md
 claude.md
@@ -36,10 +43,16 @@ AGENTS.md
 agents.md
 GEMINI.md
 gemini.md
+.claude/
+.claude-quality/
+.codegraph/
+.cursor/
 .codex/
 .opencode/
 .aider*
 .specify/
+.mcp_data/
+artifacts/
 specs/
 tasks/
 ralph-loop/
@@ -48,6 +61,7 @@ evidence/
 reports/
 handoff-*.md
 *.handoff.md
+.commit-msg.txt
 state.md
 progress.md
 PRD.md
@@ -59,10 +73,3 @@ plan.md
 PLAN.md
 spec.md
 SPEC.md
-.commit-msg.txt
-
-.claude-quality/
-.mcp_data/
-artifacts/
-
-src-tauri/gen/

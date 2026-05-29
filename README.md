@@ -115,7 +115,7 @@ cd src-tauri && cargo tauri build
 
 | | |
 | :--- | :--- |
-| **Accurate cost math** | Per session · day · model. Published pricing for every Claude — Opus 4.7, 4.6, 4.5, 4.1, 4, 3; Sonnet 4.6, 4.5, 4; Haiku 4.5, 3.5, 3. Compare like-for-like whatever plan you're on. |
+| **Accurate cost math** | Per session · day · model. Published pricing for every Claude — Opus 4.8 (with fast mode), 4.7, 4.6, 4.5, 4.1, 4, 3; Sonnet 4.6, 4.5, 4; Haiku 4.5, 3.5, 3. Speed-aware per-turn, so fast turns price at 2×. Compare like-for-like whatever plan you're on. |
 | **A – F cache health grade** | Trend-weighted hit ratio — cchubber-style. See your direction, not just your current number. |
 | **Model routing insights** | Opus / Sonnet / Haiku split + *"you could save $X by rerouting N sessions to Sonnet"* estimate. |
 | **Inflection detection** | Any session ≥ 2 × baseline cost-per-session gets flagged with context. |
@@ -133,6 +133,16 @@ cd src-tauri && cargo tauri build
 | **Reasoning tiers** | Five tiers (Low / Medium / High / Extra High / Max) — Opus 4.7 native. |
 | **Asset resolver** | Multi-tier — portal keys → Media Proxy → plain URLs → fallback. |
 | **Presets** | Minimal · Standard · Full. Customize per-field too. |
+
+<!--
+Keywords: Claude Code analytics, Claude Code cost tracker, Claude Code usage dashboard,
+Claude Opus 4.8 fast mode pricing, Anthropic token cost, cache hit ratio, prompt caching,
+1M context window usage, model routing, OpenAI Codex usage analytics, Discord Rich Presence,
+reasoning effort, Claude Pro Max Teams plan usage limits, Extra Usage, JSONL transcript,
+local-first, zero telemetry, open source, Rust, Tauri 2, Svelte 5, Windows, macOS, Linux.
+See llms.txt for a machine-readable project summary.
+-->
+
 
 ### Privacy & ownership
 

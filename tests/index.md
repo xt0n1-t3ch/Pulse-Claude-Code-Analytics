@@ -91,6 +91,4 @@ Per-crate, per-module unit tests compiled with each crate. Representative covera
 | [README.md](../README.md) | repo root | Install, feature overview, daemon + GUI quick start |
 | [CHANGELOG.md](../CHANGELOG.md) | repo root | Release history (config + DB schema v3) |
 | [docs/index.md](../docs/index.md) | `docs/` | Documentation hub: architecture, Discord assets, reasoning-effort variants, analyzers, cost calculation |
-| [CLAUDE.md](../CLAUDE.md) | repo root | Full project context |
-| [AGENTS.md](../AGENTS.md) | repo root | Agent operating notes |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | repo root | Contribution + local-dev workflow |
