@@ -368,10 +368,16 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
         writeln!(md, "### Model Distribution\n").unwrap();
         writeln!(md, "| Model | Sessions | Cost |\n|---|---:|---:|").unwrap();
         for (name, count, cost) in &models {
+            let marker = if model_label_is_fast_capable(name) {
+                " ⚡"
+            } else {
+                ""
+            };
             writeln!(
                 md,
-                "| {} | {} | {} |",
+                "| {}{} | {} | {} |",
                 md_escape(name),
+                marker,
                 count,
                 format_cost(*cost)
             )
@@ -379,6 +385,35 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
         }
         writeln!(md).unwrap();
     }
+
+    let speed_split = compute_speed_split(&sessions);
+    writeln!(md, "### Speed Split\n").unwrap();
+    writeln!(
+        md,
+        "| Tier | Sessions | Cost | Share |\n|---|---:|---:|---:|"
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "| Fast-capable ⚡ | {} | {} | {:.1}% |",
+        speed_split.fast_sessions,
+        format_cost(speed_split.fast_cost),
+        speed_split.fast_share_pct()
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "| Standard | {} | {} | {:.1}% |",
+        speed_split.standard_sessions,
+        format_cost(speed_split.standard_cost),
+        speed_split.standard_share_pct()
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "\nFast-capable spend runs on Opus 4.8+ models (2x priority-speed rate when fast mode is active).\n"
+    )
+    .unwrap();
 
     writeln!(md, "## Inflections\n").unwrap();
     if inflections.is_empty() {
@@ -645,6 +680,8 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
         'C' => "#fbbf24",
         _ => "#ef4444",
     };
+    let speed_split = compute_speed_split(&sessions);
+    let speed_split_html = build_speed_split_html(&speed_split);
     let project_table_html = build_project_table(&projects);
     let model_table_html = build_model_table(&models, total_sessions);
     let top_sessions_html = build_top_sessions(&sessions);
@@ -736,422 +773,7 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
         build_token_composition_svg(total_input, total_output, total_cache_w, total_cache_r);
 
     let mut html = String::new();
-    html.push_str(r##"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pulse Analytics Report</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
-/* Pulse Report — matches the GUI design system: ultra-black Inter + JetBrains Mono.
-   Auto-follows prefers-color-scheme; user can also click the theme toggle. */
-:root {
-  color-scheme: dark;
-  --bg: #000000;
-  --bg-secondary: #050505;
-  --bg-card: #0b0b0b;
-  --bg-card-hover: #121212;
-  --bg-elevated: #141414;
-  --border: #1f1f1f;
-  --border-hover: #2a2a2a;
-  --border-strong: #333333;
-  --text-primary: #fafafa;
-  --text-secondary: #a0a0a0;
-  --text-muted: #6b6b6b;
-  --success: #22c55e;
-  --success-dim: rgba(34,197,94,0.10);
-  --warning: #f59e0b;
-  --warning-dim: rgba(245,158,11,0.12);
-  --danger: #ef4444;
-  --danger-dim: rgba(239,68,68,0.12);
-  --info: #7cb9e8;
-  --info-dim: rgba(124,185,232,0.12);
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-full: 9999px;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
-  --ease: cubic-bezier(0.4, 0, 0.2, 1);
-}
-[data-theme="light"] {
-  color-scheme: light;
-  --bg: #ffffff;
-  --bg-secondary: #fafafa;
-  --bg-card: #ffffff;
-  --bg-card-hover: #f7f7f7;
-  --bg-elevated: #f1f1f1;
-  --border: #eaeaea;
-  --border-hover: #d4d4d4;
-  --border-strong: #b8b8b8;
-  --text-primary: #0a0a0a;
-  --text-secondary: #4a4a4a;
-  --text-muted: #8a8a8a;
-  --success: #15803d;
-  --warning: #b45309;
-  --danger: #b91c1c;
-  --info: #1d4ed8;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) {
-    color-scheme: light;
-    --bg: #ffffff; --bg-secondary: #fafafa; --bg-card: #ffffff;
-    --bg-card-hover: #f7f7f7; --bg-elevated: #f1f1f1;
-    --border: #eaeaea; --border-hover: #d4d4d4; --border-strong: #b8b8b8;
-    --text-primary: #0a0a0a; --text-secondary: #4a4a4a; --text-muted: #8a8a8a;
-    --success: #15803d; --warning: #b45309; --danger: #b91c1c; --info: #1d4ed8;
-  }
-}
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body {
-  background: var(--bg); color: var(--text-primary);
-  font-family: var(--font-sans); font-size: 14px; line-height: 1.5;
-  padding: 40px 24px 64px;
-  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'cv02','cv03','cv04','cv11';
-}
-.report-shell { max-width: 1240px; margin: 0 auto; }
-a { color: inherit; }
-
-.theme-toggle {
-  position: fixed; top: 16px; right: 16px; z-index: 100;
-  width: 36px; height: 36px;
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  display: inline-flex; align-items: center; justify-content: center;
-  cursor: pointer; color: var(--text-secondary);
-  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease);
-}
-.theme-toggle:hover { background: var(--bg-card-hover); border-color: var(--border-hover); color: var(--text-primary); }
-.theme-toggle svg { width: 16px; height: 16px; display: block; }
-.theme-toggle .icon-sun { display: none; }
-[data-theme="light"] .theme-toggle .icon-sun { display: block; }
-[data-theme="light"] .theme-toggle .icon-moon { display: none; }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .theme-toggle .icon-sun { display: block; }
-  :root:not([data-theme]) .theme-toggle .icon-moon { display: none; }
-}
-
-.kicker,.summary-label,.info-label,.metric .label,.heat-label,.routing-share {
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
-}
-
-.hero { padding: 8px 0 20px; }
-.hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 4px; }
-.hero h1 {
-  font-family: var(--font-sans); font-weight: 700;
-  font-size: clamp(32px, 4.2vw, 44px); line-height: 1.05;
-  letter-spacing: -0.025em; color: var(--text-primary); margin: 6px 0 4px;
-}
-.hero-meta { color: var(--text-secondary); font-size: 14px; margin-top: 2px; }
-.generated-at { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); }
-.hero-divider { height: 1px; background: var(--border); margin: 20px 0 24px; }
-
-.summary-grid {
-  display: grid; grid-template-columns: repeat(5, minmax(0,1fr));
-  gap: 10px;
-}
-.summary-card {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 18px 18px 16px;
-  transition: border-color .15s var(--ease), background .15s var(--ease);
-}
-.summary-card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); }
-.summary-value {
-  font-family: var(--font-sans); font-weight: 700;
-  font-size: clamp(22px, 2.2vw, 28px); letter-spacing: -0.02em;
-  color: var(--text-primary); margin: 10px 0 4px;
-  font-variant-numeric: tabular-nums; line-height: 1.1;
-}
-.summary-meta { color: var(--text-muted); font-size: 11px; line-height: 1.4; font-family: var(--font-mono); }
-
-.anchor-nav {
-  position: sticky; top: 0; z-index: 20;
-  display: flex; flex-wrap: wrap; gap: 0;
-  margin: 28px 0 24px; padding: 0;
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
-}
-.anchor-nav a {
-  padding: 12px 16px; color: var(--text-muted);
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.12em;
-  text-decoration: none;
-  border-right: 1px solid var(--border);
-  transition: color .15s var(--ease), background .15s var(--ease);
-}
-.anchor-nav a:hover { color: var(--text-primary); background: var(--bg-card); }
-
-.section { margin-bottom: 48px; }
-.section-header {
-  display: flex; justify-content: space-between; gap: 20px;
-  align-items: flex-end; margin-bottom: 16px;
-  padding-bottom: 12px; border-bottom: 1px solid var(--border);
-}
-.section-header h2 {
-  font-family: var(--font-sans); font-weight: 700;
-  font-size: clamp(20px, 2.2vw, 26px); letter-spacing: -0.02em;
-  color: var(--text-primary); margin: 0;
-}
-.section-header p { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; max-width: 64ch; }
-.section-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
-.info-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
-.metric-strip { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-top: 16px; }
-
-.card,.info-card {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 22px;
-  transition: border-color .15s var(--ease), background .15s var(--ease);
-}
-.card:hover,.info-card:hover { border-color: var(--border-hover); }
-.card > h2, .card > h3, .info-card > h2, .info-card > h3 {
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.12em; text-transform: uppercase;
-  color: var(--text-muted); margin: 0 0 14px;
-}
-
-.metric {
-  background: var(--bg-secondary); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 14px 16px;
-}
-.metric .label { display: block; margin-bottom: 6px; }
-.metric .value {
-  font-family: var(--font-sans); font-weight: 700;
-  font-size: 18px; color: var(--text-primary);
-  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
-}
-
-.cache-grade { display: flex; gap: 22px; align-items: center; margin-bottom: 16px; }
-.cache-letter {
-  font-family: var(--font-sans); font-weight: 800;
-  font-size: clamp(72px, 9vw, 108px); line-height: 0.9;
-  letter-spacing: -0.06em;
-}
-.cache-copy h3 {
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.12em; text-transform: uppercase;
-  color: var(--text-muted); margin-bottom: 4px;
-}
-.cache-copy .ratio {
-  font-family: var(--font-sans); font-weight: 700;
-  font-size: 26px; color: var(--text-primary); letter-spacing: -0.02em;
-}
-.cache-copy p { color: var(--text-secondary); font-size: 13px; margin-top: 4px; max-width: 48ch; }
-
-.report-svg { width: 100%; height: 240px; display: block; }
-.token-legend { list-style: none; padding: 0; margin: 14px 0 0 0; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px 18px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); letter-spacing: 0.02em; }
-.token-legend li { display: flex; align-items: center; gap: 8px; }
-.token-legend li b { margin-left: auto; color: var(--text-primary); font-weight: 600; }
-.token-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-
-.routing-row + .routing-row { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
-.routing-label-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.routing-name {
-  font-family: var(--font-sans); font-weight: 600;
-  font-size: 15px; color: var(--text-primary); letter-spacing: -0.01em;
-}
-.routing-meta { margin-top: 3px; color: var(--text-muted); font-size: 11px; font-family: var(--font-mono); }
-.routing-track { height: 3px; margin-top: 10px; background: var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-.routing-fill { height: 100%; background: var(--text-primary); transition: width 1.2s cubic-bezier(.2,.9,.3,1); }
-
-.inflection-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
-.inflection-card {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-lg); padding: 18px; position: relative;
-  transition: border-color .15s var(--ease);
-}
-.inflection-card:hover { border-color: var(--border-hover); }
-.inflection-card::before {
-  content: ''; position: absolute; top: 0; left: 18px;
-  width: 32px; height: 2px; border-radius: 2px;
-}
-.inflection-up::before { background: var(--danger); }
-.inflection-down::before { background: var(--success); }
-.inflection-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
-.inflection-date {
-  font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
-  letter-spacing: 0.12em; text-transform: uppercase;
-}
-.inflection-direction {
-  font-family: var(--font-mono); font-size: 9px; font-weight: 600;
-  letter-spacing: 0.14em; text-transform: uppercase;
-  padding: 3px 8px; border-radius: var(--radius-full);
-}
-.inflection-up .inflection-direction { background: var(--danger-dim); color: var(--danger); }
-.inflection-down .inflection-direction { background: var(--success-dim); color: var(--success); }
-.inflection-metric {
-  font-family: var(--font-sans); font-weight: 700; font-size: 26px;
-  color: var(--text-primary); letter-spacing: -0.02em; margin-top: 8px;
-  font-variant-numeric: tabular-nums;
-}
-.inflection-support { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.inflection-card p { color: var(--text-secondary); font-size: 12px; margin-top: 8px; line-height: 1.5; }
-
-.info-value {
-  font-family: var(--font-sans); font-weight: 700;
-  font-size: clamp(20px, 2vw, 26px); color: var(--text-primary);
-  letter-spacing: -0.02em; margin-top: 6px;
-  font-variant-numeric: tabular-nums;
-}
-.info-card p { color: var(--text-secondary); font-size: 12px; margin-top: 4px; }
-
-table { width: 100%; border-collapse: collapse; }
-th, td {
-  padding: 10px 12px; border-bottom: 1px solid var(--border);
-  text-align: left; vertical-align: top; font-size: 13px;
-  font-family: var(--font-sans);
-}
-th {
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.12em; text-transform: uppercase;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-hover);
-}
-td { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-tr:hover td { color: var(--text-primary); }
-tr:last-child td { border-bottom: none; }
-.num, .cost { text-align: right; font-family: var(--font-mono); }
-.cost { color: var(--text-primary); font-weight: 600; }
-.preview-cell {
-  max-width: 420px; color: var(--text-secondary);
-  font-size: 12px; line-height: 1.5;
-  font-family: var(--font-sans);
-}
-
-.heatmap { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 4px; }
-.heat-cell {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-md); padding: 12px;
-  background-image: linear-gradient(180deg, rgba(34,197,94, calc(var(--heat,0) * .35)) 0%, transparent 100%);
-}
-.heat-label { display: block; }
-.heat-value {
-  font-family: var(--font-sans); font-weight: 700;
-  font-size: 16px; color: var(--text-primary); margin-top: 4px;
-  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
-}
-.heat-meta { color: var(--text-muted); font-size: 10px; font-family: var(--font-mono); }
-
-.empty-state {
-  padding: 28px; background: var(--bg-card);
-  border: 1px dashed var(--border-hover);
-  border-radius: var(--radius-lg);
-  color: var(--text-secondary); font-size: 13px; text-align: center;
-  font-family: var(--font-sans);
-}
-
-.diagram-code {
-  margin: 0;
-  padding: 16px 18px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.65;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.rec-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
-.rec-item {
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-left: 3px solid var(--text-muted);
-  border-radius: var(--radius-lg); padding: 18px 22px;
-  transition: border-color .15s var(--ease), background .15s var(--ease);
-}
-.rec-item:hover { border-color: var(--border-hover); }
-.rec-item[data-sev="critical"] { border-left-color: var(--danger); }
-.rec-item[data-sev="warning"]  { border-left-color: var(--warning); }
-.rec-item[data-sev="info"]     { border-left-color: var(--info); }
-.rec-item[data-sev="positive"] { border-left-color: var(--success); }
-.rec-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
-.rec-pill {
-  padding: 3px 8px; border-radius: var(--radius-full);
-  font-family: var(--font-mono); font-size: 9px; font-weight: 600;
-  letter-spacing: 0.14em; text-transform: uppercase;
-}
-.rec-pill.critical { background: var(--danger-dim); color: var(--danger); }
-.rec-pill.warning  { background: var(--warning-dim); color: var(--warning); }
-.rec-pill.info     { background: var(--info-dim); color: var(--info); }
-.rec-pill.positive { background: var(--success-dim); color: var(--success); }
-.rec-title {
-  font-family: var(--font-sans); font-weight: 600;
-  font-size: 15px; color: var(--text-primary); letter-spacing: -0.01em;
-}
-.rec-desc { color: var(--text-secondary); font-size: 13px; line-height: 1.55; margin-top: 4px; }
-.rec-meta { margin-top: 10px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; font-family: var(--font-mono); }
-.meta-k { color: var(--text-muted); letter-spacing: 0.10em; text-transform: uppercase; }
-.meta-v { color: var(--text-secondary); }
-.meta-v.accent { color: var(--text-primary); font-weight: 600; }
-.rec-fix {
-  margin-top: 12px; padding: 7px 14px;
-  background: var(--bg-elevated); border: 1px solid var(--border-hover);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.12em; text-transform: uppercase;
-  cursor: pointer; transition: all .15s var(--ease);
-}
-.rec-fix:hover { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
-.rec-fix.copied { background: var(--success); color: #ffffff; border-color: var(--success); }
-
-.footer {
-  margin-top: 48px; padding: 22px 0; border-top: 1px solid var(--border);
-  font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
-  letter-spacing: 0.04em;
-  display: flex; flex-wrap: wrap; gap: 18px;
-  align-items: baseline; justify-content: space-between;
-}
-.footer-brand {
-  text-transform: uppercase; letter-spacing: 0.14em; font-weight: 600;
-  color: var(--text-secondary);
-}
-.footer-meta b { color: var(--text-primary); font-weight: 600; }
-.footer-links { opacity: .85; }
-.footer a { color: var(--text-primary); text-decoration: none; border-bottom: 1px solid var(--border-hover); transition: border-color .15s var(--ease); }
-.footer a:hover { border-bottom-color: var(--text-primary); }
-
-@media (max-width: 1100px) {
-  .summary-grid, .info-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .section-grid, .inflection-grid { grid-template-columns: 1fr; }
-  .heatmap { grid-template-columns: repeat(3, minmax(0,1fr)); }
-}
-@media (max-width: 760px) {
-  body { padding: 24px 16px 40px; }
-  .hero-top, .section-header, .routing-label-row { flex-direction: column; align-items: flex-start; gap: 8px; }
-  .summary-grid, .metric-strip { grid-template-columns: 1fr; }
-  .cache-grade { flex-direction: column; gap: 14px; align-items: flex-start; }
-  table { display: block; overflow-x: auto; white-space: nowrap; }
-}
-
-@media print {
-  :root {
-    color-scheme: light;
-    --bg: #ffffff; --bg-secondary: #fafafa; --bg-card: #ffffff; --bg-card-hover: #f5f5f5;
-    --bg-elevated: #f1f1f1; --border: #d4d4d4; --border-hover: #b0b0b0;
-    --text-primary: #0a0a0a; --text-secondary: #333; --text-muted: #666;
-  }
-  body { padding: 0; }
-  .anchor-nav, .rec-fix, .theme-toggle, .screen-only { display: none !important; }
-  .section { break-inside: avoid; }
-  .hero { border-top: 2px solid #000; padding-top: 16px; }
-}
-</style>
-<script>(function(){try{var t=localStorage.getItem('pulse-report-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
-</head>
-<body>
-<button class="theme-toggle screen-only" onclick="(function(){var r=document.documentElement;var next=(r.getAttribute('data-theme')==='light')?'dark':(r.getAttribute('data-theme')==='dark')?'light':(matchMedia('(prefers-color-scheme: light)').matches?'dark':'light');r.setAttribute('data-theme',next);try{localStorage.setItem('pulse-report-theme',next);}catch(e){}})()" aria-label="Toggle theme" title="Toggle dark/light theme">
-  <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-  <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-</button>
-<div class="report-shell">"##);
+    html.push_str(&crate::report_template::report_head());
     write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{period_label}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, provider_name = html_escape(cc_discord_presence::provider::load_active_provider().display_name()), period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
     let topology_tools_html = if trace_overview.top_tools.is_empty() {
         r#"<div class="empty-state">No traced tool mix yet.</div>"#.to_string()
@@ -1175,7 +797,7 @@ tr:last-child td { border-bottom: none; }
 
     html.push_str(r##"<nav class="anchor-nav screen-only"><a href="#cache">Cache</a><a href="#routing">Routing</a><a href="#inflections">Inflections</a><a href="#sessions">Sessions</a><a href="#tools">Tools</a><a href="#topology">Topology</a><a href="#prompts">Prompts</a><a href="#recommendations">Fixes</a></nav>"##);
     write!(html, r##"<section id="cache" class="section"><div class="section-header"><div><h2>Cache</h2><p>Weighted cache health drives grade color. Token mix stays visible for fast copy-paste review.</p></div></div><div class="section-grid"><div class="card"><div class="cache-grade"><div class="cache-letter" style="color:{grade_color}">{cache_grade}</div><div class="cache-copy"><h3>Cache Health</h3><div class="ratio">{cache_ratio:.1}%</div><p>{cache_diagnosis}</p></div></div><div class="metric-strip"><div class="metric"><div class="label">Overall Hit Ratio</div><div class="value">{overall_ratio:.1}%</div></div><div class="metric"><div class="label">Cache Read</div><div class="value">{cache_read}</div></div><div class="metric"><div class="label">Cache Write</div><div class="value">{cache_write}</div></div></div></div><div class="card chart-card"><h2>Token Composition</h2>{token_chart_html}<ul class="token-legend"><li><span class="dot" style="background:#f5f5f5"></span>Pure Input<b>{pure_input_short}</b></li><li><span class="dot" style="background:#7cb9e8"></span>Output<b>{output_short}</b></li><li><span class="dot" style="background:#fbbf24"></span>Cache Write<b>{cache_w_short}</b></li><li><span class="dot" style="background:#22c55e"></span>Cache Read<b>{cache_r_short}</b></li></ul></div></div></section>"##, grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, cache_diagnosis = html_escape(&cache.diagnosis), overall_ratio = cache.hit_ratio, cache_read = html_escape(&format_tokens_short(cache.total_cache_read)), cache_write = html_escape(&format_tokens_short(cache.total_cache_write)), token_chart_html = token_chart_html, pure_input_short = html_escape(&format_tokens_short(total_input)), output_short = html_escape(&format_tokens_short(total_output)), cache_w_short = html_escape(&format_tokens_short(total_cache_w)), cache_r_short = html_escape(&format_tokens_short(total_cache_r))).unwrap();
-    write!(html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&format_cost(routing.estimated_savings_if_rerouted)), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html).unwrap();
+    write!(html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div><div class="section-grid" style="margin-top:18px;">{speed_split_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&format_cost(routing.estimated_savings_if_rerouted)), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html, speed_split_html = speed_split_html).unwrap();
     write!(html, r##"<section id="inflections" class="section"><div class="section-header"><div><h2>Inflections</h2><p>Spike cards use red rail. Efficiency drops use green rail. Sorted by absolute signal strength.</p></div></div>{inflections_html}</section>"##, inflections_html = inflections_html).unwrap();
     write!(html, r##"<section id="sessions" class="section"><div class="section-header"><div><h2>Sessions</h2><p>Daily cost trend, hourly activity, top sessions, project mix. Same data sources. Cleaner export.</p></div></div><div class="section-grid"><div class="card chart-card"><h2>Daily Cost Trend</h2>{daily_chart_html}</div><div class="card"><h2>Hourly Activity</h2>{hourly_heatmap_html}</div></div><div class="section-grid" style="margin-top:18px;">{top_sessions_html}{project_table_html}</div></section>"##, daily_chart_html = daily_chart_html, hourly_heatmap_html = hourly_heatmap_html, top_sessions_html = top_sessions_html, project_table_html = project_table_html).unwrap();
     write!(html, r##"<section id="tools" class="section"><div class="section-header"><div><h2>Tools</h2><p>Tool intensity, MCP share, compact gaps, top tool mix.</p></div></div><div class="info-grid"><div class="info-card"><div class="info-label">Traced Sessions</div><div class="info-value">{traced_sessions}</div><p>{sessions_analyzed} sessions analyzed</p></div><div class="info-card"><div class="info-label">Total Tool Calls</div><div class="info-value">{tool_calls}</div><p>{tools_per_session:.1} avg per session</p></div><div class="info-card"><div class="info-label">Calls / Hour</div><div class="info-value">{calls_per_hour:.1}</div><p>{mcp_share:.1}% MCP share</p></div><div class="info-card"><div class="info-label">Compact Gaps</div><div class="info-value">{compact_gaps}</div><p>{tool_diagnosis}</p></div></div><div style="margin-top:18px;">{tools_table_html}</div></section>"##, traced_sessions = tool_frequency.traced_sessions, sessions_analyzed = tool_frequency.sessions_analyzed, tool_calls = tool_frequency.total_tool_calls, tools_per_session = tool_frequency.avg_tools_per_session, calls_per_hour = tool_frequency.avg_tool_calls_per_hour, mcp_share = tool_frequency.mcp_share_pct, compact_gaps = tool_frequency.compact_gap_sessions, tool_diagnosis = html_escape(&tool_frequency.diagnosis), tools_table_html = tools_table_html).unwrap();
@@ -1210,9 +832,65 @@ tr:last-child td { border-bottom: none; }
         all_time_days = summary.days_tracked
     )
     .unwrap();
-    html.push_str("<script>function pulseCopy(text){if(navigator.clipboard&&window.isSecureContext){return navigator.clipboard.writeText(text);}return new Promise((resolve,reject)=>{try{const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,ta.value.length);const ok=document.execCommand('copy');document.body.removeChild(ta);ok?resolve():reject(new Error('execCommand copy failed'));}catch(e){reject(e);}});}document.querySelectorAll('.rec-fix').forEach((btn)=>{btn.addEventListener('click',async()=>{const prompt=btn.getAttribute('data-prompt')||'';const original=btn.textContent;try{await pulseCopy(prompt);btn.classList.add('copied');btn.textContent='Copied prompt';}catch(err){btn.classList.add('copy-failed');btn.textContent='Copy failed - select manually';console.error('clipboard copy failed',err);}setTimeout(()=>{btn.classList.remove('copied','copy-failed');btn.textContent=original;},2000);});});</script></body></html>");
+    html.push_str(crate::report_template::REPORT_TAIL);
     html
 }
+
+struct SpeedSplit {
+    fast_sessions: usize,
+    standard_sessions: usize,
+    fast_cost: f64,
+    standard_cost: f64,
+}
+
+impl SpeedSplit {
+    fn total_cost(&self) -> f64 {
+        self.fast_cost + self.standard_cost
+    }
+    fn fast_share_pct(&self) -> f64 {
+        let total = self.total_cost();
+        if total > 0.0 {
+            (self.fast_cost / total) * 100.0
+        } else {
+            0.0
+        }
+    }
+    fn standard_share_pct(&self) -> f64 {
+        100.0 - self.fast_share_pct()
+    }
+}
+
+fn compute_speed_split(sessions: &[db::HistoricalSession]) -> SpeedSplit {
+    let mut split = SpeedSplit {
+        fast_sessions: 0,
+        standard_sessions: 0,
+        fast_cost: 0.0,
+        standard_cost: 0.0,
+    };
+    for s in sessions {
+        if cc_discord_presence::cost::is_fast_capable(&s.model_id) {
+            split.fast_sessions += 1;
+            split.fast_cost += s.total_cost;
+        } else {
+            split.standard_sessions += 1;
+            split.standard_cost += s.total_cost;
+        }
+    }
+    split
+}
+
+fn build_speed_split_html(split: &SpeedSplit) -> String {
+    format!(
+        r##"<div class="card"><h2>Speed Split</h2><div class="speed-split"><div class="speed-cell is-fast"><div class="speed-head"><span class="speed-bolt">⚡</span><span class="speed-name">Fast-capable</span></div><div class="speed-value">{fast_cost}</div><div class="speed-meta">{fast_sessions} sessions · {fast_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{fast_share:.1}%"></div></div></div><div class="speed-cell"><div class="speed-head"><span class="speed-name">Standard</span></div><div class="speed-value">{standard_cost}</div><div class="speed-meta">{standard_sessions} sessions · {standard_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{standard_share:.1}%"></div></div></div></div><p style="margin-top:14px;color:var(--text-secondary);font-size:12px;">Fast-capable spend runs on Opus 4.8+ models, which bill at the 2× priority-speed rate when fast mode is active. Standard covers every earlier model.</p></div>"##,
+        fast_cost = html_escape(&format_cost(split.fast_cost)),
+        fast_sessions = split.fast_sessions,
+        fast_share = split.fast_share_pct(),
+        standard_cost = html_escape(&format_cost(split.standard_cost)),
+        standard_sessions = split.standard_sessions,
+        standard_share = split.standard_share_pct(),
+    )
+}
+
 fn format_tokens_short(t: i64) -> String {
     if t >= 1_000_000 {
         format!("{:.1}M", t as f64 / 1_000_000.0)
@@ -1283,6 +961,14 @@ fn build_project_table(projects: &[db::ProjectStat]) -> String {
     html
 }
 
+fn model_label_is_fast_capable(model_label: &str) -> bool {
+    let normalized = model_label
+        .to_ascii_lowercase()
+        .replace([' ', '.'], "-")
+        .replace("--", "-");
+    cc_discord_presence::cost::is_fast_capable(&normalized)
+}
+
 fn build_model_table(models: &[(String, i64, f64)], total: usize) -> String {
     if models.is_empty() {
         return String::new();
@@ -1296,9 +982,16 @@ fn build_model_table(models: &[(String, i64, f64)], total: usize) -> String {
         } else {
             0.0
         };
+        let fast_tag = if model_label_is_fast_capable(m) {
+            r#"<span class="fast-tag">⚡ Fast</span>"#
+        } else {
+            ""
+        };
         html.push_str(&format!(
-            "<tr><td>{m}</td><td class=\"num\">{count}</td><td class=\"num\">{pct:.0}%</td><td class=\"cost\">{}</td></tr>",
-            format_cost(*cost)
+            "<tr><td>{name}{fast_tag}</td><td class=\"num\">{count}</td><td class=\"num\">{pct:.0}%</td><td class=\"cost\">{cost}</td></tr>",
+            name = html_escape(m),
+            fast_tag = fast_tag,
+            cost = format_cost(*cost)
         ));
     }
     html.push_str("</table></div>");
@@ -1320,20 +1013,58 @@ fn build_daily_cost_svg(by_date: &std::collections::BTreeMap<String, f64>) -> St
     } else {
         0.0
     };
-    let points: Vec<String> = values
+    let baseline = height - padding_y;
+    let coords: Vec<(f64, f64)> = values
         .iter()
         .enumerate()
         .map(|(idx, value)| {
             let x = padding_x + step_x * idx as f64;
-            let y = height - padding_y - ((value / max) * (height - padding_y * 2.0));
-            format!("{x:.2},{y:.2}")
+            let y = baseline - ((value / max) * (height - padding_y * 2.0));
+            (x, y)
         })
         .collect();
-    let mut area_points = Vec::with_capacity(points.len() + 2);
-    area_points.push(format!("{padding_x:.2},{:.2}", height - padding_y));
-    area_points.extend(points.iter().cloned());
     let end_x = padding_x + step_x * (values.len().saturating_sub(1)) as f64;
-    area_points.push(format!("{end_x:.2},{:.2}", height - padding_y));
+
+    let curve = curve_segments(&coords);
+    let line_path = match coords.first() {
+        Some((x, y)) => format!("M {x:.2} {y:.2}{curve}"),
+        None => String::new(),
+    };
+    let area_path = match coords.first() {
+        Some((x, y)) => {
+            format!("M {x:.2} {baseline:.2} L {x:.2} {y:.2}{curve} L {end_x:.2} {baseline:.2} Z")
+        }
+        None => String::new(),
+    };
+
+    let peak_idx =
+        values.iter().enumerate().fold(
+            0usize,
+            |best, (idx, value)| {
+                if *value > values[best] { idx } else { best }
+            },
+        );
+    let peak_label = coords
+        .get(peak_idx)
+        .map(|(x, y)| {
+            let anchor = if peak_idx == 0 {
+                "start"
+            } else if peak_idx + 1 == coords.len() {
+                "end"
+            } else {
+                "middle"
+            };
+            format!(
+                r##"<circle cx="{x:.2}" cy="{y:.2}" r="3" fill="#f5f5f5"/><text x="{x:.2}" y="{ty:.2}" text-anchor="{anchor}" fill="#f5f5f5" font-size="11" font-weight="700" font-family="-apple-system, 'Segoe UI', sans-serif">{label}</text>"##,
+                x = x,
+                y = y,
+                ty = (y - 8.0).max(12.0),
+                anchor = anchor,
+                label = html_escape(&format_cost(values[peak_idx])),
+            )
+        })
+        .unwrap_or_default();
+
     let labels = by_date
         .iter()
         .enumerate()
@@ -1353,28 +1084,57 @@ fn build_daily_cost_svg(by_date: &std::collections::BTreeMap<String, f64>) -> St
         r##"<svg viewBox="0 0 {width} {height}" class="report-svg" role="img" aria-label="Daily cost trend">
 <rect x="0" y="0" width="{width}" height="{height}" fill="transparent"/>
 <line x1="{padding_x}" y1="{baseline}" x2="{end_x}" y2="{baseline}" stroke="#1f1f1f" stroke-width="1"/>
-<polygon points="{area}" fill="rgba(245,245,245,0.08)"/>
-<polyline points="{points}" fill="none" stroke="#f5f5f5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="{area_path}" fill="rgba(245,245,245,0.08)"/>
+<path d="{line_path}" fill="none" stroke="#f5f5f5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+{peak_label}
 {labels}
 </svg>"##,
-        baseline = height - padding_y,
-        end_x = width - padding_x,
-        area = area_points.join(" "),
-        points = points.join(" "),
+        baseline = baseline,
+        end_x = end_x,
+        area_path = area_path,
+        line_path = line_path,
+        peak_label = peak_label,
         labels = labels,
     )
 }
 
+fn curve_segments(points: &[(f64, f64)]) -> String {
+    if points.len() < 2 {
+        return String::new();
+    }
+    let mut path = String::new();
+    for i in 0..points.len() - 1 {
+        let p0 = points[i.saturating_sub(1)];
+        let p1 = points[i];
+        let p2 = points[i + 1];
+        let p3 = points[(i + 2).min(points.len() - 1)];
+        let c1x = p1.0 + (p2.0 - p0.0) / 6.0;
+        let c1y = p1.1 + (p2.1 - p0.1) / 6.0;
+        let c2x = p2.0 - (p3.0 - p1.0) / 6.0;
+        let c2y = p2.1 - (p3.1 - p1.1) / 6.0;
+        path.push_str(&format!(
+            " C {c1x:.2} {c1y:.2}, {c2x:.2} {c2y:.2}, {x:.2} {y:.2}",
+            c1x = c1x,
+            c1y = c1y,
+            c2x = c2x,
+            c2y = c2y,
+            x = p2.0,
+            y = p2.1,
+        ));
+    }
+    path
+}
+
 fn build_token_composition_svg(input: i64, output: i64, cache_w: i64, cache_r: i64) -> String {
     let segments = [
-        ("#f5f5f5", input.max(0) as f64),
-        ("#7cb9e8", output.max(0) as f64),
-        ("#fbbf24", cache_w.max(0) as f64),
-        ("#22c55e", cache_r.max(0) as f64),
+        ("#f5f5f5", "Input", input.max(0) as f64),
+        ("#7cb9e8", "Output", output.max(0) as f64),
+        ("#fbbf24", "Cache W", cache_w.max(0) as f64),
+        ("#22c55e", "Cache R", cache_r.max(0) as f64),
     ];
     let total = segments
         .iter()
-        .map(|(_, value)| *value)
+        .map(|(_, _, value)| *value)
         .sum::<f64>()
         .max(1.0);
     let width = 760.0;
@@ -1382,9 +1142,10 @@ fn build_token_composition_svg(input: i64, output: i64, cache_w: i64, cache_r: i
     let bar_y = 74.0;
     let bar_w = width - 44.0;
     let bar_h = 18.0;
+    let label_min_w = 48.0;
     let mut cursor = bar_x;
     let mut bars = String::new();
-    for (color, value) in segments {
+    for (color, label, value) in segments {
         let segment_w = (value / total) * bar_w;
         if segment_w > 0.0 {
             bars.push_str(&format!(
@@ -1392,6 +1153,15 @@ fn build_token_composition_svg(input: i64, output: i64, cache_w: i64, cache_r: i
                 x = cursor,
                 w = segment_w.max(2.0),
             ));
+            if segment_w >= label_min_w {
+                bars.push_str(&format!(
+                    r##"<text x="{cx:.2}" y="{ty:.2}" text-anchor="middle" fill="#0a0a0a" font-size="10" font-weight="700" font-family="JetBrains Mono, monospace">{label} {pct:.0}%</text>"##,
+                    cx = cursor + segment_w / 2.0,
+                    ty = bar_y + bar_h / 2.0 + 3.5,
+                    label = html_escape(label),
+                    pct = (value / total) * 100.0,
+                ));
+            }
         }
         cursor += segment_w;
     }
