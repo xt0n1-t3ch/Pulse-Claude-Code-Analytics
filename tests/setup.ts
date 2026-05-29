@@ -171,13 +171,19 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   exists: vi.fn(async () => false),
 }));
 
-vi.mock("chart.js/auto", () => ({
-  default: class {
+vi.mock("chart.js/auto", () => {
+  class Chart {
+    static defaults = { color: "", borderColor: "" };
+    data: { labels: unknown[]; datasets: { data: unknown[] }[] } = {
+      labels: [],
+      datasets: [{ data: [] }],
+    };
     destroy() {}
     update() {}
     resize() {}
-  },
-}));
+  }
+  return { Chart, default: Chart };
+});
 vi.mock("chart.js", () => {
   class Chart {
     static register() {}

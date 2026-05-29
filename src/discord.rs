@@ -417,7 +417,7 @@ fn resolve_presence_assets(
 /// - details: activity + project (line 1)
 /// - state: essential metrics with `·` separator (line 2)
 /// - tooltip: detailed breakdown shown on large image hover
-fn presence_lines(
+pub fn presence_lines(
     session: &ClaudeSessionSnapshot,
     effective_limits: Option<&RateLimits>,
     api_usage: Option<&UsageData>,

@@ -138,8 +138,6 @@ impl DiscordPresence {
                 let (large_image_key, small_image_key) =
                     normalize_asset_pair(resolved_large_key, resolved_small_key);
 
-                // Discord can occasionally keep stale data for same app/client.
-                // Clearing before a changed payload forces a hard refresh.
                 if payload_changed && let Some(client) = self.client.as_mut() {
                     let _ = client.clear_activity();
                 }
@@ -479,7 +477,7 @@ fn system_time_to_epoch(value: SystemTime) -> Option<i64> {
     i64::try_from(duration.as_secs()).ok()
 }
 
-fn presence_lines(
+pub fn presence_lines(
     session: &CodexSessionSnapshot,
     effective_limits: Option<&RateLimits>,
     resolved_plan: &ResolvedPlan,

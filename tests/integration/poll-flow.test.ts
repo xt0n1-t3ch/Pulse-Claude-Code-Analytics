@@ -1,0 +1,240 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
+import { get } from "svelte/store";
+import type {
+  HealthResponse,
+  MetricsResponse,
+  SessionInfo,
+  RateLimitInfo,
+  PlanInfo,
+  AnalyticsSummary,
+  HistoricalSession,
+  CostForecast,
+  HourlyActivity,
+  DailyStat,
+  ProjectStat,
+} from "@/lib/api";
+
+const health: HealthResponse = {
+  version: "0.1.0",
+  uptime_seconds: 300,
+  discord_status: "Connected",
+  discord_enabled: true,
+};
+
+const metrics: MetricsResponse = {
+  total_cost: 8,
+  input_tokens: 200_000,
+  pure_input_tokens: 150_000,
+  output_tokens: 60_000,
+  cache_write_tokens: 40_000,
+  cache_read_tokens: 300_000,
+  total_tokens: 600_000,
+  session_count: 2,
+  input_cost: 2,
+  output_cost: 3,
+  cache_write_cost: 2,
+  cache_read_cost: 1,
+  cache_hit_ratio: 66,
+  models: [{ model: "Claude Opus 4.8", sessions: 2, cost: 8, tokens: 600_000 }],
+};
+
+function makeSession(id: string, project: string): SessionInfo {
+  return {
+    session_id: id,
+    session_name: null,
+    project,
+    model: "Claude Opus 4.8",
+    model_id: "claude-opus-4-8",
+    provider: "claude",
+    context_window: "200K",
+    cost: 4,
+    tokens: 300_000,
+    input_tokens: 100_000,
+    output_tokens: 30_000,
+    cache_write_tokens: 20_000,
+    cache_read_tokens: 150_000,
+    branch: "main",
+    activity: "Editing",
+    activity_target: "stores.ts",
+    effort: "High",
+    effort_explicit: true,
+    is_idle: false,
+    started_at: "2026-05-28T10:00:00Z",
+    duration_secs: 600,
+    has_thinking: true,
+    subagent_count: 0,
+    subagents: [],
+    tokens_per_sec: 42,
+    input_cost: 1,
+    output_cost: 1.5,
+    cache_write_cost: 1,
+    cache_read_cost: 0.5,
+    speed: "standard",
+    fast: false,
+    service_tier: null,
+    app_name: null,
+  };
+}
+
+const liveSessions = [makeSession("s1", "pulse"), makeSession("s2", "other")];
+
+const rateLimitInfo: RateLimitInfo = {
+  provider: "claude",
+  five_hour_pct: 40,
+  five_hour_resets: "2026-05-28T18:00:00Z",
+  five_hour_label: "Current session",
+  five_hour_window_minutes: 300,
+  seven_day_pct: 55,
+  seven_day_resets: "2026-06-01T00:00:00Z",
+  seven_day_label: "Weekly",
+  seven_day_window_minutes: null,
+  sonnet_pct: 12,
+  sonnet_resets: "2026-06-01T00:00:00Z",
+  extra_enabled: false,
+  extra_limit: null,
+  extra_used: null,
+  extra_pct: null,
+  source: "Anthropic usage API",
+};
+
+const planInfoFixture: PlanInfo = {
+  provider: "claude",
+  plan_name: "Max 20x ($200/mo)",
+  detected: true,
+};
+
+const summary: AnalyticsSummary = {
+  total_sessions: 2,
+  total_cost: 8,
+  total_tokens: 600_000,
+  total_cache_read: 300_000,
+  total_cache_write: 40_000,
+  avg_duration_secs: 600,
+  avg_tokens_per_session: 300_000,
+  avg_cost_per_session: 4,
+  top_project: "pulse",
+  top_model: "Claude Opus 4.8",
+  days_tracked: 14,
+};
+
+function hist(id: string, project: string): HistoricalSession {
+  return {
+    id,
+    session_name: null,
+    project,
+    model: "Claude Opus 4.8",
+    model_id: "claude-opus-4-8",
+    context_window: "200K",
+    branch: null,
+    effort: "High",
+    started_at: "2026-05-20T10:00:00Z",
+    ended_at: "2026-05-20T10:30:00Z",
+    duration_secs: 1800,
+    total_cost: 6,
+    input_tokens: 50_000,
+    output_tokens: 20_000,
+    cache_write_tokens: 10_000,
+    cache_read_tokens: 100_000,
+    total_tokens: 180_000,
+    input_cost: 1.8,
+    output_cost: 2.4,
+    cache_write_cost: 1.2,
+    cache_read_cost: 0.6,
+    has_thinking: false,
+    subagent_count: 0,
+    is_active: false,
+  };
+}
+
+const forecast: CostForecast = {
+  spent_this_month: 30,
+  days_elapsed: 10,
+  days_in_month: 31,
+  projected_monthly: 93,
+  daily_average: 3,
+};
+
+const hourly: HourlyActivity[] = [{ hour: 9, session_count: 2, total_cost: 5 }];
+const daily: DailyStat[] = [
+  { date: "2026-05-20", project: "pulse", model: "Claude Opus 4.8", session_count: 2, total_cost: 6, total_tokens: 500_000, input_tokens: 100_000, output_tokens: 50_000, cache_write_tokens: 40_000, cache_read_tokens: 310_000 },
+];
+const projects: ProjectStat[] = [
+  { project: "pulse", session_count: 2, total_cost: 8, total_tokens: 600_000, avg_session_cost: 4, avg_duration_secs: 600, cache_read_tokens: 300_000, cache_write_tokens: 40_000, top_model: "Claude Opus 4.8" },
+];
+
+const getHealth = vi.fn(async () => health);
+const getMetrics = vi.fn(async () => metrics);
+const getLiveSessions = vi.fn(async () => liveSessions);
+const getRateLimits = vi.fn(async () => rateLimitInfo);
+const getPlanInfo = vi.fn(async () => planInfoFixture);
+
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    getHealth: () => getHealth(),
+    getMetrics: () => getMetrics(),
+    getLiveSessions: () => getLiveSessions(),
+    getRateLimits: () => getRateLimits(),
+    getPlanInfo: () => getPlanInfo(),
+    getAnalyticsSummary: async () => summary,
+    getSessionHistory: async () => [hist("h1", "pulse")],
+    getCostForecast: async () => forecast,
+    getHourlyActivity: async () => hourly,
+    getDailyStats: async () => daily,
+    getProjectStats: async () => projects,
+  };
+});
+
+describe("poll() to stores to Dashboard full flow", () => {
+  beforeEach(async () => {
+    getHealth.mockClear();
+    getMetrics.mockClear();
+    getLiveSessions.mockClear();
+    getRateLimits.mockClear();
+    getPlanInfo.mockClear();
+    const { health: h, metrics: m, sessions: s, rateLimits: r, planInfo: p } = await import("@/lib/stores");
+    h.set(null);
+    m.set(null);
+    s.set([]);
+    r.set(null);
+    p.set(null);
+  });
+
+  it("hydrates every global store from a single poll() pass", async () => {
+    const stores = await import("@/lib/stores");
+    await stores.poll();
+
+    expect(getHealth).toHaveBeenCalledTimes(1);
+    expect(getMetrics).toHaveBeenCalledTimes(1);
+    expect(getLiveSessions).toHaveBeenCalledTimes(1);
+    expect(getRateLimits).toHaveBeenCalledTimes(1);
+    expect(getPlanInfo).toHaveBeenCalledTimes(1);
+
+    expect(get(stores.health)).toEqual(health);
+    expect(get(stores.metrics)).toEqual(metrics);
+    expect(get(stores.sessions)).toHaveLength(2);
+    expect(get(stores.rateLimits)).toEqual(rateLimitInfo);
+    expect(get(stores.planInfo)).toEqual(planInfoFixture);
+    expect(get(stores.activeSessions)).toHaveLength(2);
+  });
+
+  it("renders the Dashboard against the polled store state end to end", async () => {
+    const stores = await import("@/lib/stores");
+    await stores.poll();
+    await tick();
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container, getByText } = render(Dashboard);
+    await tick();
+
+    await waitFor(() => expect(getByText(/Plan Usage Limits/)).toBeTruthy());
+    const kpiValues = [...container.querySelectorAll(".stats-row .stat-value")].map((e) => e.textContent?.trim());
+    expect(kpiValues[0]).toBe("$8.00");
+    await waitFor(() => {
+      expect(container.querySelectorAll(".session-list .session-card").length).toBe(2);
+    });
+  });
+});
