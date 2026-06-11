@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Install Linux deps
         if: matrix.os == 'ubuntu-latest'
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
 
       - uses: actions/download-artifact@v4
@@ -151,7 +151,7 @@ jobs:
         id: notes
         shell: bash
         env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -162,10 +162,7 @@ jobs:
             git-cliff --config cliff.toml --tag "$TAG" --strip header --latest -o release-body.md || : > release-body.md
           fi
           if [ ! -s release-body.md ]; then
-            printf "Release **%s**.
-
-See the [full changelog](https://github.com/%s/blob/main/CHANGELOG.md) for details.
-" "$TAG" "$REPO" > release-body.md
+            printf "Release **%s**.\n\nSee the [full changelog](https://github.com/%s/blob/main/CHANGELOG.md) for details.\n" "$TAG" "$REPO" > release-body.md
           fi
           echo "::group::release-body.md"
           cat release-body.md
@@ -175,12 +172,12 @@ See the [full changelog](https://github.com/%s/blob/main/CHANGELOG.md) for detai
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: Pulse ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Pulse ${{ inputs.tag || github.ref_name }}
           body_path: ${{ steps.notes.outputs.body_path }}
           append_body: false
           generate_release_notes: false
           draft: false
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: release-assets/*
           fail_on_unmatched_files: true
