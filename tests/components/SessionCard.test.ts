@@ -77,4 +77,28 @@ describe("SessionCard", () => {
     });
     expect(getByText(/Claude Opus 4\.8/)).toBeTruthy();
   });
+
+  it("renders Fable and Mythos model badges without inflated-tokenizer warnings", async () => {
+    const { getByText, queryByTitle, rerender } = render(SessionCard, {
+      props: {
+        session: makeSession({
+          model: "Claude Fable 5",
+          model_id: "claude-fable-5",
+          context_window: "1M",
+        }),
+      },
+    });
+    expect(getByText(/Claude Fable 5/).classList.contains("mythos-class")).toBe(true);
+    expect(queryByTitle(/Inflated tokenizer/i)).toBeNull();
+
+    await rerender({
+      session: makeSession({
+        model: "Claude Mythos 5",
+        model_id: "claude-mythos-5",
+        context_window: "1M",
+      }),
+    });
+    expect(getByText(/Claude Mythos 5/).classList.contains("mythos-class")).toBe(true);
+    expect(queryByTitle(/Inflated tokenizer/i)).toBeNull();
+  });
 });

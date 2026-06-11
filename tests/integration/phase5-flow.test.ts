@@ -4,6 +4,7 @@ import { tick } from "svelte";
 import type {
   SessionInfo,
   ContextBreakdown,
+  SessionContextBreakdown,
   SessionContextUsage,
   ReportsBundle,
 } from "@/lib/api";
@@ -137,9 +138,15 @@ const minimalBundle: ReportsBundle = {
   inflection_points: [],
 };
 
+const breakdownsFixture: SessionContextBreakdown[] = [
+  { session_id: "s1", project: "pulse", model_id: "claude-opus-4-8", is_idle: false, activity: "Idle", breakdown: breakdownFor("s1") },
+  { session_id: "s2", project: "other", model_id: "claude-opus-4-8", is_idle: false, activity: "Idle", breakdown: breakdownFor("s2") },
+];
+
 const getContextBreakdown = vi.fn(async (sessionId?: string) =>
   breakdownFor(sessionId ?? "default"),
 );
+const getContextBreakdowns = vi.fn(async () => breakdownsFixture);
 const getSessionsContextUsage = vi.fn(async () => usage);
 const getReportsBundle = vi.fn(async () => minimalBundle);
 
@@ -148,6 +155,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     getContextBreakdown: (sessionId?: string) => getContextBreakdown(sessionId),
+    getContextBreakdowns: () => getContextBreakdowns(),
     getSessionsContextUsage: () => getSessionsContextUsage(),
     getReportsBundle: () => getReportsBundle(),
   };
@@ -194,6 +202,7 @@ function makeSession(id: string, project: string): SessionInfo {
 describe("Phase 5 flow", () => {
   beforeEach(() => {
     getContextBreakdown.mockClear();
+    getContextBreakdowns.mockClear();
     getSessionsContextUsage.mockClear();
     getReportsBundle.mockClear();
   });
@@ -203,14 +212,20 @@ describe("Phase 5 flow", () => {
     sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
 
     const Context = (await import("@/views/Context.svelte")).default;
-    const { findByText } = render(Context);
+    const { container } = render(Context);
     await tick();
 
     await waitFor(() => expect(getContextBreakdown).toHaveBeenCalled());
     const callsBefore = getContextBreakdown.mock.calls.length;
 
-    const otherPill = await findByText("other");
-    await fireEvent.click(otherPill);
+    let otherPill: HTMLElement | undefined;
+    await waitFor(() => {
+      otherPill = [...container.querySelectorAll<HTMLElement>(".session-pill")].find((p) =>
+        p.textContent?.includes("other"),
+      );
+      expect(otherPill).toBeTruthy();
+    });
+    await fireEvent.click(otherPill!);
 
     await waitFor(() => {
       expect(getContextBreakdown.mock.calls.length).toBeGreaterThan(callsBefore);

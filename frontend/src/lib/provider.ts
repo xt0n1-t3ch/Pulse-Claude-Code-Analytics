@@ -100,6 +100,7 @@ const initialProvider: Provider = stored === "codex" ? "codex" : "claude";
 
 export const provider: Writable<Provider> = writable<Provider>(initialProvider);
 export const providerCopy: Writable<ProviderCopyInfo | null> = writable(null);
+export const providerRevision: Writable<number> = writable(0);
 /** True once we trust the active provider — either read from localStorage or
  *  confirmed by the backend. While false, `providerProfile` yields neutral
  *  branding so the UI never briefly labels Codex users as Claude. */
@@ -114,11 +115,7 @@ provider.subscribe((p) => {
         }
     } catch {}
     if (providerInitialized) {
-        void persistActiveProvider(p).catch(() => {});
-        // Refresh backend copy for the new active provider.
-        void getProviderCopy()
-            .then((copy) => providerCopy.set(copy))
-            .catch(() => {});
+        providerResolved.set(true);
     }
 });
 providerInitialized = true;
@@ -147,8 +144,16 @@ export const providerProfile = derived(
     },
 );
 
-export function setProvider(p: Provider): void {
+export async function setProvider(p: Provider): Promise<void> {
     provider.set(p);
+    providerResolved.set(true);
+    try {
+        document.documentElement.setAttribute("data-provider", p);
+    } catch {}
+    await persistActiveProvider(p);
+    const copy = await getProviderCopy();
+    providerCopy.set(copy);
+    providerRevision.update((value) => value + 1);
 }
 
 void getActiveProvider()
@@ -163,6 +168,7 @@ void getActiveProvider()
     })
     .then((copy) => {
         if (copy) providerCopy.set(copy);
+        providerRevision.update((value) => value + 1);
     })
     .catch(() => {
         // Backend unreachable — promote whatever we have so the UI doesn't

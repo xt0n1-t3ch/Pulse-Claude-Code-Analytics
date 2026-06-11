@@ -20,6 +20,7 @@
   );
 
   let hasInflatedTokenizer = $derived(/opus-4-(?:[7-9]|\d{2,})/.test(session.model_id.toLowerCase()));
+  let isMythosClass = $derived(/(?:fable|mythos)/.test(session.model_id.toLowerCase()));
 </script>
 
 <div
@@ -36,7 +37,7 @@
     {#if session.branch}
       <span class="badge branch">{session.branch}</span>
     {/if}
-    <span class="badge model">{session.model}{#if hasInflatedTokenizer}<span
+    <span class="badge model" class:mythos-class={isMythosClass}>{session.model}{#if hasInflatedTokenizer}<span
           class="inflated-marker"
           title="Inflated tokenizer — Opus 4.7+ produces up to ~35% more tokens than 4.6 for the same text, raising cost at unchanged per-token rates."
         >⚠</span>{/if}</span>
@@ -186,6 +187,7 @@
 
   .badge.branch { color: var(--accent); background: var(--accent-dim); }
   .badge.model { color: var(--success); background: rgba(76, 175, 80, 0.12); }
+  .badge.model.mythos-class { color: var(--info); background: var(--info-dim); }
   .badge.effort { color: var(--text-muted); background: var(--bg-elevated); }
   .badge.effort.effort-implicit { opacity: 0.65; font-style: italic; cursor: help; }
   .badge.thinking { color: #c3b1e1; background: rgba(195, 177, 225, 0.12); }

@@ -34,6 +34,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Check Codex Rich Presence upstream pin
+        shell: pwsh
+        run: ./scripts/check-codex-rich-presence-upstream.ps1
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"

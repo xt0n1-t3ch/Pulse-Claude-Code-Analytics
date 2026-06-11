@@ -483,7 +483,7 @@ pub fn presence_lines(
                 session.max_turn_api_input,
             );
             let stripped = crate::cost::strip_claude_prefix(&model_with_ctx);
-            if stripped.is_empty() || stripped == "Claude" {
+            if stripped.is_empty() || stripped == "Claude" || stripped.starts_with('(') {
                 session.model.as_deref().unwrap_or("Unknown").to_string()
             } else {
                 stripped.to_string()
@@ -1084,5 +1084,59 @@ mod tests {
         );
         render_extra_usage_to_state(&mut parts, Some(&usage));
         assert!(parts.is_empty());
+    }
+
+    fn mythos_class_session(model_id: &str) -> ClaudeSessionSnapshot {
+        ClaudeSessionSnapshot {
+            session_id: format!("{model_id}-session"),
+            cwd: std::path::PathBuf::from("D:/X/Pulse"),
+            project_name: "pulse".to_string(),
+            git_branch: None,
+            model: Some(model_id.to_string()),
+            model_display: Some(crate::cost::model_display_name(model_id)),
+            session_total_tokens: Some(120_000),
+            last_turn_tokens: Some(2_000),
+            session_delta_tokens: None,
+            input_tokens: 100_000,
+            output_tokens: 20_000,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            max_turn_api_input: 100_000,
+            reasoning_effort: crate::session::ReasoningEffort::High,
+            reasoning_effort_explicit: true,
+            has_thinking_blocks: false,
+            speed: crate::session::Speed::Standard,
+            service_tier: None,
+            total_cost: 2.0,
+            input_cost: 1.0,
+            output_cost: 1.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
+            total_api_duration_ms: 0,
+            limits: RateLimits::default(),
+            activity: None,
+            started_at: None,
+            last_token_event_at: None,
+            last_activity: std::time::SystemTime::now(),
+            source: crate::session::DataSource::Jsonl,
+            source_file: std::path::PathBuf::from("session.jsonl"),
+            subagents: Vec::new(),
+            is_subagent: false,
+            parent_session_id: None,
+        }
+    }
+
+    #[test]
+    fn mythos_class_models_render_clean_rich_presence_labels() {
+        let config = PresenceConfig::default();
+        for (model_id, expected) in [
+            ("claude-fable-5", "Fable 5 (1M)"),
+            ("claude-mythos-5", "Mythos 5 (1M)"),
+        ] {
+            let session = mythos_class_session(model_id);
+            let (_details, state, _tooltip) = presence_lines(&session, None, None, &config);
+            assert!(state.contains(expected), "{model_id}: {state}");
+            assert!(!state.contains("(claude-"), "{model_id}: {state}");
+        }
     }
 }

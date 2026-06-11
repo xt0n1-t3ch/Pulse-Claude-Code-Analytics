@@ -26,6 +26,10 @@ fn strip_context_suffix(model_id: &str) -> &str {
     model_id.split('[').next().unwrap_or(model_id)
 }
 
+fn is_mythos_class(id: &str) -> bool {
+    id.contains("fable") || id.contains("mythos")
+}
+
 pub fn model_pricing(model_id: &str) -> ModelPricing {
     let id = strip_context_suffix(model_id).to_lowercase();
     if id.contains("opus") {
@@ -66,6 +70,13 @@ pub fn model_pricing(model_id: &str) -> ModelPricing {
                 cache_write_per_million: 1.25,
                 cache_read_per_million: 0.10,
             }
+        }
+    } else if is_mythos_class(&id) {
+        ModelPricing {
+            input_per_million: 10.0,
+            output_per_million: 50.0,
+            cache_write_per_million: 12.5,
+            cache_read_per_million: 1.0,
         }
     } else {
         ModelPricing {
@@ -128,6 +139,10 @@ pub fn model_display_name(model_id: &str) -> String {
         "Haiku"
     } else if id.contains("sonnet") {
         "Sonnet"
+    } else if id.contains("fable") {
+        "Fable"
+    } else if id.contains("mythos") {
+        "Mythos"
     } else {
         let cleaned = id
             .trim_end_matches(|c: char| c == '-' || c.is_ascii_digit())
@@ -167,6 +182,9 @@ pub fn supports_1m_context(model_id: &str) -> bool {
         return true;
     }
     let id = strip_context_suffix(model_id).to_lowercase();
+    if is_mythos_class(&id) {
+        return true;
+    }
     if id.contains("haiku") {
         return false;
     }
@@ -227,6 +245,9 @@ pub fn is_ga_1m_context(model_id: &str) -> bool {
         return true;
     }
     let id = strip_context_suffix(model_id).to_lowercase();
+    if is_mythos_class(&id) {
+        return true;
+    }
     if id.contains("opus") {
         return is_version_at_least(&id, "opus", 4, 6);
     }
@@ -963,6 +984,8 @@ mod tests {
             ("claude-opus-4-8-20260528", 5.0, 25.0),
             ("claude-sonnet-4-5-20250929", 3.0, 15.0),
             ("claude-haiku-4-5-20251001", 1.0, 5.0),
+            ("claude-fable-5-20260609", 10.0, 50.0),
+            ("claude-mythos-5", 10.0, 50.0),
         ];
         for (model, input_rate, output_rate) in cases {
             let p = model_pricing(model);
@@ -975,5 +998,119 @@ mod tests {
                 "{model} output rate"
             );
         }
+    }
+
+    #[test]
+    fn fable_5_pricing() {
+        for model in ["claude-fable-5", "claude-mythos-5"] {
+            let p = model_pricing(model);
+            assert!((p.input_per_million - 10.0).abs() < 0.001, "{model} input");
+            assert!(
+                (p.output_per_million - 50.0).abs() < 0.001,
+                "{model} output"
+            );
+            assert!(
+                (p.cache_write_per_million - 12.5).abs() < 0.001,
+                "{model} cache_write"
+            );
+            assert!(
+                (p.cache_read_per_million - 1.0).abs() < 0.001,
+                "{model} cache_read"
+            );
+        }
+    }
+
+    #[test]
+    fn fable_5_dated_variant_pricing() {
+        let p = model_pricing("claude-fable-5-20260609");
+        assert!((p.input_per_million - 10.0).abs() < 0.001, "input dated");
+        assert!((p.output_per_million - 50.0).abs() < 0.001, "output dated");
+        let p = model_pricing("claude-mythos-5-20260609");
+        assert!(
+            (p.input_per_million - 10.0).abs() < 0.001,
+            "mythos input dated"
+        );
+        assert!(
+            (p.output_per_million - 50.0).abs() < 0.001,
+            "mythos output dated"
+        );
+    }
+
+    #[test]
+    fn fable_5_display_name() {
+        assert_eq!(model_display_name("claude-fable-5"), "Claude Fable 5");
+        assert_eq!(
+            model_display_name("claude-fable-5-20260609"),
+            "Claude Fable 5"
+        );
+        assert_eq!(model_display_name("claude-fable-5[1m]"), "Claude Fable 5");
+        assert_eq!(model_display_name("claude-mythos-5"), "Claude Mythos 5");
+        assert_eq!(
+            model_display_name("claude-mythos-5-20260609"),
+            "Claude Mythos 5"
+        );
+    }
+
+    #[test]
+    fn fable_5_is_ga_1m_context() {
+        assert!(is_ga_1m_context("claude-fable-5"));
+        assert!(is_ga_1m_context("claude-fable-5-20260609"));
+        assert!(is_ga_1m_context("claude-mythos-5"));
+        assert!(is_ga_1m_context("claude-mythos-5-20260609"));
+    }
+
+    #[test]
+    fn fable_5_supports_1m_context() {
+        assert!(supports_1m_context("claude-fable-5"));
+        assert!(supports_1m_context("claude-fable-5-20260609"));
+        assert!(supports_1m_context("claude-mythos-5"));
+        assert!(supports_1m_context("claude-mythos-5-20260609"));
+    }
+
+    #[test]
+    fn fable_5_no_1m_surcharge() {
+        let with = calculate_cost_with_context("claude-fable-5", 50_000, 5_000, 100_000, 100_000);
+        let plain = calculate_cost("claude-fable-5", 50_000, 5_000, 100_000, 100_000);
+        assert!((with - plain).abs() < 0.0001, "GA model: no surcharge");
+        let with = calculate_cost_with_context("claude-mythos-5", 50_000, 5_000, 100_000, 100_000);
+        let plain = calculate_cost("claude-mythos-5", 50_000, 5_000, 100_000, 100_000);
+        assert!(
+            (with - plain).abs() < 0.0001,
+            "Mythos GA model: no surcharge"
+        );
+    }
+
+    #[test]
+    fn fable_5_display_with_context_shows_1m() {
+        assert_eq!(
+            model_display_with_context("claude-fable-5", "Claude Fable 5", 0),
+            "Claude Fable 5 (1M)"
+        );
+        assert_eq!(
+            model_display_with_context("claude-mythos-5", "Claude Mythos 5", 0),
+            "Claude Mythos 5 (1M)"
+        );
+    }
+
+    #[test]
+    fn fable_5_not_inflated_tokenizer() {
+        assert!(!has_inflated_tokenizer("claude-fable-5"));
+        assert!(!has_inflated_tokenizer("claude-mythos-5"));
+    }
+
+    #[test]
+    fn fable_5_not_fast_capable() {
+        assert!(!is_fast_capable("claude-fable-5"));
+        assert!(!is_fast_capable("claude-mythos-5"));
+    }
+
+    #[test]
+    fn fable_5_strip_display_for_discord() {
+        let display = model_display_name("claude-fable-5");
+        assert_eq!(display, "Claude Fable 5");
+        assert_eq!(strip_claude_prefix(&display), "Fable 5");
+        let display = model_display_name("claude-mythos-5");
+        assert_eq!(display, "Claude Mythos 5");
+        assert_eq!(strip_claude_prefix(&display), "Mythos 5");
     }
 }

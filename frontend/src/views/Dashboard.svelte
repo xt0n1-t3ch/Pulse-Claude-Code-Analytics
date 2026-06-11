@@ -211,7 +211,7 @@
       </div>
       <div class="usage-section">
         <div class="usage-group">
-          <div class="usage-group-label">{$providerProfile.id === "claude" ? "Current session" : "Live quotas"}</div>
+          <div class="usage-group-label">{$providerProfile.id === "claude" ? "5-hour window" : "Live quotas"}</div>
           {#if $rateLimits && $rateLimits.five_hour_resets !== "N/A"}
             <ProgressBar label={$rateLimits.five_hour_label} pct={$rateLimits.five_hour_pct} meta={formatResetRelative($rateLimits.five_hour_resets)} />
           {:else if $rateLimits}
