@@ -304,7 +304,7 @@ fn claude_daemon_pipeline_tracks_last_turn_speed_effort_and_presence_markers() {
 fn codex_meta_line() -> String {
     serde_json::json!({
         "type": "session_meta",
-        "payload": { "id": CODEX_SESSION_ID, "cwd": "C:\\repo\\pulse" }
+        "payload": { "id": CODEX_SESSION_ID, "cwd": "/repo/pulse" }
     })
     .to_string()
 }
@@ -313,7 +313,7 @@ fn codex_turn_context_line(timestamp: &str) -> String {
     serde_json::json!({
         "timestamp": timestamp,
         "type": "turn_context",
-        "payload": { "cwd": "C:\\repo\\pulse", "model": "gpt-5.3-codex", "effort": "xhigh" }
+        "payload": { "cwd": "/repo/pulse", "model": "gpt-5.3-codex", "effort": "xhigh" }
     })
     .to_string()
 }
