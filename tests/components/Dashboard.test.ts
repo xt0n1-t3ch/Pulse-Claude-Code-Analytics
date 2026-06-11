@@ -127,7 +127,7 @@ describe("Dashboard.svelte", () => {
       provider: "claude",
       five_hour_pct: 40,
       five_hour_resets: "2026-05-28T18:00:00Z",
-      five_hour_label: "Current session",
+      five_hour_label: "5-hour window",
       five_hour_window_minutes: 300,
       seven_day_pct: 55,
       seven_day_resets: "2026-06-01T00:00:00Z",

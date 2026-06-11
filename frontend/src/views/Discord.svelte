@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessions, discordUser, health, discordPreview } from "../lib/stores";
+  import { sessions, activeSessions, discordUser, health, discordPreview } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
   import { setDiscordEnabled } from "../lib/api";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
@@ -45,7 +45,8 @@
     return null;
   });
 
-  let previewSession = $derived($sessions[0]);
+  let previewSession = $derived($activeSessions[0] ?? $sessions[0]);
+  let activeSessionCount = $derived($activeSessions.length);
   let previewAppName = $derived(previewSession?.app_name ?? $providerProfile.productName);
   let previewAssetKey = $derived(
     previewSession?.app_name === "Codex App" ? "codex-app" : $providerProfile.defaultAssetKey,
@@ -98,6 +99,10 @@
         Broadcasting as <strong style="color: {$providerProfile.accent}">{previewAppName}</strong>
         <span class="sub-dot">·</span>
         {activeCount} of {fieldRows.length} fields shown
+        {#if activeSessionCount > 1}
+          <span class="sub-dot">·</span>
+          {activeSessionCount} active sessions
+        {/if}
       </span>
     </div>
     <div class="header-meta">

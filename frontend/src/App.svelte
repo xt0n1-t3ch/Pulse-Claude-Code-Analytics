@@ -3,6 +3,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
   import Toast from "./components/Toast.svelte";
+  import UpdateBanner from "./components/UpdateBanner.svelte";
   import Dashboard from "./views/Dashboard.svelte";
   import Sessions from "./views/Sessions.svelte";
   import Context from "./views/Context.svelte";
@@ -10,7 +11,8 @@
   import Reports from "./views/Reports.svelte";
   import Discord from "./views/Discord.svelte";
   import Settings from "./views/Settings.svelte";
-  import { currentView, startPolling, stopPolling, loadDiscordUser } from "./lib/stores";
+  import { currentView, startPolling, stopPolling, loadDiscordUser, poll, health, metrics, sessions, rateLimits, planInfo } from "./lib/stores";
+  import { providerRevision } from "./lib/provider";
   import { fly } from "svelte/transition";
 
   let theme = $state(localStorage.getItem("pulse-theme") || "dark");
@@ -27,7 +29,23 @@
     }
     startPolling(5000);
     loadDiscordUser();
-    return stopPolling;
+    let firstProviderRevision = true;
+    const unsubscribeProviderRevision = providerRevision.subscribe(() => {
+      if (firstProviderRevision) {
+        firstProviderRevision = false;
+        return;
+      }
+      health.set(null);
+      metrics.set(null);
+      sessions.set([]);
+      rateLimits.set(null);
+      planInfo.set(null);
+      void poll();
+    });
+    return () => {
+      unsubscribeProviderRevision();
+      stopPolling();
+    };
   });
 </script>
 
@@ -67,6 +85,7 @@
   </main>
 </div>
 <Toast />
+<UpdateBanner />
 
 <style>
   .main-wrapper {

@@ -1,6 +1,6 @@
 #![windows_subsystem = "windows"]
 
-use pulse::commands;
+use pulse::{commands, update_check};
 
 use tauri::{
     Manager,
@@ -96,6 +96,7 @@ fn main() {
             commands::get_daily_stats,
             commands::get_analytics_summary,
             commands::get_context_breakdown,
+            commands::get_context_breakdowns,
             commands::get_sessions_context_usage,
             commands::get_project_stats,
             commands::get_hourly_activity,
@@ -119,6 +120,8 @@ fn main() {
             commands::get_session_health,
             commands::copy_fix_prompt,
             commands::get_reports_bundle,
+            update_check::check_app_update,
+            update_check::open_app_release_page,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

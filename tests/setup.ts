@@ -13,6 +13,7 @@ const helpers = vi.hoisted(() => {
     "get_daily_stats",
     "get_recommendations",
     "get_sessions_context_usage",
+    "get_context_breakdowns",
   ]);
   const emptyReportsBundle = {
     provider: "claude",
@@ -99,12 +100,25 @@ const helpers = vi.hoisted(() => {
     },
     inflection_points: [],
   };
+  const currentUpdate = {
+    current_version: "0.0.0-test",
+    latest_version: null,
+    update_available: false,
+    release_name: null,
+    release_notes: null,
+    release_url: "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases",
+    published_at: null,
+    checked_at: "2026-06-10T00:00:00Z",
+    assets: [],
+  };
   return {
     pulseInvoke: async (cmd: string): Promise<unknown> => {
       if (emptyArrayCmds.has(cmd)) return [];
       if (cmd === "get_db_size") return 0;
       if (cmd === "get_active_provider") return "claude";
       if (cmd === "get_reports_bundle") return emptyReportsBundle;
+      if (cmd === "check_app_update") return currentUpdate;
+      if (cmd === "open_app_release_page") return undefined;
       return undefined;
     },
   };

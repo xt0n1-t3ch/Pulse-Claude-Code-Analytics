@@ -2,6 +2,45 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.2.0] — 2026-06-10
+
+v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Window view's stale one-session bias, and Pulse's first in-app release-awareness flow. The release adds new model economics, multi-session UI, and update-check UX without removing any public API.
+
+### Added
+
+- Claude Fable 5 and Claude Mythos 5 support: `claude-fable-5` / `claude-mythos-5`, $10 input / $50 output per MTok, $12.50 5-minute cache writes, $1 cache reads, 1M GA context, and 128K max output metadata.
+- Rich Presence labels for the new family: `Fable 5 (1M)` and `Mythos 5 (1M)` render cleanly instead of falling through to raw parenthetical model IDs.
+- `get_context_breakdowns(session_ids?: string[] | null)` Tauri command for returning context breakdowns across active sessions.
+- Context Window active-session cards: every live session is visible at the top of the view, with utilization, activity, and click-to-select detail routing.
+- Frontend API type `SessionContextBreakdown` and Vitest coverage for multi-session Context cards, active Discord preview selection, and Fable/Mythos session badges.
+- Backend update-check command `check_app_update()` that compares the packaged Pulse version against the latest stable GitHub Release, plus `open_app_release_page()` with a Pulse-release URL allowlist.
+- Global update popup with current/latest version, release title, release notes toggle, Later, Skip version, Open release, 6-hour polling, and a `?fakeUpdate=` development lane.
+- Documentation page [docs/fable-5.md](docs/fable-5.md) with official specs, pricing, context window, cache TTL, and validator notes.
+- Documentation page [docs/update-checks.md](docs/update-checks.md) covering the release-check flow and why v1.2.0 does not fake a signed auto-installer without updater metadata.
+- Documentation page [docs/codex-rich-presence-upstream.md](docs/codex-rich-presence-upstream.md) covering the Codex Rich Presence source-of-truth repo, sync scripts, and CI freshness gate.
+- `src/codex/UPSTREAM.json`, `scripts/check-codex-rich-presence-upstream.*`, and `scripts/update-codex-rich-presence.*` so Pulse can prove and refresh its mirrored Codex Rich Presence core from `xt0n1-t3ch/Codex-Discord-Rich-Presence`.
+- `tests/codex_upstream_contract.rs` to lock the Pulse-facing boundary around the upstream Codex presence modules.
+
+### Changed
+
+- `get_context_breakdown(session_id?)` is now a compatibility wrapper over `get_context_breakdowns`, keeping older callers stable while centralizing context logic.
+- Context fallback selection now prefers active sessions before historical/idle rows; `get_sessions_context_usage()` prepends live active sessions, then dedupes historical results by session id.
+- Discord preview chooses the first active session before falling back to historical sessions and shows the active-session count when multiple sessions are live.
+- Usage-limit labels now use provider-accurate copy such as `5-hour window` instead of calling Anthropic's usage window a current session.
+- Settings now exposes a manual **Check for updates** action that triggers the same global update popup.
+- Frontend package metadata now matches the v1.2.0 root, Cargo, Tauri, and lockfile versions.
+- Codex-specific Rich Presence code now flows from the standalone [Codex Discord Rich Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence) repository through a source-sync mirror plus a small Pulse compatibility overlay, avoiding private drift while keeping Pulse's Windows resources link-safe.
+
+### Fixed
+
+- Fable/Mythos pricing does not apply beta long-context surcharge across the full 1M window.
+- Fable/Mythos sessions are not marked as Opus-tokenizer-inflated and are not treated as fast-capable until Anthropic documents those behaviors.
+- Context Window no longer shows only one active session when multiple Claude/Codex sessions are live.
+- Per-session Context Window utilization no longer reports impossible values above 100% from lifetime session token totals; history stores the last context snapshot and clamps stale rows.
+- Windows session polling no longer launches `wsl.exe` by default. WSL transcript scanning is now explicit via `CC_PRESENCE_INCLUDE_WSL=1`, preventing broken WSL installs from throwing crash dialogs in the background.
+- Mirrored Codex Rich Presence git-branch probes now use no-window process spawning on Windows.
+- Removed stale Markdown issue templates now superseded by the YAML templates.
+
 ## [1.1.0] — 2026-05-28
 
 ### Added
@@ -43,5 +82,6 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 - **Local-first** — SQLite at `~/.claude/pulse-analytics.db`, zero telemetry.
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
+[1.2.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.2.0
 [1.1.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.1.0
 [1.0.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.0.0

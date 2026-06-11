@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { health, rateLimits, planInfo } from "../lib/stores";
-  import { provider, providerProfile, PROVIDERS, type Provider } from "../lib/provider";
+  import { health, rateLimits, planInfo, addToast } from "../lib/stores";
+  import { provider, providerProfile, setProvider, PROVIDERS, type Provider } from "../lib/provider";
   import { setPlanOverride, exportAllData, clearHistory, getDbSize, getPlanInfo, getAnalyticsSummary } from "../lib/api";
   import type { AnalyticsSummary } from "../lib/api";
   import PulseMark from "../components/PulseMark.svelte";
@@ -107,6 +107,11 @@
     planSaving = false;
   }
 
+  function checkForUpdates(): void {
+    window.dispatchEvent(new CustomEvent("pulse:check-updates"));
+    addToast("Checking for updates…", "info");
+  }
+
   function fmtBytes(b: number): string {
     if (b < 1024) return b + " B";
     if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " KB";
@@ -155,6 +160,10 @@
       <h2 class="view-title">Settings</h2>
       <span class="view-sub">Tune the telemetry source, broadcast identity, and local analytics store.</span>
     </div>
+    <button type="button" class="btn check-updates-btn" onclick={checkForUpdates} aria-label="Check for application updates">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+      Check for updates
+    </button>
   </div>
 
   <!-- IDENTITY — editorial masthead + control strip -->
@@ -368,6 +377,12 @@
     color: var(--text-muted);
     line-height: var(--lh-snug);
     max-width: 560px;
+  }
+  .check-updates-btn {
+    flex-shrink: 0;
+    padding: 7px 12px;
+    font-size: var(--fs-sm);
+    font-weight: 500;
   }
 
   /* ── IDENTITY — flat, Dashboard-aligned; no overflow clip so portal menus escape ── */
