@@ -20,26 +20,13 @@
   let planSavedFlash = $state(false);
   let planSavedTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function normalizePlanOverride(planName: string): string {
-    const normalized = planName.trim().toLowerCase();
-    if (!normalized) return "auto";
-    if (normalized.includes("max 20x")) return "Max 20x ($200/mo)";
-    if (normalized.includes("max 5x")) return "Max 5x ($100/mo)";
-    if (normalized.startsWith("free")) return $provider === "codex" ? "free" : "Free";
-    if (normalized.startsWith("go")) return "go";
-    if (normalized.startsWith("plus")) return "plus";
-    if (normalized.startsWith("team")) return "team";
-    if (normalized.startsWith("business")) return "business";
-    if (normalized.startsWith("enterprise")) return "enterprise";
-    if (normalized.startsWith("pro")) return $provider === "codex" ? "pro" : "Pro";
-    return "auto";
-  }
-
   $effect(() => {
     if (!$planInfo) return;
     if ($planInfo.provider !== $provider) return;
     if (planSaving) return;
-    planOverrideValue = $planInfo.detected ? "auto" : normalizePlanOverride($planInfo.plan_name);
+    // The backend returns a canonical plan key, so the select round-trips
+    // directly without fragile label matching.
+    planOverrideValue = $planInfo.detected ? "auto" : ($planInfo.plan_key || "auto");
   });
 
   function handleProviderChange(val: string): void {
@@ -54,19 +41,18 @@
     const opts: { value: string; label: string }[] = [{ value: "auto", label: "Auto-detect" }];
     if ($provider === "claude") {
       opts.push(
-        { value: "Free", label: "Free" },
-        { value: "Pro", label: "Pro" },
-        { value: "Max 5x ($100/mo)", label: "Max 5x" },
-        { value: "Max 20x ($200/mo)", label: "Max 20x" },
-        { value: "Team", label: "Team" },
-        { value: "Enterprise", label: "Enterprise" },
+        { value: "free", label: "Free" },
+        { value: "pro", label: "Pro" },
+        { value: "max_5x", label: "Max 5x" },
+        { value: "max_20x", label: "Max 20x" },
+        { value: "team", label: "Team" },
+        { value: "enterprise", label: "Enterprise" },
       );
     } else {
       opts.push(
         { value: "free", label: "Free" },
         { value: "go", label: "Go" },
         { value: "plus", label: "Plus" },
-        { value: "team", label: "Team" },
         { value: "business", label: "Business" },
         { value: "enterprise", label: "Enterprise" },
         { value: "pro", label: "Pro" },
@@ -74,6 +60,10 @@
     }
     return opts;
   });
+
+  let planLabelFor = $derived((key: string): string =>
+    planOptions.find((o) => o.value === key)?.label ?? key,
+  );
 
   let dbSizeBytes = $state(0);
   let confirmClear = $state(false);
@@ -93,7 +83,7 @@
       if (val === "auto") {
         planInfo.set({ ...$planInfo, detected: true });
       } else {
-        planInfo.set({ ...$planInfo, plan_name: val, detected: false });
+        planInfo.set({ ...$planInfo, plan_key: val, plan_name: planLabelFor(val), detected: false });
       }
     }
     try {

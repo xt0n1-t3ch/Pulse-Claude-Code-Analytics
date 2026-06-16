@@ -10,7 +10,7 @@ use cc_discord_presence::codex::session::{
     self as codex_session, CodexSessionSnapshot, GitBranchCache as CodexGitBranchCache,
     SessionParseCache as CodexSessionParseCache,
 };
-use cc_discord_presence::codex::telemetry::plan::PlanDetector;
+use cc_discord_presence::codex::telemetry::plan::{DetectedPlanTier, PlanDetector};
 use cc_discord_presence::codex::telemetry::service_tier::resolve_service_tier;
 use cc_discord_presence::config::PresenceConfig;
 use cc_discord_presence::cost;
@@ -113,9 +113,9 @@ fn plan_name_from_key(key: &str) -> String {
     match key {
         "free" => "Free".to_string(),
         "pro" => "Pro".to_string(),
-        "max_5x" => "MAX 5X".to_string(),
-        "max_20x" => "MAX 20X".to_string(),
-        "max" => "MAX".to_string(),
+        "max_5x" => "Max 5x".to_string(),
+        "max_20x" => "Max 20x".to_string(),
+        "max" => "Max".to_string(),
         "team" => "Team".to_string(),
         "enterprise" => "Enterprise".to_string(),
         other => other.to_uppercase(),
@@ -123,31 +123,39 @@ fn plan_name_from_key(key: &str) -> String {
 }
 
 fn plan_key_from_override(name: &str) -> Option<&'static str> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "" | "auto" => None,
-        "free" => Some("free"),
-        "pro" => Some("pro"),
-        "max 5x" | "max_5x" => Some("max_5x"),
-        "max 20x" | "max_20x" => Some("max_20x"),
-        "max" => Some("max"),
-        "team" => Some("team"),
-        "enterprise" => Some("enterprise"),
-        _ => None,
+    let normalized = name.trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "auto" {
+        return None;
+    }
+    if normalized.contains("20x") {
+        Some("max_20x")
+    } else if normalized.contains("5x") {
+        Some("max_5x")
+    } else if normalized.contains("team") {
+        Some("team")
+    } else if normalized.contains("enterprise") {
+        Some("enterprise")
+    } else if normalized.contains("pro") {
+        Some("pro")
+    } else if normalized.contains("free") {
+        Some("free")
+    } else if normalized.contains("max") {
+        Some("max")
+    } else {
+        None
     }
 }
 
-fn resolved_plan_key(
-    config: &PresenceConfig,
-    override_name: Option<&str>,
-    detected_key: Option<&str>,
-) -> Option<String> {
-    if let Some(name) = override_name {
-        return Some(plan_key_from_override(name).unwrap_or("max").to_string());
+fn codex_plan_key_from_tier(tier: DetectedPlanTier) -> &'static str {
+    match tier {
+        DetectedPlanTier::Free => "free",
+        DetectedPlanTier::Go => "go",
+        DetectedPlanTier::Plus => "plus",
+        DetectedPlanTier::Business => "business",
+        DetectedPlanTier::Enterprise => "enterprise",
+        DetectedPlanTier::Pro => "pro",
+        DetectedPlanTier::Unknown => "",
     }
-    config
-        .plan
-        .clone()
-        .or_else(|| detected_key.map(str::to_string))
 }
 
 pub fn start_background_poller() {
@@ -269,12 +277,11 @@ pub fn start_background_poller() {
                     claude_config.privacy.show_activity = prefs.show_activity;
                     claude_config.privacy.show_tokens = prefs.show_tokens;
                     claude_config.privacy.show_cost = prefs.show_cost;
-                    let override_name = plan_override().lock().ok().and_then(|guard| guard.clone());
-                    claude_config.plan = resolved_plan_key(
-                        &claude_config,
-                        override_name.as_deref(),
-                        detected_plan_key.as_deref(),
-                    );
+                    let manual_plan = PresenceConfig::load_or_init()
+                        .ok()
+                        .and_then(|cfg| cfg.plan)
+                        .filter(|p| !p.trim().is_empty());
+                    claude_config.plan = manual_plan.or_else(|| detected_plan_key.clone());
 
                     persist_live_claude_snapshots(&active);
                     let status = if discord_enabled {
@@ -1356,50 +1363,37 @@ fn extract_json_field(text: &str, field: &str) -> Option<String> {
 #[derive(Serialize)]
 pub struct PlanInfo {
     pub provider: String,
+    pub plan_key: String,
     pub plan_name: String,
     pub detected: bool,
-}
-
-static PLAN_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
-    std::sync::OnceLock::new();
-
-fn plan_override() -> &'static std::sync::Mutex<Option<String>> {
-    PLAN_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
 #[tauri::command]
 pub fn get_plan_info() -> PlanInfo {
     match current_provider() {
         Provider::Claude => {
-            #[allow(clippy::collapsible_if)]
-            if let Ok(guard) = plan_override().lock() {
-                if let Some(ref name) = *guard {
-                    return PlanInfo {
-                        provider: Provider::Claude.as_str().to_string(),
-                        plan_name: name.clone(),
-                        detected: false,
-                    };
-                }
-            }
-
             if let Ok(cfg) = PresenceConfig::load_or_init()
-                && let Some(plan) = cfg.plan.as_deref()
+                && let Some(plan) = cfg.plan.as_deref().filter(|plan| !plan.trim().is_empty())
             {
                 return PlanInfo {
                     provider: Provider::Claude.as_str().to_string(),
+                    plan_key: plan.to_string(),
                     plan_name: plan_name_from_key(plan),
                     detected: false,
                 };
             }
 
             let mut usage_mgr = UsageManager::new();
-            let plan_name = usage_mgr
-                .detected_plan_key()
-                .map(|key| plan_name_from_key(&key))
-                .unwrap_or_else(|| "Unknown".to_string());
+            let plan_key = usage_mgr.detected_plan_key().unwrap_or_default();
+            let plan_name = if plan_key.is_empty() {
+                "Unknown".to_string()
+            } else {
+                plan_name_from_key(&plan_key)
+            };
 
             PlanInfo {
                 provider: Provider::Claude.as_str().to_string(),
+                plan_key,
                 plan_name,
                 detected: true,
             }
@@ -1411,6 +1405,7 @@ pub fn get_plan_info() -> PlanInfo {
             let resolved = detector.resolve_from_sessions(&sessions, &config.openai_plan);
             PlanInfo {
                 provider: Provider::Codex.as_str().to_string(),
+                plan_key: codex_plan_key_from_tier(resolved.tier).to_string(),
                 plan_name: resolved.label(config.openai_plan.show_price),
                 detected: !matches!(
                     resolved.source,
@@ -1425,12 +1420,9 @@ pub fn get_plan_info() -> PlanInfo {
 pub fn set_plan_override(plan: String) {
     match current_provider() {
         Provider::Claude => {
-            if let Ok(mut guard) = plan_override().lock() {
-                if plan_key_from_override(&plan).is_none() {
-                    *guard = None;
-                } else {
-                    *guard = Some(plan_name_from_key(plan_key_from_override(&plan).unwrap()));
-                }
+            if let Ok(mut cfg) = PresenceConfig::load_or_init() {
+                cfg.plan = plan_key_from_override(&plan).map(str::to_string);
+                let _ = cfg.save();
             }
         }
         Provider::Codex => {
@@ -2586,12 +2578,43 @@ pub fn build_reports_bundle_from_roots(
 
 #[cfg(test)]
 mod tests {
-    use super::codex_total_input_tokens;
+    use super::{codex_plan_key_from_tier, codex_total_input_tokens, plan_key_from_override};
     use cc_discord_presence::codex::cost::{PricingSource, TokenCostBreakdown};
     use cc_discord_presence::codex::session::CodexSessionSnapshot;
     use cc_discord_presence::codex::telemetry::limits::RateLimits;
+    use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
     use std::path::PathBuf;
     use std::time::SystemTime;
+
+    #[test]
+    fn plan_key_from_override_accepts_display_labels_and_auto() {
+        assert_eq!(plan_key_from_override("Max 20x ($200/mo)"), Some("max_20x"));
+        assert_eq!(plan_key_from_override("Max 5x ($100/mo)"), Some("max_5x"));
+        assert_eq!(plan_key_from_override("  Team plan  "), Some("team"));
+        assert_eq!(plan_key_from_override("enterprise"), Some("enterprise"));
+        assert_eq!(plan_key_from_override("pro monthly"), Some("pro"));
+        assert_eq!(plan_key_from_override("free"), Some("free"));
+        assert_eq!(plan_key_from_override("Max"), Some("max"));
+        assert_eq!(plan_key_from_override("auto"), None);
+        assert_eq!(plan_key_from_override(""), None);
+    }
+
+    #[test]
+    fn codex_plan_key_maps_detected_tiers_to_frontend_contract() {
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Free), "free");
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Go), "go");
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Plus), "plus");
+        assert_eq!(
+            codex_plan_key_from_tier(DetectedPlanTier::Business),
+            "business"
+        );
+        assert_eq!(
+            codex_plan_key_from_tier(DetectedPlanTier::Enterprise),
+            "enterprise"
+        );
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Pro), "pro");
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Unknown), "");
+    }
 
     fn sample_codex_snapshot() -> CodexSessionSnapshot {
         CodexSessionSnapshot {
