@@ -241,29 +241,11 @@ impl PresenceConfig {
     }
 
     pub fn plan_display_name(&self) -> Option<&str> {
-        match self.plan.as_deref()? {
-            "free" => Some("Free"),
-            "pro" => Some("Pro ($20/mo)"),
-            "max_5x" => Some("Max ($100/mo)"),
-            "max_20x" => Some("Max ($200/mo)"),
-            "max" => Some("Max"),
-            "team" => Some("Team"),
-            "enterprise" => Some("Enterprise"),
-            _ => None,
-        }
+        crate::plan::display_name_from_key(self.plan.as_deref()?)
     }
 
     pub fn plan_badge_name(&self) -> Option<&str> {
-        match self.plan.as_deref()? {
-            "free" => Some("FREE"),
-            "pro" => Some("PRO"),
-            "max_5x" => Some("MAX 5x"),
-            "max_20x" => Some("MAX 20x"),
-            "max" => Some("MAX"),
-            "team" => Some("TEAM"),
-            "enterprise" => Some("ENTERPRISE"),
-            _ => None,
-        }
+        crate::plan::badge_name_from_key(self.plan.as_deref()?)
     }
 
     pub fn toggle_privacy(&mut self) -> bool {
