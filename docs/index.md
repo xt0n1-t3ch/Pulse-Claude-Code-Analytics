@@ -7,7 +7,8 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | Doc | Purpose |
 | --- | --- |
 | [architecture.md](architecture.md) | High-level component map: daemon -> Tauri -> SQLite -> Svelte |
-| [discord-assets.md](discord-assets.md) | Upload assets to the Developer Portal so the RP logo actually renders |
+| [discord-assets.md](discord-assets.md) | Upload assets to the Developer Portal so the RP logo actually renders; in-app preview art |
+| [plan-detection.md](plan-detection.md) | Claude/Codex plan detection, manual override persistence, Codex service tier + surface |
 | [fable-5.md](fable-5.md) | Claude Fable 5 + Mythos 5 pricing, 1M context, cache TTL note, Rich Presence labels |
 | [opus-4-7-variants.md](opus-4-7-variants.md) | Reasoning-effort tiers (Low / Medium / High / Extra High / Max) + tokenizer note |
 | [opus-4-8.md](opus-4-8.md) | Opus 4.8 — fast mode (priority speed) + billing impact |
@@ -16,6 +17,13 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [codex-rich-presence-upstream.md](codex-rich-presence-upstream.md) | Codex Rich Presence source-of-truth repo, sync scripts, CI freshness gate, compatibility overlay |
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
+
+## v1.3.0 docs refresh
+
+- Added [plan-detection.md](plan-detection.md): Claude/Codex plan resolution, the canonical plan-key contract behind the Settings override, where the manual override is persisted, and fresh-from-disk auto-detect.
+- Documented the Codex **service tier** source moving to `~/.codex/config.toml` `service_tier` (legacy global-state key kept as a fallback) and the Codex App vs CLI surface detection.
+- Expanded [discord-assets.md](discord-assets.md) with the two Codex Discord applications + their `codex-logo` / `codex-app` uploads, and the in-app Live Preview art that bundles real Rich Presence images locally.
+- Kept the release as a minor SemVer bump: v1.3.0 adds the faithful preview + canonical plan mapping and fixes detection/override without removing public API.
 
 ## v1.2.0 docs refresh
 
@@ -36,7 +44,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.2.0**
+- App release: **v1.3.0**
 - Schema: **v3** (config + DB)
-- Last docs refresh: 2026-06-10 (Fable/Mythos 5 + multi-session Context Window + update checks + Codex Rich Presence upstream sync + Windows-safe WSL opt-in)
+- Last docs refresh: 2026-06-16 (faithful Discord Live Preview art + canonical plan-key contract + Codex service-tier source + backend hardening/dedup)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

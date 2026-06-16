@@ -2,6 +2,34 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.3.0] — 2026-06-16
+
+v1.3.0 makes the Codex and Claude Rich Presence accurate again, makes the plan override actually stick, gives the Discord Live Preview the real Rich Presence artwork, and hardens the analytics core. No public API was removed.
+
+### Added
+
+- Discord Live Preview renders the real Rich Presence artwork — the Claude Code mascot and the Codex mark — bundled in-app and mapped by provider/surface, with a Fast-tier (⚡) indicator on the state line. The activity card now mirrors Discord's layout (large image, optional small badge, name, details, state, elapsed). (#32)
+- Canonical Claude plan mapping module `cc_discord_presence::plan` (key, name, display name, badge, tolerant override parser), shared by the core library and the Tauri command layer. (#33)
+- Coverage for the new behavior: plan round-trip/tolerance, bounded session-scan depth/entry limits, report-trace depth cap, canonical plan-key round-trip in Settings, and a credentials-refresh plan-detection test. (#31, #33)
+
+### Changed
+
+- Cost analysis reports **cost per 1M tokens** instead of per 1K, which rounded to `$0.00` at any realistic usage. (#34)
+- Dashboard cache-health shows a neutral `—` instead of a red `F` when there is no token data yet. (#34)
+- The duplicated Claude plan key/label/badge mapping is centralized; `config.rs` and the command layer delegate to the canonical module. (#33)
+- Claude and Codex session-file walks and the report trace scan are now depth/entry/dir bounded so a pathological tree cannot walk unbounded. (#33)
+- Previously-swallowed failures (Discord presence update, config/provider and display-pref saves, usage-cache write/remove, Codex plan-cache save) are logged via `tracing` instead of being discarded. (#33)
+
+### Fixed
+
+- Codex service tier (Fast mode) is read from `~/.codex/config.toml` `service_tier` (where current Codex versions persist it) with the legacy `default-service-tier` global-state key kept as a fallback, so Fast is detected and shown as `⚡ … · Fast`. (#30)
+- The manual plan override persists to the config file, reaches the live Discord broadcast, and stays selected instead of snapping back to Auto-detect; the Settings select now uses a canonical plan-key contract. (#31)
+- Claude plan auto-detect reads the credentials plan fields fresh from disk, so a plan upgrade (e.g. Max 5x → Max 20x) is reflected without restarting Pulse. (#31)
+
+### Notes
+
+- The live Discord broadcast still requires the Rich Presence images to be uploaded to each Discord application's Developer Portal (`codex-logo` / `codex-app` are not yet uploaded); the in-app Live Preview bundles its own art and is unaffected. Tracked in #36. See [docs/discord-assets.md](docs/discord-assets.md).
+
 ## [1.2.0] — 2026-06-10
 
 v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Window view's stale one-session bias, and Pulse's first in-app release-awareness flow. The release adds new model economics, multi-session UI, and update-check UX without removing any public API.
