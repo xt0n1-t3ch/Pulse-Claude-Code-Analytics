@@ -547,6 +547,24 @@ pub fn global_state_paths() -> Vec<PathBuf> {
     ordered
 }
 
+/// Paths to the Codex CLI/App `config.toml`, where the active `service_tier`
+/// (Fast mode) is persisted by current Codex versions. The legacy
+/// `default-service-tier` key in `.codex-global-state.json` is retained as a
+/// fallback for older App installs (see `service_tier::resolve_service_tier`).
+pub fn config_toml_paths() -> Vec<PathBuf> {
+    let mut ordered: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    push_unique_path(&mut ordered, &mut seen, codex_home().join("config.toml"));
+    for sessions_root in sessions_paths() {
+        if let Some(home) = sessions_root.parent() {
+            push_unique_path(&mut ordered, &mut seen, home.join("config.toml"));
+        }
+    }
+
+    ordered
+}
+
 pub fn lock_path() -> PathBuf {
     codex_home().join("codex-discord-presence.lock")
 }
