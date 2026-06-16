@@ -1,8 +1,9 @@
 <script lang="ts">
   import { sessions, activeSessions, discordUser, health, discordPreview } from "../lib/stores";
-  import { providerProfile } from "../lib/provider";
+  import { provider, providerProfile } from "../lib/provider";
   import { setDiscordEnabled } from "../lib/api";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
+  import { rpArtFor } from "../lib/rpArt";
   import PulseMark from "../components/PulseMark.svelte";
 
   let discordEnabled = $state(true);
@@ -48,9 +49,9 @@
   let previewSession = $derived($activeSessions[0] ?? $sessions[0]);
   let activeSessionCount = $derived($activeSessions.length);
   let previewAppName = $derived(previewSession?.app_name ?? $providerProfile.productName);
-  let previewAssetKey = $derived(
-    previewSession?.app_name === "Codex App" ? "codex-app" : $providerProfile.defaultAssetKey,
-  );
+  let previewArt = $derived(rpArtFor(previewSession?.provider ?? $provider, previewSession?.app_name));
+  let previewAssetKey = $derived(previewArt.assetKey);
+  let previewFast = $derived(previewSession?.fast ?? false);
 
   let detailsLine = $derived.by(() => {
     if (!previewSession) return "No active session";
@@ -66,7 +67,13 @@
     if (!previewSession) return "Idle";
     const s = $discordPreview;
     let parts: string[] = [];
-    if (s.showModel) parts.push(previewSession.model);
+    if (s.showModel) {
+      const model =
+        previewFast && !previewSession.model.includes("⚡")
+          ? `⚡ ${previewSession.model}`
+          : previewSession.model;
+      parts.push(model);
+    }
     if (s.showActivity) parts.push(previewSession.activity);
     if (s.showTokens) parts.push(fmtTokens(previewSession.tokens) + " tokens");
     return parts.join(" · ") || "Idle";
@@ -230,10 +237,13 @@
           <div class="dp-separator"></div>
           <div class="dp-section-title">Current Activity</div>
           <div class="dp-activity-card">
-            <div class="dp-activity-header">Playing</div>
+            <div class="dp-activity-header">Playing a game</div>
             <div class="dp-activity-body">
-              <div class="dp-activity-icon">
-                <PulseMark size={28} />
+              <div class="dp-activity-art" title={previewArt.largeText}>
+                <img class="dp-art-large" src={previewArt.large} alt={previewArt.largeText} draggable="false" />
+                {#if previewArt.small}
+                  <img class="dp-art-small" src={previewArt.small} alt="" draggable="false" />
+                {/if}
               </div>
               <div class="dp-activity-info">
                 <div class="dp-activity-name">{previewAppName}</div>
@@ -671,18 +681,37 @@
     margin-bottom: 10px;
   }
   .dp-activity-body { display: flex; gap: 14px; align-items: flex-start; }
-  .dp-activity-icon {
-    width: 54px;
-    height: 54px;
-    border-radius: 8px;
-    background: #1e1f22;
-    border: 1px solid rgba(255, 255, 255, 0.055);
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3);
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  .dp-activity-art {
+    position: relative;
+    width: 60px;
+    height: 60px;
     flex-shrink: 0;
-    color: var(--provider-accent);
+  }
+  .dp-art-large {
+    width: 60px;
+    height: 60px;
+    border-radius: 10px;
+    object-fit: cover;
+    background: #1e1f22;
+    box-shadow:
+      0 0 0 1px rgba(0, 0, 0, 0.35),
+      0 2px 6px rgba(0, 0, 0, 0.35);
+    -webkit-user-drag: none;
+    user-select: none;
+  }
+  .dp-art-small {
+    position: absolute;
+    right: -5px;
+    bottom: -5px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #2b2d31;
+    border: 2.5px solid #2b2d31;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    -webkit-user-drag: none;
+    user-select: none;
   }
   .dp-activity-info {
     display: flex;
