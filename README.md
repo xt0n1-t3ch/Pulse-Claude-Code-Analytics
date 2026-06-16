@@ -24,17 +24,16 @@ The open-source **Claude Code &amp; OpenAI Codex analytics dashboard** + **Disco
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.2.0</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.3.0</h2>
 
-- **Claude Fable 5 + Mythos 5** — official pricing ($10 input / $50 output per MTok), 1M context by default, 128K max output, cache-write/read rates, and clean Discord labels: `Fable 5 (1M)` / `Mythos 5 (1M)`.
-- **All active Context Windows at once** — the Context tab now shows every live session as a top card, then lets you click into the detailed breakdown below. Historical per-session rows use the last context snapshot and clamp at 100%, not lifetime token totals.
-- **In-app release check popup** — Pulse now compares the packaged version against GitHub Releases, shows a polished current → latest update banner, supports release notes, Later, Skip version, Open release, and a manual Settings check.
-- **Codex Rich Presence stays fresh** — Pulse syncs its Codex presence core from our sibling repo, [Codex Discord Rich Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence), so the standalone Codex project gets visibility and Pulse keeps the latest Codex RP logic. Windows probes use no-console process spawning.
-- **Active-session aware previews** — Discord preview and context fallbacks now prefer live sessions before historical rows; actual Rich Presence still publishes one primary payload because Discord only accepts one presence.
-- **Provider-accurate plan labels** — usage-limit copy now says 5-hour window instead of pretending Anthropic's usage API window is literally one session.
-- **Repo hygiene pass** — docs/test index refreshed, frontend package version aligned to v1.2.0, and stale Markdown issue templates removed in favor of YAML templates.
+- **Faithful Discord Live Preview** — the preview now renders the real Rich Presence artwork (the Claude Code mascot and the Codex mark), bundled in-app and mapped by provider/surface, in a card that mirrors Discord's layout, with a Fast-tier `⚡` indicator.
+- **Plan override that sticks** — a manual plan choice in Settings now persists to disk, reaches the live broadcast, and stays selected instead of snapping back to Auto-detect; the control uses a canonical plan-key contract.
+- **Live plan auto-detect** — a Claude plan upgrade (e.g. Max 5x → Max 20x) is reflected without restarting Pulse.
+- **Codex Fast mode detected** — the Codex service tier is read from `~/.codex/config.toml` (where current Codex versions store it), so Fast renders as `⚡ … · Fast` again.
+- **Clearer cost + cache UI** — cost is reported per **1M tokens** (the per-1K figure rounded to `$0.00`), and the dashboard cache grade shows a neutral `—` instead of a red `F` when there's no data yet.
+- **Hardened core** — centralized the Claude plan mapping, bounded the session/report scans, and log previously-swallowed failures instead of dropping them.
 
-**[Download v1.2.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.3.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
