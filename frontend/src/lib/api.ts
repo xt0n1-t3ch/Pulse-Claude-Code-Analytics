@@ -108,6 +108,8 @@ export interface DiscordUserInfo {
 
 export interface PlanInfo {
     provider: string;
+    /** Canonical plan key for the Settings select (e.g. "max_20x"); "" when unknown. */
+    plan_key: string;
     plan_name: string;
     detected: boolean;
 }
