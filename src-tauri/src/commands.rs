@@ -110,39 +110,16 @@ fn current_provider() -> Provider {
 }
 
 fn plan_name_from_key(key: &str) -> String {
-    match key {
-        "free" => "Free".to_string(),
-        "pro" => "Pro".to_string(),
-        "max_5x" => "Max 5x".to_string(),
-        "max_20x" => "Max 20x".to_string(),
-        "max" => "Max".to_string(),
-        "team" => "Team".to_string(),
-        "enterprise" => "Enterprise".to_string(),
-        other => other.to_uppercase(),
-    }
+    cc_discord_presence::plan::name_from_key(key)
 }
 
 fn plan_key_from_override(name: &str) -> Option<&'static str> {
-    let normalized = name.trim().to_ascii_lowercase();
-    if normalized.is_empty() || normalized == "auto" {
-        return None;
-    }
-    if normalized.contains("20x") {
-        Some("max_20x")
-    } else if normalized.contains("5x") {
-        Some("max_5x")
-    } else if normalized.contains("team") {
-        Some("team")
-    } else if normalized.contains("enterprise") {
-        Some("enterprise")
-    } else if normalized.contains("pro") {
-        Some("pro")
-    } else if normalized.contains("free") {
-        Some("free")
-    } else if normalized.contains("max") {
-        Some("max")
-    } else {
-        None
+    cc_discord_presence::plan::key_from_override(name)
+}
+
+fn log_save_error(scope: &str, result: anyhow::Result<()>) {
+    if let Err(err) = result {
+        tracing::warn!(scope, error = %err, "failed to save Pulse configuration");
     }
 }
 
@@ -243,10 +220,17 @@ pub fn start_background_poller() {
 
                     if force_refresh {
                         usage_mgr.invalidate_cache();
-                        let _ = std::fs::remove_file(
-                            cc_discord_presence::config::claude_home()
-                                .join("discord-presence-usage-cache.json"),
-                        );
+                        let usage_cache_path = cc_discord_presence::config::claude_home()
+                            .join("discord-presence-usage-cache.json");
+                        if let Err(err) = std::fs::remove_file(&usage_cache_path)
+                            && err.kind() != std::io::ErrorKind::NotFound
+                        {
+                            tracing::warn!(
+                                path = %usage_cache_path.display(),
+                                error = %err,
+                                "failed to remove usage cache"
+                            );
+                        }
                     }
 
                     let usage = usage_mgr.get_usage();
@@ -287,12 +271,14 @@ pub fn start_background_poller() {
                     let status = if discord_enabled {
                         let active_session = preferred_active_session(&active);
                         let limits = latest_limits_source(&active).map(|s| &s.limits);
-                        let _ = claude_discord.update(
+                        if let Err(err) = claude_discord.update(
                             active_session,
                             limits,
                             usage.as_ref(),
                             &claude_config,
-                        );
+                        ) {
+                            tracing::warn!(error = %err, "failed to update Claude Discord presence");
+                        }
                         codex_discord.shutdown();
                         claude_discord.status().to_string()
                     } else {
@@ -351,14 +337,16 @@ pub fn start_background_poller() {
                         let active_session = codex_session::preferred_active_session(&active);
                         let effective_limits = codex_session::latest_limits_source(&active);
                         let limits = effective_limits.as_ref().map(|item| &item.limits);
-                        let _ = codex_discord.update(
+                        if let Err(err) = codex_discord.update(
                             active_session,
                             limits,
                             &resolved_plan,
                             &resolved_service_tier,
                             &codex_config,
                             surface_override,
-                        );
+                        ) {
+                            tracing::warn!(error = %err, "failed to update Codex Discord presence");
+                        }
                         claude_discord.shutdown();
                         codex_discord.status().to_string()
                     } else {
@@ -870,7 +858,7 @@ pub fn set_discord_display_prefs(
                 cfg.privacy.show_activity = show_activity;
                 cfg.privacy.show_tokens = show_tokens;
                 cfg.privacy.show_cost = show_cost;
-                let _ = cfg.save();
+                log_save_error("claude-display-prefs", cfg.save());
             }
         }
         Provider::Codex => {
@@ -881,7 +869,7 @@ pub fn set_discord_display_prefs(
                 cfg.privacy.show_activity = show_activity;
                 cfg.privacy.show_tokens = show_tokens;
                 cfg.privacy.show_cost = show_cost;
-                let _ = cfg.save();
+                log_save_error("codex-display-prefs", cfg.save());
             }
         }
     }
@@ -1422,7 +1410,7 @@ pub fn set_plan_override(plan: String) {
         Provider::Claude => {
             if let Ok(mut cfg) = PresenceConfig::load_or_init() {
                 cfg.plan = plan_key_from_override(&plan).map(str::to_string);
-                let _ = cfg.save();
+                log_save_error("claude-plan-override", cfg.save());
             }
         }
         Provider::Codex => {
@@ -1450,7 +1438,7 @@ pub fn set_plan_override(plan: String) {
                 } else {
                     cfg.openai_plan.mode = cc_discord_presence::codex::config::OpenAiPlanMode::Auto;
                 }
-                let _ = cfg.save();
+                log_save_error("codex-plan-override", cfg.save());
             }
         }
     }
@@ -1496,7 +1484,9 @@ pub fn get_provider_copy() -> ProviderCopyInfo {
 #[tauri::command]
 pub fn set_active_provider(provider: String) {
     if let Some(provider) = Provider::parse(&provider) {
-        let _ = cc_discord_presence::provider::save_active_provider(provider);
+        if let Err(err) = cc_discord_presence::provider::save_active_provider(provider) {
+            tracing::warn!(provider = provider.as_str(), error = %err, "failed to save active provider");
+        }
         if let Ok(mut d) = shared().lock() {
             d.active_provider = provider;
         }

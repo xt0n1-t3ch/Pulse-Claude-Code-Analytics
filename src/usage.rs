@@ -252,7 +252,13 @@ impl UsageManager {
         }) else {
             return;
         };
-        let _ = std::fs::write(path, json);
+        if let Err(err) = std::fs::write(&path, json) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "failed to write usage cache"
+            );
+        }
     }
 
     pub fn get_usage(&mut self) -> Option<UsageData> {
