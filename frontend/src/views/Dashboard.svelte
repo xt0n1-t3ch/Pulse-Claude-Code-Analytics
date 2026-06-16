@@ -117,6 +117,9 @@
   });
 
   let cacheGrade = $derived.by(() => {
+    // No token data yet — show a neutral mark instead of a red "F", which would
+    // read as bad performance rather than "nothing measured".
+    if (showCacheR + showInput <= 0) return { letter: "—", color: "var(--text-muted)" };
     const ratio = showCacheHit;
     if (ratio >= 80) return { letter: "A", color: "var(--success)" };
     if (ratio >= 65) return { letter: "B", color: "#77dd77" };
