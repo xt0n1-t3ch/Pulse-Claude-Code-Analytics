@@ -1,5 +1,6 @@
 <script lang="ts">
   import { health, planInfo } from "../lib/stores";
+  import ProviderToggle from "./ProviderToggle.svelte";
 
   let { onToggleTheme }: { onToggleTheme: () => void } = $props();
 
@@ -20,22 +21,26 @@
 </script>
 
 <header class="topbar" data-tauri-drag-region>
-  <h1 class="topbar-title">✳ Pulse</h1>
-  <span class="topbar-sub">Claude Code Analytics</span>
+  <div class="topbar-left">
+    <div class="topbar-provider">
+      <ProviderToggle />
+    </div>
+  </div>
 
   <div class="topbar-right">
-    <button class="topbar-btn" title="Toggle theme" onclick={onToggleTheme}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="4.22" x2="19.78" y2="5.64"/>
-      </svg>
-    </button>
-
-    {#if $planInfo}
-      <span class="badge plan">{$planInfo.plan_name}</span>
-    {/if}
-    {#if $health}
-      <span class="badge">v{$health.version}</span>
-    {/if}
+    <div class="action-cluster">
+      {#if $planInfo}
+        <span class="badge plan" title="Active plan">{$planInfo.plan_name}</span>
+      {/if}
+      {#if $health}
+        <span class="badge version" title="Pulse version">v{$health.version}</span>
+      {/if}
+      <button class="topbar-btn" title="Toggle theme" onclick={onToggleTheme} aria-label="Toggle theme">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="4.22" x2="19.78" y2="5.64"/>
+        </svg>
+      </button>
+    </div>
 
     <div class="window-controls">
       <button class="win-btn" title="Minimize" onclick={minimize}>
@@ -56,32 +61,42 @@
     height: var(--topbar-height);
     display: flex;
     align-items: center;
-    padding: 0 16px;
-    background: var(--bg-secondary);
+    justify-content: space-between;
+    padding: 0 12px 0 16px;
+    background: var(--bg-primary);
     border-bottom: 1px solid var(--border);
-    gap: 10px;
+    gap: 12px;
     user-select: none;
     -webkit-app-region: drag;
   }
 
-  .topbar-title {
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+  .topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
   }
 
-  .topbar-sub {
-    font-size: 12px;
-    color: var(--text-muted);
-    font-weight: 500;
+  .topbar-provider {
+    display: flex;
+    -webkit-app-region: no-drag;
   }
 
   .topbar-right {
     margin-left: auto;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     -webkit-app-region: no-drag;
+  }
+
+  .action-cluster {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 6px;
+    margin-right: 2px;
+    border-right: 1px solid var(--border);
   }
 
   .topbar-btn {
@@ -92,7 +107,7 @@
     justify-content: center;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
-    transition: all 0.15s var(--ease);
+    transition: color 0.15s var(--ease), background 0.15s var(--ease);
   }
 
   .topbar-btn:hover {
@@ -101,25 +116,32 @@
   }
 
   .badge {
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 600;
-    color: var(--text-muted);
-    background: var(--bg-elevated);
-    padding: 3px 8px;
-    border-radius: 99px;
-    border: 1px solid var(--border);
+    letter-spacing: 0.01em;
+    color: var(--text-secondary);
+    background: transparent;
+    padding: 3px 9px;
+    border-radius: var(--radius-sm);
+    border: none;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
   }
 
   .badge.plan {
-    color: var(--accent);
-    border-color: var(--accent-dim);
-    background: var(--accent-dim);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+  }
+
+  .badge.version {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
   }
 
   .window-controls {
     display: flex;
-    gap: 6px;
-    margin-left: 8px;
+    gap: 2px;
   }
 
   .win-btn {

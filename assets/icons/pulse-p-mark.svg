@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Pulse P mark — minimal, monochrome. 1024×1024 canvas.
+     Composition: rounded square chassis, bold geometric P (Inter-style 800),
+     thin hairline with ECG pulse glyph crossing through the stem baseline. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Pulse">
+  <defs>
+    <linearGradient id="chassis" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#131313"/>
+      <stop offset="1" stop-color="#050505"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d4d4d4"/>
+    </linearGradient>
+    <filter id="inner" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="0" dy="2" result="o"/>
+      <feFlood flood-color="#000" flood-opacity="0.35"/>
+      <feComposite in2="o" operator="in"/>
+      <feComposite in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1"/>
+      <feComposite in2="SourceGraphic" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Chassis: rounded square, deep black with subtle top-light gradient -->
+  <rect x="32" y="32" width="960" height="960" rx="208" ry="208" fill="url(#chassis)"/>
+  <rect x="32" y="32" width="960" height="960" rx="208" ry="208" fill="none" stroke="#1f1f1f" stroke-width="2"/>
+
+  <!-- Bold geometric P, shifted slightly left of center to leave optical weight balance with the bowl -->
+  <!-- Built as explicit path for crisp rasterization at small sizes. Stem + bowl. -->
+  <path d="
+      M 312 232
+      H 592
+      C 726 232 810 312 810 436
+      C 810 560 726 640 592 640
+      H 444
+      V 792
+      H 312
+      Z
+      M 444 344
+      V 528
+      H 580
+      C 646 528 682 492 682 436
+      C 682 380 646 344 580 344
+      Z
+    "
+    fill="url(#mark)"/>
+
+  <!-- Hairline + ECG pulse glyph, echoing the source Pulse SVG -->
+  <g transform="translate(512 860)">
+    <line x1="-240" y1="0" x2="240" y2="0" stroke="#3f3f46" stroke-width="2"/>
+    <path d="M -80 0 L -56 0 L -44 -36 L -28 40 L -16 -10 L 4 0 L 80 0"
+          fill="none" stroke="#fafafa" stroke-width="4"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

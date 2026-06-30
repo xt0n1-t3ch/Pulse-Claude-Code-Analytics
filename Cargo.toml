@@ -3,15 +3,15 @@ members = [".", "src-tauri"]
 
 [package]
 name = "cc-discord-presence"
-version = "1.0.0"
+version = "1.4.1"
 edition = "2024"
-description = "Pulse — Claude Code analytics & Discord Rich Presence core"
+description = "Pulse — Codex & Claude analytics core"
 license = "Apache-2.0"
 repository = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
 homepage = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
 readme = "README.md"
 authors = ["xt0n1-t3ch"]
-keywords = ["claude-code", "analytics", "discord", "rich-presence", "tauri"]
+keywords = ["codex", "claude-code", "analytics", "discord", "tauri"]
 categories = ["command-line-utilities", "gui", "development-tools"]
 
 [dependencies]
@@ -29,6 +29,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "time"] }
 ureq = { version = "2.12.1", default-features = true }
 walkdir = "2.5.0"
+tempfile = "3.23.0"
 
 [target.'cfg(windows)'.dependencies]
 aes-gcm = "0.10"
@@ -39,4 +40,3 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 winres = "0.1"
 
 [dev-dependencies]
-tempfile = "3.23.0"

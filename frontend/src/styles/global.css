@@ -3,6 +3,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
+  color-scheme: dark;
   /* ── DARK (default) — ultra-black #000 */
   --bg-primary: #000000;
   --bg-secondary: #050505;
@@ -17,7 +18,6 @@
   --text-muted: #6b6b6b;
   --text-placeholder: #3d3d3d;
 
-  /* ── monochrome accent — white, used sparingly */
   --accent: #ffffff;
   --accent-hover: #e6e6e6;
   --accent-glow: rgba(255, 255, 255, 0.12);
@@ -25,7 +25,6 @@
   --accent-fg: #000000;
   --accent-soft: #1a1a1a;
 
-  /* ── semantic — for numeric values, health states */
   --success: #22c55e;
   --success-glow: rgba(34, 197, 94, 0.22);
   --success-dim: rgba(34, 197, 94, 0.10);
@@ -39,7 +38,6 @@
   --info-glow: rgba(124, 185, 232, 0.22);
   --info-dim: rgba(124, 185, 232, 0.10);
 
-  /* ── chart palette — monochrome ramp + semantic tints */
   --chart-1: #f5f5f5;
   --chart-2: #a3a3a3;
   --chart-3: #6b6b6b;
@@ -104,6 +102,7 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   --bg-primary: #ffffff;
   --bg-secondary: #fafafa;
   --bg-card: #ffffff;
@@ -171,7 +170,6 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* ── scrollbars ── */
 * { scrollbar-width: thin; scrollbar-color: transparent transparent; }
 *:hover { scrollbar-color: var(--border-strong) transparent; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -180,7 +178,6 @@ body {
 *:hover::-webkit-scrollbar-thumb { background: var(--border-strong); }
 *:hover::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 
-/* ── form primitives ── */
 button { cursor: pointer; border: none; background: none; font: inherit; color: inherit; }
 
 button:focus-visible,
@@ -212,6 +209,7 @@ select {
   font-variant-numeric: tabular-nums;
 }
 select:hover { border-color: var(--border-hover); background-color: var(--bg-elevated); }
+select option { background: var(--bg-elevated); color: var(--text-primary); }
 
 input[type="text"], input[type="search"], input[type="number"], input[type="email"], textarea {
   font: inherit;
@@ -227,7 +225,6 @@ input[type="text"], input[type="search"], input[type="number"], input[type="emai
 }
 input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 
-/* ── utilities ── */
 .mono { font-family: var(--font-mono); }
 .tabular { font-variant-numeric: tabular-nums; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -239,7 +236,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 .text-danger { color: var(--danger); }
 .text-info { color: var(--info); }
 
-/* ── buttons ── */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -274,7 +270,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 .btn.btn-danger:hover { background: var(--danger-glow); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* ── chip / badge ── */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -297,7 +292,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 .chip.chip-danger   { background: var(--danger-dim);  color: var(--danger);       border-color: transparent; }
 .chip.chip-info     { background: var(--info-dim);    color: var(--info);         border-color: transparent; }
 
-/* ── card ── */
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -313,7 +307,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 }
 .card.card-flat { background: transparent; border-color: var(--border); }
 
-/* ── section titles ── */
 .section-title {
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -335,7 +328,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
   line-height: var(--lh-snug);
 }
 
-/* ── toggle switch — single source of truth. 40x22 track, 16px knob. ── */
 .toggle {
   position: relative;
   display: inline-block;
@@ -385,7 +377,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 }
 .toggle input:disabled + .toggle-slider { opacity: 0.4; cursor: not-allowed; }
 
-/* ── stat display ── */
 .stat-value {
   font-size: var(--fs-3xl);
   font-weight: 700;
@@ -405,7 +396,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 .stat-value.is-neutral  { color: var(--warning); }
 .stat-value.is-negative { color: var(--danger); }
 
-/* ── divider ── */
 .hr { height: 1px; background: var(--border); border: none; margin: 16px 0; }
 .hr-gradient {
   height: 1px;
@@ -414,7 +404,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
   margin: 20px 0;
 }
 
-/* ── animations ── */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -435,7 +424,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 .slide-in { animation: slideIn 0.35s var(--ease-out); }
 .pulse { animation: pulse 2s var(--ease) infinite; }
 
-/* skeleton shimmer */
 .skeleton {
   background: linear-gradient(90deg, var(--bg-card) 0%, var(--bg-elevated) 50%, var(--bg-card) 100%);
   background-size: 200% 100%;
@@ -443,7 +431,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
   border-radius: var(--radius-sm);
 }
 
-/* ── normalize legacy tokens (kill orange left-bars) ── */
 .card-title::before,
 .view-title::before,
 .section-label::before {
@@ -452,14 +439,14 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 }
 
 .card-title {
-  font-size: var(--fs-xs) !important;
-  font-weight: 600 !important;
-  text-transform: uppercase !important;
-  letter-spacing: var(--letter-wider) !important;
-  color: var(--text-muted) !important;
-  margin-bottom: 14px !important;
-  padding-left: 0 !important;
-  border-left: 0 !important;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--letter-wider);
+  color: var(--text-muted);
+  margin-bottom: 14px;
+  padding-left: 0;
+  border-left: 0;
 }
 .card-title.no-normalize { all: unset; }
 
@@ -472,7 +459,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 
 .mini-title, .detail-label { color: var(--text-muted) !important; }
 
-/* ── grid helpers ── */
 .grid-cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .grid-cols-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
@@ -483,7 +469,6 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
   .grid-cols-2, .grid-cols-3, .grid-cols-4 { grid-template-columns: 1fr; }
 }
 
-/* ── bar chart helper (used across views, replaces hardcoded orange bars) ── */
 .bar-track {
   position: relative;
   height: 8px;
