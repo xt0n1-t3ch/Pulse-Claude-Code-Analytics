@@ -32,14 +32,19 @@ All prices are per 1 million tokens. The code uses the **5-minute cache write** 
 | Model | Input | Output | Cache Write (5m) | Cache Write (1h) | Cache Read |
 |-------|-------|--------|------------------|-------------------|------------|
 | Fable 5 / Mythos 5 | $10.00 | $50.00 | $12.50 (1.25x) | $20.00 (2x) | $1.00 |
+| **Sonnet 5 — introductory, through 2026-08-31** | **$2.00** | **$10.00** | **$2.50 (1.25x)** | — | **$0.20** |
+| Sonnet 5 — standard, from 2026-09-01 | $3.00 | $15.00 | $3.75 (1.25x) | $6.00 (2x) | $0.30 |
 | Opus 4.5 / 4.6 / 4.7 / 4.8 | $5.00 | $25.00 | $6.25 (1.25x) | $10.00 (2x) | $0.50 |
 | Opus 4.0 / 4.1 / 3 (legacy) | $15.00 | $75.00 | $18.75 (1.25x) | $30.00 (2x) | $1.50 |
-| Sonnet (all versions) | $3.00 | $15.00 | $3.75 (1.25x) | $6.00 (2x) | $0.30 |
+| Sonnet 4.x and earlier | $3.00 | $15.00 | $3.75 (1.25x) | $6.00 (2x) | $0.30 |
 | Haiku 4.5+ | $1.00 | $5.00 | $1.25 (1.25x) | $2.00 (2x) | $0.10 |
 | Haiku 3.5 | $0.80 | $4.00 | $1.00 (1.25x) | $1.60 (2x) | $0.08 |
 | Haiku 3 | $0.25 | $1.25 | $0.30 (1.25x) | $0.50 (2x) | $0.03 |
 
-> Source: `src/cost.rs` → `model_pricing()`
+> Source: `src/cost.rs` → `model_pricing()` / `model_pricing_at()`. Sonnet 5's introductory
+> rate is time-boxed and resolved against the real clock automatically — see
+> [sonnet-5.md](sonnet-5.md) for the date-driven mechanism and the cache-rate derivation
+> note (not separately published by Anthropic).
 
 ## Cost Formula
 
@@ -149,6 +154,8 @@ When both sources are available, statusline wins for cost/model/totals while JSO
 | `src/cost.rs` | `is_fast_capable()` | Checks if model supports fast mode (Opus >= 4.8) |
 | `src/cost.rs` | `speed_multiplier()` | Returns the per-turn fast multiplier (2x or 1x) |
 | `src/cost.rs` | `is_ga_1m_context()` | Checks if model is GA (no surcharge) |
+| `src/cost.rs` | `model_pricing_at()` | Clock-injected pricing lookup; resolves Sonnet 5's introductory vs. standard rate against a given instant |
+| `src/cost.rs` | `active_intro_pricing()` | The model's currently-active introductory-pricing window, if any — `None` once the promo closes, no caller-side expiry check |
 | `src/codex/cost.rs` | `default_model_pricing()` | OpenAI Codex per-model API pricing (incl. GPT-5.5) |
 | `src/codex/cost.rs` | `speed_multiplier()` | Codex fast multiplier (2.5x GPT-5.5 / 2x GPT-5.4) |
 | `src-tauri/src/commands.rs` | `build_codex_session_infos()` | Applies the Codex fast multiplier to session cost |
@@ -158,3 +165,7 @@ When both sources are available, statusline wins for cost/model/totals while JSO
 ## Fable 5 / Mythos 5 validator notes
 
 Runtime tests cover raw and dated Fable/Mythos IDs, display names, 1M GA context detection, no long-context surcharge, no Opus-tokenizer warning, and no fast-mode multiplier. Rich Presence tests cover `Fable 5 (1M)` and `Mythos 5 (1M)` labels.
+
+## Sonnet 5 validator notes
+
+Runtime tests cover: introductory vs. standard pricing on both sides of the 2026-09-01T00:00:00Z UTC cutoff (including the exact boundary instant), digit-boundary-safe id classification (`claude-sonnet-50` does not collide), the 1M-context GA fix, the extended inflated-tokenizer flag, and `SessionInfo.intro_pricing` wiring for both Claude and Codex session builders. Frontend tests cover the "Intro Pricing" badge's presence/absence and the generalized inflated-tokenizer tooltip. See [sonnet-5.md](sonnet-5.md) for the full mechanism.

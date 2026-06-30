@@ -149,7 +149,7 @@ describe("Dashboard.svelte", () => {
     await tick();
 
     const labels = [...container.querySelectorAll(".stats-row .stat-label")].map((e) => e.textContent?.trim());
-    expect(labels).toEqual(["Total Cost", "Total Tokens", "Sessions", "Avg Duration"]);
+    expect(labels).toEqual(["Total Cost (Live)", "Total Tokens", "Sessions", "Avg Duration"]);
     const values = [...container.querySelectorAll(".stats-row .stat-value")].map((e) => e.textContent?.trim());
     expect(values[0]).toBe("$12.50");
     expect(values[1]).toBe("1.1M");

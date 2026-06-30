@@ -44,7 +44,7 @@ the [fixtures/ChartStub.svelte](fixtures/ChartStub.svelte) stub so canvas-bound 
 | File | Component | Coverage |
 |:---|:---|:---|
 | [PulseMark.test.ts](components/PulseMark.test.ts) | `PulseMark` | svg sized to the `size` prop, P-glyph-only when `showPulse` is false (1 path), P glyph + pulse line when true (2 paths) |
-| [SessionCard.test.ts](components/SessionCard.test.ts) | `SessionCard` | fast badge present/absent on the `fast` flag, inflated-tokenizer marker shown for opus 4.7+ and omitted for 4.6, Opus 4.8 model display name, Fable/Mythos badges without tokenizer warnings |
+| [SessionCard.test.ts](components/SessionCard.test.ts) | `SessionCard` | fast badge present/absent on the `fast` flag, inflated-tokenizer marker shown for opus 4.7+ and Sonnet 5 (sourced from the backend `has_inflated_tokenizer` flag, not a local regex) and omitted for 4.6, Opus 4.8 model display name, Fable/Mythos badges without tokenizer warnings, Sonnet 5 "Intro Pricing" badge presence/absence driven by `session.intro_pricing` |
 | [Dashboard.test.ts](components/Dashboard.test.ts) | `Dashboard` (view) | four KPI tiles + values ($12.50 / 1.1M / 4), cost breakdown reconciles to the per-component estimated total, plan usage limits + model distribution (Opus 4.8 + Sonnet 4.6) |
 | [Sessions.test.ts](components/Sessions.test.ts) | `Sessions` (view) | KPI tile labels (Total Tokens / Total Cost / Avg Duration / Avg Cost/Session), live session rows + "2 active", history table loaded from the api layer |
 | [Costs.test.ts](components/Costs.test.ts) | `Costs` (view) | four cost KPI tiles, Cost-by-Type legend reconciles to the per-component total, budget tracking from the budget-status fixture ($30.00 / $100.00) |
@@ -75,9 +75,9 @@ Per-crate, per-module unit tests compiled with each crate. Representative covera
 
 | Area | Module | Coverage |
 |:---|:---|:---|
-| cost / pricing | `src/cost.rs` | per-tier pricing, Fable/Mythos rates, cache math, speed-aware totals, 1M-context surcharge, GA no-surcharge table, fast-capable model table |
+| cost / pricing | `src/cost.rs` | per-tier pricing, Fable/Mythos rates, Sonnet 5 introductory/standard pricing across the clock-injected cutoff boundary, digit-boundary-safe Sonnet 5 id classification, cache math, speed-aware totals, 1M-context surcharge, GA no-surcharge table, fast-capable model table |
 | presence lines | `src/discord.rs` | Claude presence details/state/tooltip composition across model/effort/speed/marker permutations, including Fable 5 (1M) and Mythos 5 (1M) labels |
-| session collect | `src/session.rs` | JSONL parse, token/cost accumulation, reasoning-effort + speed + service-tier extraction, git-branch + parse caching |
+| session collect | `src/session.rs` | JSONL parse, token/cost accumulation, reasoning-effort + speed + service-tier extraction, git-branch + parse caching; compaction-boundary detection resets `current_context_tokens` to the real post-compaction size while `max_turn_api_input` (the 1M-tier lifetime peak) survives unchanged, including the missing-`compactMetadata`, compaction-as-first-line, and zero-compaction edge cases |
 | metrics / usage | `src/metrics.rs`, `src/usage.rs` | aggregate metrics rollups, plan/usage-window derivation |
 | config | `src/config.rs`, `src/codex/config.rs` | presence/pricing config defaults + round-trip + Windows WSL opt-in flag parsing |
 | util / process | `src/util.rs`, `src/process_guard.rs` | path/format helpers, single-instance process guard |
@@ -85,8 +85,44 @@ Per-crate, per-module unit tests compiled with each crate. Representative covera
 | codex telemetry | `src/codex/telemetry/{plan.rs,service_tier.rs,limits.rs}` | plan-tier + service-tier resolution, rate-limit window parsing |
 | db | `src-tauri/src/db.rs` | SQLite historical-session insert/query/round-trip + context snapshot storage clamped to the model window |
 | analyzers | `src-tauri/src/analyzers/{session_trace.rs,cache_health.rs,model_routing.rs,prompt_complexity.rs,inflection.rs}` | trace scan + scan-pass counting, cache-health grading, model-routing split, prompt-complexity scoring, inflection-point detection |
-| commands | `src-tauri/src/commands.rs` | reports-bundle assembly from roots |
+| commands | `src-tauri/src/commands.rs` | reports-bundle assembly from roots; `SessionInfo.intro_pricing`/`has_inflated_tokenizer` wiring for Claude sessions (real-clock, matched against a fresh `cost::active_intro_pricing` call so the test never goes stale across the real cutoff date) and confirmed absent for Codex sessions; `SessionInfo.context_used_tokens` and `build_claude_context_breakdown`'s `used_tokens` reflect current fill (`current_context_tokens`) rather than the historical peak (`max_turn_api_input`), while `context_window_tokens`/the 1M-vs-200K decision still correctly keys off the peak |
 | update checks | `src-tauri/src/update_check.rs` | SemVer tag comparison, newer-release detection, prerelease/draft suppression, release URL allowlist |
+
+## v1.4.1 targeted validators
+
+Run these before cutting the context-tracking-fix release:
+
+```bash
+cargo test --workspace --jobs 2 compact_boundary
+cargo test --workspace --jobs 2 current_context_tokens
+cargo test -p pulse --lib --jobs 2 reflects_current_fill
+npm --prefix frontend run test -- tests/components/Dashboard.test.ts tests/components/Costs.test.ts
+npm --prefix frontend run check
+```
+
+Live re-proof (not part of the automated suite -- run manually before release): rebuild, relaunch
+with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>`, and re-issue the
+exact original repro (`window.__TAURI_INTERNALS__.invoke("get_context_breakdown", {sessionId})`
+via CDP `Runtime.evaluate`) against the real session that first surfaced the bug; confirm
+`used_tokens` is no longer pinned at the stale historical peak.
+
+## v1.4.0 targeted validators
+
+Run these before cutting the Sonnet 5 release:
+
+```bash
+cargo test --workspace --jobs 2 sonnet_5
+cargo test -p pulse --lib --jobs 2 intro_pricing
+npm --prefix frontend run test -- tests/unit/utils.test.ts tests/components/SessionCard.test.ts
+npm --prefix frontend run check
+```
+
+Full pre-ship gate (see below) applies as usual. Note: this environment compiles the `pulse`
+crate's full dependency tree (Tauri + the `icu_properties`/`idna` chain it pulls in) under
+tight available memory — pass `--jobs 2` to `cargo` invocations that touch the `pulse` package
+or the build can hit `STATUS_COMMIT_LIMIT_EXCEEDED` and cascade into unrelated-looking
+compile errors in transitive dependencies. This is an environment/parallelism characteristic,
+not a code defect — see the Sonnet 5 handoff for the diagnosis.
 
 ## v1.2.0 targeted validators
 

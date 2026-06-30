@@ -527,6 +527,14 @@ pub struct SessionInfo {
     pub fast: bool,
     /// Service tier of the most recent turn ("priority"/"standard"), display only.
     pub service_tier: Option<String>,
+    /// This session's model's currently-active introductory-pricing window, if
+    /// any. `None` both for models with no promo and for a promo'd model once
+    /// its window has closed — the frontend never computes its own expiry.
+    pub intro_pricing: Option<cost::IntroPricingBadge>,
+    /// True when this session's model uses a newer tokenizer that bills more
+    /// tokens than its predecessor for the same input text at an unchanged
+    /// per-token rate (currently: Opus 4.7+, Claude Sonnet 5).
+    pub has_inflated_tokenizer: bool,
 }
 
 #[derive(Serialize)]
@@ -593,11 +601,13 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 0.0
             };
             let model_id_raw = s.model.clone().unwrap_or_default();
+            let intro_pricing = cost::active_intro_pricing(&model_id_raw, chrono::Utc::now());
+            let has_inflated_tokenizer = cost::has_inflated_tokenizer(&model_id_raw);
             let has_1m = cost::is_ga_1m_context(&model_id_raw)
                 || model_id_raw.contains("[1m]")
                 || s.max_turn_api_input > 200_000;
             let ctx_window_tokens = if has_1m { 1_000_000 } else { 200_000 };
-            let ctx_used_tokens = s.max_turn_api_input.min(ctx_window_tokens);
+            let ctx_used_tokens = s.current_context_tokens.min(ctx_window_tokens);
             let ctx_window = if has_1m { "1M" } else { "200K" }.to_string();
             let subagent_details: Vec<SubagentDetail> = s
                 .subagents
@@ -661,6 +671,8 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 speed: s.speed.as_str().to_string(),
                 fast,
                 service_tier: s.service_tier.clone(),
+                intro_pricing,
+                has_inflated_tokenizer,
             }
         })
         .collect()
@@ -774,6 +786,8 @@ fn build_codex_session_infos(
                 speed: Speed::from_fast(fast_mode).as_str().to_string(),
                 fast: fast_mode,
                 service_tier: None,
+                intro_pricing: None,
+                has_inflated_tokenizer: false,
             }
         })
         .collect()
@@ -1921,7 +1935,7 @@ fn build_claude_context_breakdown(selected: Option<&ClaudeSessionSnapshot>) -> C
     let claude_home = cc_discord_presence::config::claude_home();
     let model = selected.map_or_else(|| "Unknown".into(), claude_context_model);
     let ctx_window = selected.map_or(200_000, claude_context_window);
-    let latest_input = selected.map_or(0, |s| s.max_turn_api_input);
+    let current_context_tokens = selected.map_or(0, |s| s.current_context_tokens);
     let memory_files = collect_claude_memory_files(&claude_home, selected);
     let memory_total: u64 = memory_files.iter().map(|f| f.tokens).sum();
     let skills = collect_skills_from_dir(&claude_home.join("skills"));
@@ -1931,8 +1945,8 @@ fn build_claude_context_breakdown(selected: Option<&ClaudeSessionSnapshot>) -> C
     let system_prompt: u64 = 10_000;
     let system_tools: u64 = 6_000;
     let known = system_prompt + system_tools + memory_total + skills_total + mcp_total;
-    let used_tokens = if latest_input > 0 {
-        latest_input.min(ctx_window)
+    let used_tokens = if current_context_tokens > 0 {
+        current_context_tokens.min(ctx_window)
     } else {
         (known + u64::from(selected.is_some()) * 1_000).min(ctx_window)
     };
@@ -2568,13 +2582,143 @@ pub fn build_reports_bundle_from_roots(
 
 #[cfg(test)]
 mod tests {
-    use super::{codex_plan_key_from_tier, codex_total_input_tokens, plan_key_from_override};
+    use super::{
+        build_claude_context_breakdown, build_claude_session_infos, build_codex_session_infos,
+        codex_plan_key_from_tier, codex_total_input_tokens, plan_key_from_override,
+    };
     use cc_discord_presence::codex::cost::{PricingSource, TokenCostBreakdown};
     use cc_discord_presence::codex::session::CodexSessionSnapshot;
     use cc_discord_presence::codex::telemetry::limits::RateLimits;
     use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
+    use cc_discord_presence::cost;
+    use cc_discord_presence::session::{ClaudeSessionSnapshot, DataSource, ReasoningEffort, Speed};
     use std::path::PathBuf;
     use std::time::SystemTime;
+
+    fn sample_claude_snapshot(model_id: &str) -> ClaudeSessionSnapshot {
+        ClaudeSessionSnapshot {
+            session_id: format!("{model_id}-session"),
+            cwd: PathBuf::from("D:/X/Pulse"),
+            project_name: "pulse".into(),
+            git_branch: None,
+            model: Some(model_id.to_string()),
+            model_display: Some(cost::model_display_name(model_id)),
+            session_total_tokens: Some(120_000),
+            last_turn_tokens: Some(2_000),
+            session_delta_tokens: None,
+            input_tokens: 100_000,
+            output_tokens: 20_000,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            max_turn_api_input: 100_000,
+            current_context_tokens: 100_000,
+            reasoning_effort: ReasoningEffort::High,
+            reasoning_effort_explicit: true,
+            has_thinking_blocks: false,
+            speed: Speed::Standard,
+            service_tier: None,
+            total_cost: 2.0,
+            input_cost: 1.0,
+            output_cost: 1.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
+            total_api_duration_ms: 0,
+            limits: cc_discord_presence::session::RateLimits::default(),
+            activity: None,
+            started_at: None,
+            last_token_event_at: None,
+            last_activity: SystemTime::now(),
+            source: DataSource::Jsonl,
+            source_file: PathBuf::from("session.jsonl"),
+            subagents: Vec::new(),
+            is_subagent: false,
+            parent_session_id: None,
+        }
+    }
+
+    #[test]
+    fn claude_session_info_carries_the_real_time_sonnet_5_intro_pricing_badge() {
+        let snapshots = [sample_claude_snapshot("claude-sonnet-5")];
+        let infos = build_claude_session_infos(&snapshots);
+        let expected = cost::active_intro_pricing("claude-sonnet-5", chrono::Utc::now());
+
+        assert_eq!(infos[0].intro_pricing, expected);
+    }
+
+    #[test]
+    fn claude_session_info_has_no_intro_pricing_badge_for_a_model_with_no_promo() {
+        let snapshots = [sample_claude_snapshot("claude-sonnet-4-6")];
+        let infos = build_claude_session_infos(&snapshots);
+
+        assert!(infos[0].intro_pricing.is_none());
+    }
+
+    #[test]
+    fn claude_session_info_flags_inflated_tokenizer_for_sonnet_5_and_opus_4_7_plus() {
+        for model_id in ["claude-sonnet-5", "claude-opus-4-8"] {
+            let snapshots = [sample_claude_snapshot(model_id)];
+            let infos = build_claude_session_infos(&snapshots);
+            assert!(infos[0].has_inflated_tokenizer, "{model_id}");
+        }
+    }
+
+    #[test]
+    fn claude_session_info_does_not_flag_inflated_tokenizer_for_sonnet_4_6() {
+        let snapshots = [sample_claude_snapshot("claude-sonnet-4-6")];
+        let infos = build_claude_session_infos(&snapshots);
+
+        assert!(!infos[0].has_inflated_tokenizer);
+    }
+
+    #[test]
+    fn codex_session_info_never_carries_an_intro_pricing_badge_or_inflated_tokenizer_flag() {
+        let standard = build_codex_session_infos(&[sample_codex_snapshot()], false, false);
+
+        assert!(standard[0].intro_pricing.is_none());
+        assert!(!standard[0].has_inflated_tokenizer);
+    }
+
+    #[test]
+    fn session_info_context_used_tokens_reflects_current_fill_not_the_historical_peak() {
+        let snapshot = ClaudeSessionSnapshot {
+            max_turn_api_input: 999_486,
+            current_context_tokens: 25_500,
+            ..sample_claude_snapshot("claude-sonnet-5")
+        };
+        let infos = build_claude_session_infos(&[snapshot]);
+
+        assert_eq!(
+            infos[0].context_used_tokens, 25_500,
+            "the live-session ctx-1m badge must show current fill, not the all-time peak"
+        );
+        assert_eq!(
+            infos[0].context_window_tokens, 1_000_000,
+            "the 1M-vs-200K window-size decision is unaffected -- it stays keyed off the \
+             historical peak (max_turn_api_input), which correctly never decreases"
+        );
+    }
+
+    #[test]
+    fn context_breakdown_used_tokens_reflects_current_fill_not_the_historical_peak() {
+        let snapshot = ClaudeSessionSnapshot {
+            max_turn_api_input: 999_486,
+            current_context_tokens: 25_500,
+            ..sample_claude_snapshot("claude-sonnet-5")
+        };
+        let breakdown = build_claude_context_breakdown(Some(&snapshot));
+
+        assert_eq!(
+            breakdown.used_tokens, 25_500,
+            "the Context Window view must show current fill, not the session's all-time peak"
+        );
+        assert_eq!(breakdown.context_window, 1_000_000);
+        assert!(
+            breakdown.free_space > 0,
+            "a session that genuinely emptied out after compaction must show real free space, \
+             not 0 (the exact symptom Tony reported: a CRITICAL \"100% full\" recommendation \
+             for a session that isn't actually full right now)"
+        );
+    }
 
     #[test]
     fn plan_key_from_override_accepts_display_labels_and_auto() {

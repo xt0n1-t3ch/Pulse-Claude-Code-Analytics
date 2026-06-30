@@ -1,3 +1,6 @@
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+
 /// Model pricing per million tokens.
 /// Update these when new models are released: https://www.anthropic.com/pricing
 ///
@@ -7,7 +10,7 @@
 ///
 /// Note: 1-hour TTL cache writes cost 2x base input, but Claude Code JSONL
 /// doesn't distinguish cache TTL, so we use the 5-minute rate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
 pub struct ModelPricing {
     pub input_per_million: f64,
     pub output_per_million: f64,
@@ -30,8 +33,101 @@ fn is_mythos_class(id: &str) -> bool {
     id.contains("fable") || id.contains("mythos")
 }
 
-pub fn model_pricing(model_id: &str) -> ModelPricing {
+/// Matches Claude Sonnet 5 ids ("claude-sonnet-5", dated and `[1m]`-suffixed
+/// variants) without colliding with a hypothetical future "Sonnet 50" or any
+/// other id that merely starts with the same digits. The character
+/// immediately after "sonnet-5" must be one of the two real Anthropic id
+/// continuations (`-` before a date suffix, `[` before a context suffix) or
+/// the end of the string; anything else is a different model.
+fn is_sonnet_5_class(id: &str) -> bool {
+    match id.find("sonnet-5") {
+        None => false,
+        Some(pos) => matches!(
+            id[pos + "sonnet-5".len()..].chars().next(),
+            None | Some('-') | Some('[')
+        ),
+    }
+}
+
+/// Exclusive upper bound of the Claude Sonnet 5 introductory-pricing window:
+/// $2/$10 input/output per MTok "through August 31, 2026" per
+/// <https://www.anthropic.com/news/claude-sonnet-5>. Anthropic published a
+/// date, not a time or timezone, so this models the cutoff as UTC midnight
+/// at the start of the following day — intro pricing is active while
+/// `now` is strictly before this instant.
+const SONNET_5_INTRO_PRICING_ENDS_UTC: &str = "2026-09-01T00:00:00Z";
+
+const SONNET_5_INTRO_PRICING: ModelPricing = ModelPricing {
+    input_per_million: 2.0,
+    output_per_million: 10.0,
+    cache_write_per_million: 2.50,
+    cache_read_per_million: 0.20,
+};
+
+const SONNET_5_REGULAR_PRICING: ModelPricing = ModelPricing {
+    input_per_million: 3.0,
+    output_per_million: 15.0,
+    cache_write_per_million: 3.75,
+    cache_read_per_million: 0.30,
+};
+
+fn sonnet_5_intro_pricing_ends() -> DateTime<Utc> {
+    SONNET_5_INTRO_PRICING_ENDS_UTC
+        .parse()
+        .expect("SONNET_5_INTRO_PRICING_ENDS_UTC must be a valid RFC3339 instant")
+}
+
+/// Whether Claude Sonnet 5's introductory pricing is active at `now`. The
+/// single source of truth for the cutoff: every caller (pricing, the
+/// frontend promo badge) goes through this function, so the promo can never
+/// disagree with itself across the app.
+pub fn sonnet_5_intro_pricing_active(now: DateTime<Utc>) -> bool {
+    now < sonnet_5_intro_pricing_ends()
+}
+
+/// A model's currently-active introductory-pricing window, if any. `None`
+/// both for models with no promo and for a promo'd model once its window has
+/// closed — callers never need their own expiry check.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct IntroPricingBadge {
+    pub intro: ModelPricing,
+    pub regular: ModelPricing,
+    pub ends_at: String,
+}
+
+pub fn active_intro_pricing(model_id: &str, now: DateTime<Utc>) -> Option<IntroPricingBadge> {
     let id = strip_context_suffix(model_id).to_lowercase();
+    if is_sonnet_5_class(&id) && sonnet_5_intro_pricing_active(now) {
+        Some(IntroPricingBadge {
+            intro: SONNET_5_INTRO_PRICING,
+            regular: SONNET_5_REGULAR_PRICING,
+            ends_at: sonnet_5_intro_pricing_ends().to_rfc3339(),
+        })
+    } else {
+        None
+    }
+}
+
+/// Resolves a model's pricing as of the real wall clock. Thin wrapper over
+/// `model_pricing_at`, which is the real source of truth and the one every
+/// test exercises with an injected `now` — see that function's doc comment.
+pub fn model_pricing(model_id: &str) -> ModelPricing {
+    model_pricing_at(model_id, Utc::now())
+}
+
+/// Resolves a model's pricing at a given instant. Time-boxed introductory
+/// pricing (currently: Claude Sonnet 5) is evaluated against `now` so the
+/// whole function is a pure, clock-injected lookup — no hidden global clock,
+/// fully unit-testable at and around any cutoff boundary.
+pub fn model_pricing_at(model_id: &str, now: DateTime<Utc>) -> ModelPricing {
+    let id = strip_context_suffix(model_id).to_lowercase();
+    if is_sonnet_5_class(&id) {
+        return if sonnet_5_intro_pricing_active(now) {
+            SONNET_5_INTRO_PRICING
+        } else {
+            SONNET_5_REGULAR_PRICING
+        };
+    }
     if id.contains("opus") {
         if is_new_opus(&id) {
             ModelPricing {
@@ -182,7 +278,7 @@ pub fn supports_1m_context(model_id: &str) -> bool {
         return true;
     }
     let id = strip_context_suffix(model_id).to_lowercase();
-    if is_mythos_class(&id) {
+    if is_mythos_class(&id) || is_sonnet_5_class(&id) {
         return true;
     }
     if id.contains("haiku") {
@@ -245,7 +341,7 @@ pub fn is_ga_1m_context(model_id: &str) -> bool {
         return true;
     }
     let id = strip_context_suffix(model_id).to_lowercase();
-    if is_mythos_class(&id) {
+    if is_mythos_class(&id) || is_sonnet_5_class(&id) {
         return true;
     }
     if id.contains("opus") {
@@ -336,13 +432,19 @@ pub fn strip_claude_prefix(display_name: &str) -> &str {
 }
 
 /// True when the model uses a newer tokenizer that produces more tokens per prompt
-/// for the same input text. Currently: Opus 4.7 ships with a tokenizer that can
-/// produce up to ~35% more tokens than 4.6 for identical text, inflating billing
-/// even though per-token rates are unchanged.
+/// for the same input text than its immediate predecessor, inflating billing even
+/// though per-token rates are unchanged. Opus 4.7+ can produce up to ~35% more
+/// tokens than 4.6 for identical text; Claude Sonnet 5 ships the same class of
+/// tokenizer change versus Sonnet 4.6 (~1.0-1.35x, per Anthropic's Sonnet 5 launch
+/// post). This is permanent, independent of Sonnet 5's introductory-pricing window.
 ///
-/// UI surfaces this as a tooltip/warning so users understand cost deltas vs 4.6.
+/// UI surfaces this as a tooltip/warning so users understand cost deltas vs the
+/// previous generation.
 pub fn has_inflated_tokenizer(model_id: &str) -> bool {
     let id = strip_context_suffix(model_id).to_lowercase();
+    if is_sonnet_5_class(&id) {
+        return true;
+    }
     if !id.contains("opus") {
         return false;
     }
@@ -634,6 +736,35 @@ mod tests {
     }
 
     #[test]
+    fn sonnet_5_is_ga_1m_context_not_beta_surcharge() {
+        assert!(is_ga_1m_context("claude-sonnet-5"));
+        assert!(is_ga_1m_context("claude-sonnet-5-20260625"));
+        assert!(is_ga_1m_context("claude-sonnet-5[1m]"));
+    }
+
+    #[test]
+    fn sonnet_5_supports_1m_context() {
+        assert!(supports_1m_context("claude-sonnet-5"));
+        assert!(supports_1m_context("claude-sonnet-5-20260625"));
+        assert!(supports_1m_context("claude-sonnet-5[1m]"));
+    }
+
+    #[test]
+    fn sonnet_5_no_1m_surcharge_regardless_of_promo_state() {
+        let with = calculate_cost_with_context("claude-sonnet-5", 50_000, 5_000, 100_000, 100_000);
+        let plain = calculate_cost("claude-sonnet-5", 50_000, 5_000, 100_000, 100_000);
+        assert!((with - plain).abs() < 0.0001);
+    }
+
+    #[test]
+    fn sonnet_5_display_with_context_always_shows_1m() {
+        assert_eq!(
+            model_display_with_context("claude-sonnet-5", "Claude Sonnet 5", 0),
+            "Claude Sonnet 5 (1M)"
+        );
+    }
+
+    #[test]
     fn test_is_ga_1m_context() {
         assert!(is_ga_1m_context("claude-opus-4-6"));
         assert!(is_ga_1m_context("claude-opus-4-6-20260213"));
@@ -786,6 +917,40 @@ mod tests {
         assert!(!has_inflated_tokenizer("claude-sonnet-4-6"));
         assert!(!has_inflated_tokenizer("claude-haiku-4-5"));
         assert!(!has_inflated_tokenizer("unknown"));
+    }
+
+    #[test]
+    fn sonnet_5_has_inflated_tokenizer() {
+        assert!(has_inflated_tokenizer("claude-sonnet-5"));
+        assert!(has_inflated_tokenizer("claude-sonnet-5-20260625"));
+        assert!(has_inflated_tokenizer("claude-sonnet-5[1m]"));
+    }
+
+    #[test]
+    fn sonnet_4_x_does_not_have_inflated_tokenizer() {
+        assert!(!has_inflated_tokenizer("claude-sonnet-4-5"));
+        assert!(!has_inflated_tokenizer("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn sonnet_5_display_name() {
+        assert_eq!(model_display_name("claude-sonnet-5"), "Claude Sonnet 5");
+        assert_eq!(
+            model_display_name("claude-sonnet-5-20260625"),
+            "Claude Sonnet 5"
+        );
+        assert_eq!(model_display_name("claude-sonnet-5[1m]"), "Claude Sonnet 5");
+    }
+
+    #[test]
+    fn sonnet_5_strip_display_for_discord() {
+        let display = model_display_name("claude-sonnet-5");
+        assert_eq!(strip_claude_prefix(&display), "Sonnet 5");
+    }
+
+    #[test]
+    fn sonnet_5_is_not_fast_capable() {
+        assert!(!is_fast_capable("claude-sonnet-5"));
     }
 
     #[test]
@@ -1112,5 +1277,134 @@ mod tests {
         let display = model_display_name("claude-mythos-5");
         assert_eq!(display, "Claude Mythos 5");
         assert_eq!(strip_claude_prefix(&display), "Mythos 5");
+    }
+
+    fn just_before_sonnet_5_intro_cutoff() -> DateTime<Utc> {
+        "2026-08-31T23:59:59Z".parse().unwrap()
+    }
+
+    fn sonnet_5_intro_cutoff_instant() -> DateTime<Utc> {
+        "2026-09-01T00:00:00Z".parse().unwrap()
+    }
+
+    fn just_after_sonnet_5_intro_cutoff() -> DateTime<Utc> {
+        "2026-09-01T00:00:01Z".parse().unwrap()
+    }
+
+    #[test]
+    fn sonnet_5_bare_and_dated_and_suffixed_ids_get_intro_pricing_before_cutoff() {
+        let now = just_before_sonnet_5_intro_cutoff();
+        for id in [
+            "claude-sonnet-5",
+            "claude-sonnet-5-20260625",
+            "claude-sonnet-5[1m]",
+            "CLAUDE-SONNET-5",
+        ] {
+            let p = model_pricing_at(id, now);
+            assert!((p.input_per_million - 2.0).abs() < 0.001, "{id} input");
+            assert!((p.output_per_million - 10.0).abs() < 0.001, "{id} output");
+            assert!(
+                (p.cache_write_per_million - 2.50).abs() < 0.001,
+                "{id} cache_write"
+            );
+            assert!(
+                (p.cache_read_per_million - 0.20).abs() < 0.001,
+                "{id} cache_read"
+            );
+        }
+    }
+
+    #[test]
+    fn sonnet_5_reverts_to_regular_pricing_after_cutoff() {
+        let now = just_after_sonnet_5_intro_cutoff();
+        let p = model_pricing_at("claude-sonnet-5", now);
+        assert!((p.input_per_million - 3.0).abs() < 0.001);
+        assert!((p.output_per_million - 15.0).abs() < 0.001);
+        assert!((p.cache_write_per_million - 3.75).abs() < 0.001);
+        assert!((p.cache_read_per_million - 0.30).abs() < 0.001);
+    }
+
+    #[test]
+    fn sonnet_5_cutoff_instant_is_an_exclusive_upper_bound_on_intro_pricing() {
+        let exact = model_pricing_at("claude-sonnet-5", sonnet_5_intro_cutoff_instant());
+        assert!(
+            (exact.input_per_million - 3.0).abs() < 0.001,
+            "exact cutoff instant must already be regular pricing"
+        );
+        let one_second_before = model_pricing_at(
+            "claude-sonnet-5",
+            sonnet_5_intro_cutoff_instant() - chrono::Duration::seconds(1),
+        );
+        assert!(
+            (one_second_before.input_per_million - 2.0).abs() < 0.001,
+            "one second before the cutoff must still be intro pricing"
+        );
+    }
+
+    #[test]
+    fn sonnet_5_lookalike_ids_never_get_intro_pricing() {
+        let now = just_before_sonnet_5_intro_cutoff();
+        for id in ["claude-sonnet-50", "claude-sonnet-5x"] {
+            let p = model_pricing_at(id, now);
+            assert!(
+                (p.input_per_million - 3.0).abs() < 0.001,
+                "{id} must use flat sonnet pricing, not the Sonnet 5 intro rate"
+            );
+        }
+    }
+
+    #[test]
+    fn sonnet_4_x_pricing_is_unaffected_by_the_sonnet_5_intro_window() {
+        for id in [
+            "claude-sonnet-4-5",
+            "claude-sonnet-4-5-20250929",
+            "claude-sonnet-4-6",
+        ] {
+            let before = model_pricing_at(id, just_before_sonnet_5_intro_cutoff());
+            let after = model_pricing_at(id, just_after_sonnet_5_intro_cutoff());
+            assert!(
+                (before.input_per_million - 3.0).abs() < 0.001,
+                "{id} before"
+            );
+            assert!((after.input_per_million - 3.0).abs() < 0.001, "{id} after");
+        }
+    }
+
+    #[test]
+    fn active_intro_pricing_is_some_with_both_rate_sets_before_cutoff() {
+        let badge = active_intro_pricing("claude-sonnet-5", just_before_sonnet_5_intro_cutoff())
+            .expect("intro pricing should be active before the cutoff");
+        assert!((badge.intro.input_per_million - 2.0).abs() < 0.001);
+        assert!((badge.regular.input_per_million - 3.0).abs() < 0.001);
+        assert_eq!(badge.ends_at, "2026-09-01T00:00:00+00:00");
+    }
+
+    #[test]
+    fn active_intro_pricing_is_none_at_and_after_cutoff() {
+        assert!(active_intro_pricing("claude-sonnet-5", sonnet_5_intro_cutoff_instant()).is_none());
+        assert!(
+            active_intro_pricing("claude-sonnet-5", just_after_sonnet_5_intro_cutoff()).is_none()
+        );
+    }
+
+    #[test]
+    fn active_intro_pricing_is_none_for_models_with_no_promo() {
+        assert!(
+            active_intro_pricing("claude-sonnet-4-6", just_before_sonnet_5_intro_cutoff())
+                .is_none()
+        );
+        assert!(
+            active_intro_pricing("claude-opus-4-8", just_before_sonnet_5_intro_cutoff()).is_none()
+        );
+        assert!(active_intro_pricing("", just_before_sonnet_5_intro_cutoff()).is_none());
+    }
+
+    #[test]
+    fn model_pricing_real_clock_wrapper_resolves_sonnet_5_to_a_valid_rate() {
+        let p = model_pricing("claude-sonnet-5");
+        assert!(
+            (p.input_per_million - 2.0).abs() < 0.001 || (p.input_per_million - 3.0).abs() < 0.001,
+            "must resolve to either the intro or the regular Sonnet 5 rate depending on the real wall clock"
+        );
     }
 }
