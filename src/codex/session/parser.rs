@@ -1,6 +1,6 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -239,73 +239,36 @@ pub(super) fn parse_utc_timestamp(text: String) -> Option<DateTime<Utc>> {
 }
 
 pub(super) fn fetch_git_branch(project_path: &Path) -> Option<String> {
-    let git_dir = discover_git_dir(project_path)?;
-    let head = fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    parse_git_head(head.trim())
-}
+    let output = crate::util::silent_command("git")
+        .arg("-C")
+        .arg(project_path)
+        .arg("rev-parse")
+        .arg("--abbrev-ref")
+        .arg("HEAD")
+        .output()
+        .ok()?;
 
-fn discover_git_dir(project_path: &Path) -> Option<PathBuf> {
-    let mut current = if project_path.is_file() {
-        project_path.parent()?.to_path_buf()
-    } else {
-        project_path.to_path_buf()
-    };
-
-    loop {
-        let dot_git = current.join(".git");
-        if let Some(git_dir) = resolve_git_dir(&dot_git, &current) {
-            return Some(git_dir);
-        }
-
-        if !current.pop() {
-            break;
-        }
-    }
-
-    None
-}
-
-fn resolve_git_dir(dot_git: &Path, repo_root: &Path) -> Option<PathBuf> {
-    if dot_git.is_dir() {
-        return Some(dot_git.to_path_buf());
-    }
-
-    if !dot_git.is_file() {
+    if !output.status.success() {
         return None;
     }
 
-    let pointer = fs::read_to_string(dot_git).ok()?;
-    let target = pointer.strip_prefix("gitdir:")?.trim();
-    if target.is_empty() {
-        return None;
-    }
-
-    let git_dir = Path::new(target);
-    Some(if git_dir.is_absolute() {
-        git_dir.to_path_buf()
-    } else {
-        repo_root.join(git_dir)
-    })
-}
-
-fn parse_git_head(head: &str) -> Option<String> {
-    if head.is_empty() {
-        return None;
-    }
-
-    if let Some(reference) = head.strip_prefix("ref:") {
-        let reference = reference.trim();
-        if reference.is_empty() {
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch == "HEAD" {
+        let output = crate::util::silent_command("git")
+            .arg("-C")
+            .arg(project_path)
+            .arg("rev-parse")
+            .arg("--short")
+            .arg("HEAD")
+            .output()
+            .ok()?;
+        if !output.status.success() {
             return None;
         }
-        if let Some(branch) = reference.strip_prefix("refs/heads/") {
-            return (!branch.is_empty()).then_some(branch.to_string());
-        }
-        return Some(reference.to_string());
+        let short = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return (!short.is_empty()).then_some(short);
     }
-
-    let short_len = head.len().min(7);
-    Some(head[..short_len].to_string())
+    (!branch.is_empty()).then_some(branch)
 }
 
 pub(super) fn str_at(value: &Value, path: &[&str]) -> Option<String> {
@@ -324,50 +287,4 @@ pub(super) fn uint_at(value: &Value, path: &[&str]) -> Option<u64> {
     cursor
         .as_u64()
         .or_else(|| cursor.as_i64().and_then(|n| (n >= 0).then_some(n as u64)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{fetch_git_branch, parse_git_head};
-    use std::fs;
-    use tempfile::tempdir;
-
-    #[test]
-    fn parses_symbolic_head_branch_name() {
-        assert_eq!(
-            parse_git_head("ref: refs/heads/feature/pulse"),
-            Some("feature/pulse".to_string())
-        );
-    }
-
-    #[test]
-    fn shortens_detached_head_commit() {
-        assert_eq!(
-            parse_git_head("0123456789abcdef"),
-            Some("0123456".to_string())
-        );
-    }
-
-    #[test]
-    fn reads_branch_from_git_directory_without_spawning_git() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        fs::create_dir_all(repo.join(".git")).unwrap();
-        fs::write(repo.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
-
-        assert_eq!(fetch_git_branch(&repo), Some("main".to_string()));
-    }
-
-    #[test]
-    fn resolves_worktree_gitdir_pointer() {
-        let temp = tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        let git_dir = temp.path().join("actual-git-dir");
-        fs::create_dir_all(&repo).unwrap();
-        fs::create_dir_all(&git_dir).unwrap();
-        fs::write(repo.join(".git"), "gitdir: ../actual-git-dir\n").unwrap();
-        fs::write(git_dir.join("HEAD"), "ref: refs/heads/release\n").unwrap();
-
-        assert_eq!(fetch_git_branch(&repo), Some("release".to_string()));
-    }
 }

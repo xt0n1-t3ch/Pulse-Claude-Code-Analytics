@@ -241,29 +241,11 @@ impl PresenceConfig {
     }
 
     pub fn plan_display_name(&self) -> Option<&str> {
-        match self.plan.as_deref()? {
-            "free" => Some("Free"),
-            "pro" => Some("Pro ($20/mo)"),
-            "max_5x" => Some("Max ($100/mo)"),
-            "max_20x" => Some("Max ($200/mo)"),
-            "max" => Some("Max"),
-            "team" => Some("Team"),
-            "enterprise" => Some("Enterprise"),
-            _ => None,
-        }
+        crate::plan::display_name_from_key(self.plan.as_deref()?)
     }
 
     pub fn plan_badge_name(&self) -> Option<&str> {
-        match self.plan.as_deref()? {
-            "free" => Some("FREE"),
-            "pro" => Some("PRO"),
-            "max_5x" => Some("MAX 5x"),
-            "max_20x" => Some("MAX 20x"),
-            "max" => Some("MAX"),
-            "team" => Some("TEAM"),
-            "enterprise" => Some("ENTERPRISE"),
-            _ => None,
-        }
+        crate::plan::badge_name_from_key(self.plan.as_deref()?)
     }
 
     pub fn toggle_privacy(&mut self) -> bool {
@@ -432,8 +414,10 @@ pub fn projects_paths() -> Vec<PathBuf> {
 
     #[cfg(windows)]
     {
-        for candidate in windows_wsl_projects_candidates() {
-            push_unique_path(&mut ordered, &mut seen, candidate);
+        if include_wsl_session_roots() {
+            for candidate in windows_wsl_projects_candidates() {
+                push_unique_path(&mut ordered, &mut seen, candidate);
+            }
         }
     }
 
@@ -563,6 +547,19 @@ fn wsl_windows_projects_candidates() -> Vec<PathBuf> {
     }
 
     candidates
+}
+
+#[cfg(windows)]
+fn parse_bool_flag(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+#[cfg(windows)]
+fn include_wsl_session_roots() -> bool {
+    parse_bool_flag(env::var("CC_PRESENCE_INCLUDE_WSL").ok().as_deref())
 }
 
 #[cfg(all(unix, not(windows)))]
@@ -969,5 +966,18 @@ mod tests {
 
         let result = find_best_workspace(Path::new("E:\\other\\file.txt"), &workspaces);
         assert_eq!(result, None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_roots_are_explicit_opt_in() {
+        assert!(!parse_bool_flag(None));
+        assert!(!parse_bool_flag(Some("")));
+        assert!(!parse_bool_flag(Some("0")));
+        assert!(!parse_bool_flag(Some("false")));
+        assert!(parse_bool_flag(Some("1")));
+        assert!(parse_bool_flag(Some("true")));
+        assert!(parse_bool_flag(Some("YES")));
+        assert!(parse_bool_flag(Some("on")));
     }
 }

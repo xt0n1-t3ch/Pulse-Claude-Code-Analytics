@@ -33,6 +33,29 @@ to the client-id's portal.
 
 3. Click **Save Changes**.
 
+### Codex apps
+
+Codex broadcasts from two separate Discord applications by surface, each of which
+needs its own upload. As of this release neither has assets uploaded yet, so the
+live Codex presence shows no large image until you add them (the in-app preview
+is unaffected — see below). Tracked in issue #36.
+
+| Application      | Client ID            | Portal                                                                                          | Asset key     | Source file                                            |
+| ---------------- | -------------------- | ----------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------ |
+| Codex CLI / VS Code | `1470480085453770854` | <https://discord.com/developers/applications/1470480085453770854/rich-presence/assets> | `codex-logo`  | the Codex mark (e.g. `assets/branding/codex-app.png`)  |
+| Codex App / OpenCode | `1478395304624652345` | <https://discord.com/developers/applications/1478395304624652345/rich-presence/assets> | `codex-app`   | `assets/branding/codex-app.png`                        |
+
+The Codex service tier (Fast mode) and surface (App vs CLI) are detected from the
+local Codex state — see [plan-detection.md](plan-detection.md).
+
+## In-app Live Preview art
+
+The Pulse **Discord** view bundles the real Rich Presence artwork locally
+(`frontend/src/assets/rp/`, mapped by provider/surface in
+`frontend/src/lib/rpArt.ts`) so the Live Preview is faithful **regardless of the
+Developer Portal**. This is preview-only; it does not change what Discord
+broadcasts, which still depends on the uploads above.
+
 ## Fallback tiers (no manual upload required)
 
 If the asset key isn't in the portal, Pulse falls back through three tiers

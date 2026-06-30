@@ -39,6 +39,19 @@ export interface SubagentDetail {
     activity: string;
 }
 
+export interface ModelPricingRates {
+    input_per_million: number;
+    output_per_million: number;
+    cache_write_per_million: number;
+    cache_read_per_million: number;
+}
+
+export interface IntroPricingInfo {
+    intro: ModelPricingRates;
+    regular: ModelPricingRates;
+    ends_at: string;
+}
+
 export interface SessionInfo {
     session_id: string;
     session_name: string | null;
@@ -53,6 +66,8 @@ export interface SessionInfo {
     output_tokens: number;
     cache_write_tokens: number;
     cache_read_tokens: number;
+    context_used_tokens?: number;
+    context_window_tokens?: number;
     branch: string | null;
     activity: string;
     activity_target: string | null;
@@ -73,6 +88,8 @@ export interface SessionInfo {
     fast: boolean;
     service_tier: string | null;
     app_name?: string | null;
+    intro_pricing: IntroPricingInfo | null;
+    has_inflated_tokenizer: boolean;
 }
 
 export interface RateLimitInfo {
@@ -106,6 +123,8 @@ export interface DiscordUserInfo {
 
 export interface PlanInfo {
     provider: string;
+    /** Canonical plan key for the Settings select (e.g. "max_20x"); "" when unknown. */
+    plan_key: string;
     plan_name: string;
     detected: boolean;
 }
@@ -350,6 +369,19 @@ export interface ContextBreakdown {
 
 export function getContextBreakdown(sessionId?: string): Promise<ContextBreakdown> {
     return invoke("get_context_breakdown", { sessionId: sessionId ?? null });
+}
+
+export interface SessionContextBreakdown {
+    session_id: string;
+    project: string;
+    model_id: string;
+    is_idle: boolean;
+    activity: string;
+    breakdown: ContextBreakdown;
+}
+
+export function getContextBreakdowns(sessionIds?: string[]): Promise<SessionContextBreakdown[]> {
+    return invoke("get_context_breakdowns", { sessionIds: sessionIds ?? null });
 }
 
 export interface SessionContextUsage {
@@ -617,4 +649,31 @@ export function getSessionsByHourRange(
 /// next tick (~5s cycle). Returns immediately; stores re-poll picks up fresh data.
 export function refreshUsage(): Promise<void> {
     return invoke("refresh_usage");
+}
+
+export interface AppUpdateAsset {
+    name: string;
+    download_url: string;
+    size: number;
+    content_type: string;
+}
+
+export interface AppUpdateInfo {
+    current_version: string;
+    latest_version: string | null;
+    update_available: boolean;
+    release_name: string | null;
+    release_notes: string | null;
+    release_url: string;
+    published_at: string | null;
+    checked_at: string;
+    assets: AppUpdateAsset[];
+}
+
+export function checkAppUpdate(): Promise<AppUpdateInfo> {
+    return invoke("check_app_update");
+}
+
+export function openAppReleasePage(url?: string | null): Promise<void> {
+    return invoke("open_app_release_page", { url: url ?? null });
 }

@@ -127,7 +127,7 @@ describe("Dashboard.svelte", () => {
       provider: "claude",
       five_hour_pct: 40,
       five_hour_resets: "2026-05-28T18:00:00Z",
-      five_hour_label: "Current session",
+      five_hour_label: "5-hour window",
       five_hour_window_minutes: 300,
       seven_day_pct: 55,
       seven_day_resets: "2026-06-01T00:00:00Z",
@@ -149,7 +149,7 @@ describe("Dashboard.svelte", () => {
     await tick();
 
     const labels = [...container.querySelectorAll(".stats-row .stat-label")].map((e) => e.textContent?.trim());
-    expect(labels).toEqual(["Total Cost", "Total Tokens", "Sessions", "Avg Duration"]);
+    expect(labels).toEqual(["Total Cost (Live)", "Total Tokens", "Sessions", "Avg Duration"]);
     const values = [...container.querySelectorAll(".stats-row .stat-value")].map((e) => e.textContent?.trim());
     expect(values[0]).toBe("$12.50");
     expect(values[1]).toBe("1.1M");

@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "cc-discord-presence"
-version = "1.1.0"
+version = "1.4.1"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2983,7 +2983,7 @@ dependencies = [
 
 [[package]]
 name = "pulse"
-version = "1.1.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "cc-discord-presence",
@@ -2997,6 +2997,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-shell",
  "tracing",
+ "ureq",
 ]
 
 [[package]]
@@ -4754,6 +4755,8 @@ dependencies = [
  "once_cell",
  "rustls",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "url",
  "webpki-roots 0.26.11",
 ]

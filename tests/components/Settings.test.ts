@@ -19,7 +19,7 @@ const summary: AnalyticsSummary = {
 
 const getDbSize = vi.fn(async () => 5 * 1024 * 1024);
 const getAnalyticsSummary = vi.fn(async () => summary);
-const getPlanInfo = vi.fn(async () => ({ provider: "claude", plan_name: "Max 20x ($200/mo)", detected: true }));
+const getPlanInfo = vi.fn(async () => ({ provider: "claude", plan_key: "", plan_name: "Max 20x", detected: true }));
 const setPlanOverride = vi.fn(async () => undefined);
 const clearHistory = vi.fn(async () => 7);
 const exportAllData = vi.fn(async () => ({ ok: true }));
@@ -52,7 +52,7 @@ describe("Settings.svelte", () => {
     const { health, rateLimits, planInfo } = await import("@/lib/stores");
     health.set(healthFixture);
     rateLimits.set(null);
-    planInfo.set({ provider: "claude", plan_name: "Max 20x ($200/mo)", detected: true });
+    planInfo.set({ provider: "claude", plan_key: "", plan_name: "Max 20x", detected: true });
   });
 
   it("mounts and shows the identity masthead plus configuration controls", async () => {
@@ -66,6 +66,21 @@ describe("Settings.svelte", () => {
     expect(getByText("Data Sources")).toBeTruthy();
     expect(getByText("Data Management")).toBeTruthy();
     expect(container.querySelectorAll(".rail-ctrl").length).toBe(3);
+  });
+
+  it("reflects a manual plan override on the select instead of reverting to auto", async () => {
+    const { planInfo } = await import("@/lib/stores");
+    planInfo.set({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x", detected: false });
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { container } = render(Settings, {
+      props: { onToggleTheme: () => {}, currentTheme: "dark" },
+    });
+    await tick();
+
+    const planSelect = container.querySelector('[aria-label="Plan override"]');
+    expect(planSelect).toBeTruthy();
+    expect(planSelect?.textContent).toContain("Max 20x");
+    expect(planSelect?.textContent).not.toContain("Auto-detect");
   });
 
   it("loads the database size and session total from the api layer", async () => {

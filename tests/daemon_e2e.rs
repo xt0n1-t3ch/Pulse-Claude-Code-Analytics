@@ -2,8 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use cc_discord_presence::codex::config::{PresenceConfig as CodexPresenceConfig, PricingConfig};
-use cc_discord_presence::codex::discord::presence_lines as codex_presence_lines;
+use cc_discord_presence::codex::config::PricingConfig;
 use cc_discord_presence::codex::session::{
     self as codex_session, GitBranchCache as CodexGitBranchCache, ReasoningEffort as CodexEffort,
     SessionParseCache as CodexSessionParseCache,
@@ -305,7 +304,7 @@ fn claude_daemon_pipeline_tracks_last_turn_speed_effort_and_presence_markers() {
 fn codex_meta_line() -> String {
     serde_json::json!({
         "type": "session_meta",
-        "payload": { "id": CODEX_SESSION_ID, "cwd": "C:\\repo\\pulse" }
+        "payload": { "id": CODEX_SESSION_ID, "cwd": "/repo/pulse" }
     })
     .to_string()
 }
@@ -314,7 +313,7 @@ fn codex_turn_context_line(timestamp: &str) -> String {
     serde_json::json!({
         "timestamp": timestamp,
         "type": "turn_context",
-        "payload": { "cwd": "C:\\repo\\pulse", "model": "gpt-5.3-codex", "effort": "xhigh" }
+        "payload": { "cwd": "/repo/pulse", "model": "gpt-5.3-codex", "effort": "xhigh" }
     })
     .to_string()
 }
@@ -407,20 +406,26 @@ fn codex_daemon_pipeline_parses_fixture_and_builds_presence_state() {
     let context = snapshot.context_window.as_ref().expect("context window");
     assert_eq!(context.window_tokens, 258_400);
 
-    let config = CodexPresenceConfig::default();
     let plan = resolved_pro_plan();
     let service_tier = resolved_fast_tier();
-    let (details, state) = codex_presence_lines(
-        snapshot,
-        Some(&snapshot.limits),
-        &plan,
-        &service_tier,
-        &config,
+    let model_display = cc_discord_presence::codex::util::format_model_display(
+        snapshot.model.as_deref().unwrap_or_default(),
+        snapshot.reasoning_effort,
+        service_tier.is_fast(),
     );
 
-    assert!(details.contains("pulse"), "details: {details}");
-    assert!(state.contains("GPT-5.3-Codex"), "model display: {state}");
-    assert!(state.contains("(Extra High)"), "effort suffix: {state}");
-    assert!(state.contains('\u{26a1}'), "fast marker expected: {state}");
-    assert!(state.contains("Pro ($200/month)"), "plan label: {state}");
+    assert_eq!(snapshot.project_name, "pulse");
+    assert!(
+        model_display.contains("GPT-5.3-Codex"),
+        "model display: {model_display}"
+    );
+    assert!(
+        model_display.contains("(Extra High)"),
+        "effort suffix: {model_display}"
+    );
+    assert!(
+        model_display.contains('\u{26a1}'),
+        "fast marker expected: {model_display}"
+    );
+    assert_eq!(plan.label(true), "Pro ($200/month)");
 }

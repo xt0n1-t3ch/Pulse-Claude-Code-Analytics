@@ -17,6 +17,10 @@ const WINDOW_TOKENS_DEFAULT: i64 = 200_000;
 const CONTEXT_WINDOW_LABEL_1M: &str = "1M";
 
 fn session_window_tokens(s: &super::commands::SessionInfo) -> i64 {
+    if s.context_window_tokens > 0 {
+        return s.context_window_tokens.min(i64::MAX as u64) as i64;
+    }
+
     let has_1m = s.context_window == CONTEXT_WINDOW_LABEL_1M || cost::is_ga_1m_context(&s.model_id);
     if has_1m {
         WINDOW_TOKENS_1M
@@ -26,7 +30,8 @@ fn session_window_tokens(s: &super::commands::SessionInfo) -> i64 {
 }
 
 fn session_used_tokens(s: &super::commands::SessionInfo) -> i64 {
-    s.input_tokens.max(s.tokens) as i64
+    let window = session_window_tokens(s).max(0) as u64;
+    s.context_used_tokens.min(window).min(i64::MAX as u64) as i64
 }
 
 fn db_path() -> PathBuf {
@@ -1132,6 +1137,8 @@ mod tests {
             output_tokens: 0,
             cache_write_tokens: 0,
             cache_read_tokens: 0,
+            context_used_tokens: input_tokens,
+            context_window_tokens: 0,
             branch: None,
             activity: "Idle".into(),
             activity_target: None,
@@ -1151,6 +1158,8 @@ mod tests {
             speed: "standard".into(),
             fast: false,
             service_tier: None,
+            intro_pricing: None,
+            has_inflated_tokenizer: false,
         }
     }
 
@@ -1167,11 +1176,14 @@ mod tests {
     }
 
     #[test]
-    fn session_used_tokens_picks_larger_of_input_and_total() {
-        let info = sample_session_info("200K", "claude-sonnet-4-5", 5_000, 7_500);
-        assert_eq!(session_used_tokens(&info), 7_500);
-        let info = sample_session_info("200K", "claude-sonnet-4-5", 9_000, 1_000);
-        assert_eq!(session_used_tokens(&info), 9_000);
+    fn session_used_tokens_uses_context_snapshot_not_lifetime_total() {
+        let mut info = sample_session_info("1M", "claude-opus-4-8", 83_700, 8_580_000);
+        info.context_used_tokens = 83_700;
+        info.context_window_tokens = 1_000_000;
+        assert_eq!(session_used_tokens(&info), 83_700);
+
+        info.context_used_tokens = 1_250_000;
+        assert_eq!(session_used_tokens(&info), 1_000_000);
     }
 
     #[test]
