@@ -117,6 +117,9 @@
   });
 
   let cacheGrade = $derived.by(() => {
+    // No token data yet — show a neutral mark instead of a red "F", which would
+    // read as bad performance rather than "nothing measured".
+    if (showCacheR + showInput <= 0) return { letter: "—", color: "var(--text-muted)" };
     const ratio = showCacheHit;
     if (ratio >= 80) return { letter: "A", color: "var(--success)" };
     if (ratio >= 65) return { letter: "B", color: "#77dd77" };
@@ -136,7 +139,7 @@
 
 <div class="dashboard">
   <div class="stats-row">
-    <StatCard label="Total Cost" value={fmtCost(totalCost)}>
+    <StatCard label="Total Cost (Live)" value={fmtCost(totalCost)}>
       {#snippet extra()}<Sparkline data={sparkCost} color="var(--accent)" />{/snippet}
     </StatCard>
     <StatCard label="Total Tokens" value={fmtTokens(totalTokens)}>
@@ -211,7 +214,7 @@
       </div>
       <div class="usage-section">
         <div class="usage-group">
-          <div class="usage-group-label">{$providerProfile.id === "claude" ? "Current session" : "Live quotas"}</div>
+          <div class="usage-group-label">{$providerProfile.id === "claude" ? "5-hour window" : "Live quotas"}</div>
           {#if $rateLimits && $rateLimits.five_hour_resets !== "N/A"}
             <ProgressBar label={$rateLimits.five_hour_label} pct={$rateLimits.five_hour_pct} meta={formatResetRelative($rateLimits.five_hour_resets)} />
           {:else if $rateLimits}

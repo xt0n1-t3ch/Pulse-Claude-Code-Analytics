@@ -17,7 +17,6 @@ pub enum DetectedPlanTier {
     Free,
     Go,
     Plus,
-    Team,
     Business,
     Enterprise,
     Pro,
@@ -31,7 +30,6 @@ impl DetectedPlanTier {
             Self::Free => "Free",
             Self::Go => "Go",
             Self::Plus => "Plus",
-            Self::Team => "Team",
             Self::Business => "Business",
             Self::Enterprise => "Enterprise",
             Self::Pro => "Pro",
@@ -45,7 +43,7 @@ impl DetectedPlanTier {
             Self::Go => Some(8),
             Self::Plus => Some(20),
             Self::Pro => Some(200),
-            Self::Team | Self::Business | Self::Enterprise | Self::Unknown => None,
+            Self::Business | Self::Enterprise | Self::Unknown => None,
         }
     }
 
@@ -63,7 +61,6 @@ impl From<OpenAiPlanTier> for DetectedPlanTier {
             OpenAiPlanTier::Free => Self::Free,
             OpenAiPlanTier::Go => Self::Go,
             OpenAiPlanTier::Plus => Self::Plus,
-            OpenAiPlanTier::Team => Self::Team,
             OpenAiPlanTier::Business => Self::Business,
             OpenAiPlanTier::Enterprise => Self::Enterprise,
             OpenAiPlanTier::Pro => Self::Pro,
@@ -187,7 +184,9 @@ impl PlanDetector {
                 raw_plan_type: signal.raw_plan_type,
             };
             self.last_telemetry = Some(resolved.clone());
-            let _ = save_plan_cache(&resolved);
+            if let Err(err) = save_plan_cache(&resolved) {
+                tracing::warn!(error = %err, "failed to save Codex plan cache");
+            }
             return resolved;
         }
 
@@ -215,7 +214,6 @@ pub fn parse_plan_type(raw: Option<&str>) -> DetectedPlanTier {
         "free" => DetectedPlanTier::Free,
         "go" => DetectedPlanTier::Go,
         "plus" => DetectedPlanTier::Plus,
-        "team" => DetectedPlanTier::Team,
         "business" => DetectedPlanTier::Business,
         "enterprise" => DetectedPlanTier::Enterprise,
         "pro" => DetectedPlanTier::Pro,
@@ -410,7 +408,6 @@ mod tests {
         assert_eq!(parse_plan_type(Some("free")), DetectedPlanTier::Free);
         assert_eq!(parse_plan_type(Some("go")), DetectedPlanTier::Go);
         assert_eq!(parse_plan_type(Some("plus")), DetectedPlanTier::Plus);
-        assert_eq!(parse_plan_type(Some("team")), DetectedPlanTier::Team);
         assert_eq!(
             parse_plan_type(Some("business")),
             DetectedPlanTier::Business
@@ -454,23 +451,6 @@ mod tests {
         assert_eq!(resolved.tier, DetectedPlanTier::Plus);
         assert_eq!(resolved.source, DetectedPlanSource::Manual);
         assert_eq!(resolved.status_label(), "Plus (manual)");
-    }
-
-    #[test]
-    fn detector_respects_manual_pro_override_when_telemetry_disagrees() {
-        let mut detector = PlanDetector::new();
-        let sessions = vec![sample_session(Some("team"), RateLimitScope::GlobalCodex)];
-        let resolved = detector.resolve_from_sessions(
-            &sessions,
-            &OpenAiPlanDisplayConfig {
-                mode: OpenAiPlanMode::Manual,
-                tier: OpenAiPlanTier::Pro,
-                show_price: true,
-            },
-        );
-        assert_eq!(resolved.tier, DetectedPlanTier::Pro);
-        assert_eq!(resolved.source, DetectedPlanSource::Manual);
-        assert_eq!(resolved.raw_plan_type.as_deref(), Some("pro"));
     }
 
     #[test]

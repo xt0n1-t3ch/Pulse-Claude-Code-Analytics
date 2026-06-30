@@ -84,9 +84,11 @@
   let totalCost = $derived(filtered.reduce((sum, s) => sum + s.cost, 0));
   let avgCost = $derived(filtered.length ? totalCost / filtered.length : 0);
   let maxCost = $derived(filtered.reduce((m, s) => Math.max(m, s.cost), 0));
-  let costPerKToken = $derived.by(() => {
+  // Per 1M tokens: at real usage the per-1K figure rounds to $0.00, so 1M is the
+  // meaningful unit (e.g. $0.67 / 1M rather than $0.00 / 1K).
+  let costPerMToken = $derived.by(() => {
     const tot = filtered.reduce((s, x) => s + x.tokens, 0);
-    return tot > 0 ? (totalCost / tot) * 1000 : 0;
+    return tot > 0 ? (totalCost / tot) * 1_000_000 : 0;
   });
 
   let totalInputCost = $derived(filtered.reduce((s, x) => s + x.input_cost, 0));
@@ -142,9 +144,9 @@
   </div>
 
   <div class="stats-row">
-    <StatCard label="Total Spent" value={fmtCost(totalCost)} />
+    <StatCard label="Total Spent (30d)" value={fmtCost(totalCost)} />
     <StatCard label="Avg / Session" value={fmtCost(avgCost)} />
-    <StatCard label="Cost / 1K Tokens" value={fmtCost(costPerKToken)} />
+    <StatCard label="Cost / 1M Tokens" value={fmtCost(costPerMToken)} />
     <StatCard label="Cache Savings" value={fmtCost(cacheSavings)} />
   </div>
 

@@ -100,6 +100,23 @@ describe("Discord.svelte", () => {
     expect(container.querySelectorAll(".preset-opt").length).toBe(3);
   });
 
+  it("previews the active session first and ignores idle sessions", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const idle = makeSession("idle1", "idle-project");
+    idle.is_idle = true;
+    const active = makeSession("active1", "active-project");
+    sessions.set([idle, active]);
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    await waitFor(() => {
+      expect(container.querySelector(".dp-activity-details")?.textContent).toContain("active-project");
+    });
+    expect(container.querySelector(".dp-activity-details")?.textContent).not.toContain("idle-project");
+  });
+
   it("calls setDiscordEnabled when the master toggle is flipped off", async () => {
     const Discord = (await import("@/views/Discord.svelte")).default;
     const { container } = render(Discord);

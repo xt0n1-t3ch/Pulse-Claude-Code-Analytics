@@ -3,9 +3,11 @@
   import { fmtTokens, fmtPct } from "../lib/utils";
   import {
     getContextBreakdown,
+    getContextBreakdowns,
     getSessionsContextUsage,
     type ContextBreakdown,
     type ContextFileEntry,
+    type SessionContextBreakdown,
     type SessionContextUsage,
   } from "../lib/api";
   import { addToast } from "../lib/stores";
@@ -13,6 +15,7 @@
   import { sessions } from "../lib/stores";
 
   let ctx = $state<ContextBreakdown | null>(null);
+  let breakdowns = $state<SessionContextBreakdown[]>([]);
   let sessionUsage = $state<SessionContextUsage[]>([]);
   let selectedSessionId = $state<string | null>(null);
   let refreshing = $state(false);
@@ -29,8 +32,8 @@
       selectedSessionId = null;
       return;
     }
-    const stillPresent = list.some((s) => s.session_id === selectedSessionId);
-    if (!stillPresent) {
+    const current = list.find((s) => s.session_id === selectedSessionId);
+    if (!current || current.is_idle) {
       const active = list.find((s) => !s.is_idle) ?? list[0];
       selectedSessionId = active.session_id;
     }
@@ -54,19 +57,30 @@
     sessionUsage = await getSessionsContextUsage();
   }
 
+  async function loadBreakdowns(): Promise<void> {
+    breakdowns = await getContextBreakdowns();
+  }
+
   $effect(() => {
     void selectedSessionId;
     loadBreakdown();
   });
 
   onMount(() => {
+    loadBreakdowns();
     loadUsage();
     const iv = setInterval(() => {
       loadBreakdown();
+      loadBreakdowns();
       loadUsage();
     }, 10000);
     return () => clearInterval(iv);
   });
+
+  function clampPct(pct: number): number {
+    if (!Number.isFinite(pct)) return 0;
+    return Math.max(0, Math.min(pct, 100));
+  }
 
   function utilizationColor(pct: number): string {
     if (pct >= 95) return "var(--danger)";
@@ -291,6 +305,48 @@
       </div>
     {/if}
 
+    {#if breakdowns.length > 0}
+      <div class="active-section">
+        <div class="advice-title-row">
+          <h3 class="advice-title">Active context windows</h3>
+          <span class="advice-count">{breakdowns.length}</span>
+        </div>
+        <div class="active-grid">
+          {#each breakdowns as entry (entry.session_id)}
+            {@const cardPct = clampPct(
+              entry.breakdown.context_window > 0
+                ? (entry.breakdown.used_tokens / entry.breakdown.context_window) * 100
+                : 0,
+            )}
+            <button
+              class="active-ctx-card"
+              class:selected={entry.session_id === selectedSessionId}
+              class:idle={entry.is_idle}
+              aria-pressed={entry.session_id === selectedSessionId}
+              onclick={() => (selectedSessionId = entry.session_id)}
+            >
+              <div class="act-head">
+                <span class="act-project">{entry.project}</span>
+                <span class="act-pct" style="color: {utilizationColor(cardPct)}">{fmtPct(cardPct)}</span>
+              </div>
+              <div class="act-track">
+                <div
+                  class="act-fill"
+                  style="width: {cardPct}%; background: {utilizationColor(cardPct)}"
+                ></div>
+              </div>
+              <div class="act-meta">
+                <span class="act-model">{entry.model_id || entry.breakdown.model}</span>
+                <span class="act-tokens">
+                  {fmtTokens(entry.breakdown.used_tokens)} / {fmtTokens(entry.breakdown.context_window)}
+                </span>
+              </div>
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <div class="hero-card">
       <div class="hero-top">
         <div class="hero-numbers">
@@ -381,18 +437,19 @@
         </div>
         <ul class="usage-list">
           {#each sessionUsage as row (row.session_id)}
+            {@const rowPct = clampPct(row.utilization_pct)}
             <li class="usage-row">
               <div class="usage-head">
                 <span class="usage-project">{row.project}</span>
                 <span class="usage-model">{row.model_display}</span>
-                <span class="usage-pct" style="color: {utilizationColor(row.utilization_pct)}">
-                  {fmtPct(row.utilization_pct)}
+                <span class="usage-pct" style="color: {utilizationColor(rowPct)}">
+                  {fmtPct(rowPct)}
                 </span>
               </div>
               <div class="usage-track">
                 <div
                   class="usage-fill"
-                  style="width: {Math.min(row.utilization_pct, 100)}%; background: {utilizationColor(row.utilization_pct)}"
+                  style="width: {rowPct}%; background: {utilizationColor(rowPct)}"
                 ></div>
               </div>
               <div class="usage-meta">
@@ -539,6 +596,57 @@
     color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
   }
+
+  /* All-active context cards */
+  .active-section { display: flex; flex-direction: column; gap: 12px; }
+  .active-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .active-ctx-card {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+  }
+  .active-ctx-card:hover { border-color: var(--border-hover); }
+  .active-ctx-card.selected { border-color: var(--accent); background: var(--accent-dim); }
+  .active-ctx-card.idle { opacity: 0.6; }
+  .act-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .act-project { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+  .act-pct { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .act-track {
+    height: 6px;
+    background: var(--bg-elevated);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .act-fill { height: 100%; border-radius: 99px; transition: width 0.4s var(--ease); }
+  .act-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .act-model {
+    font-family: 'JetBrains Mono', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .act-tokens { flex-shrink: 0; }
 
   /* Per-session utilization */
   .usage-card {

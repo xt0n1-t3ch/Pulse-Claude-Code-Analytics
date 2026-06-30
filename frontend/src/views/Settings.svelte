@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { health, rateLimits, planInfo } from "../lib/stores";
-  import { provider, providerProfile, PROVIDERS, type Provider } from "../lib/provider";
+  import { health, rateLimits, planInfo, addToast } from "../lib/stores";
+  import { provider, providerProfile, setProvider, PROVIDERS, type Provider } from "../lib/provider";
   import { setPlanOverride, exportAllData, clearHistory, getDbSize, getPlanInfo, getAnalyticsSummary } from "../lib/api";
   import type { AnalyticsSummary } from "../lib/api";
   import PulseMark from "../components/PulseMark.svelte";
@@ -20,26 +20,13 @@
   let planSavedFlash = $state(false);
   let planSavedTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function normalizePlanOverride(planName: string): string {
-    const normalized = planName.trim().toLowerCase();
-    if (!normalized) return "auto";
-    if (normalized.includes("max 20x")) return "Max 20x ($200/mo)";
-    if (normalized.includes("max 5x")) return "Max 5x ($100/mo)";
-    if (normalized.startsWith("free")) return $provider === "codex" ? "free" : "Free";
-    if (normalized.startsWith("go")) return "go";
-    if (normalized.startsWith("plus")) return "plus";
-    if (normalized.startsWith("team")) return "team";
-    if (normalized.startsWith("business")) return "business";
-    if (normalized.startsWith("enterprise")) return "enterprise";
-    if (normalized.startsWith("pro")) return $provider === "codex" ? "pro" : "Pro";
-    return "auto";
-  }
-
   $effect(() => {
     if (!$planInfo) return;
     if ($planInfo.provider !== $provider) return;
     if (planSaving) return;
-    planOverrideValue = $planInfo.detected ? "auto" : normalizePlanOverride($planInfo.plan_name);
+    // The backend returns a canonical plan key, so the select round-trips
+    // directly without fragile label matching.
+    planOverrideValue = $planInfo.detected ? "auto" : ($planInfo.plan_key || "auto");
   });
 
   function handleProviderChange(val: string): void {
@@ -54,19 +41,18 @@
     const opts: { value: string; label: string }[] = [{ value: "auto", label: "Auto-detect" }];
     if ($provider === "claude") {
       opts.push(
-        { value: "Free", label: "Free" },
-        { value: "Pro", label: "Pro" },
-        { value: "Max 5x ($100/mo)", label: "Max 5x" },
-        { value: "Max 20x ($200/mo)", label: "Max 20x" },
-        { value: "Team", label: "Team" },
-        { value: "Enterprise", label: "Enterprise" },
+        { value: "free", label: "Free" },
+        { value: "pro", label: "Pro" },
+        { value: "max_5x", label: "Max 5x" },
+        { value: "max_20x", label: "Max 20x" },
+        { value: "team", label: "Team" },
+        { value: "enterprise", label: "Enterprise" },
       );
     } else {
       opts.push(
         { value: "free", label: "Free" },
         { value: "go", label: "Go" },
         { value: "plus", label: "Plus" },
-        { value: "team", label: "Team" },
         { value: "business", label: "Business" },
         { value: "enterprise", label: "Enterprise" },
         { value: "pro", label: "Pro" },
@@ -74,6 +60,10 @@
     }
     return opts;
   });
+
+  let planLabelFor = $derived((key: string): string =>
+    planOptions.find((o) => o.value === key)?.label ?? key,
+  );
 
   let dbSizeBytes = $state(0);
   let confirmClear = $state(false);
@@ -93,7 +83,7 @@
       if (val === "auto") {
         planInfo.set({ ...$planInfo, detected: true });
       } else {
-        planInfo.set({ ...$planInfo, plan_name: val, detected: false });
+        planInfo.set({ ...$planInfo, plan_key: val, plan_name: planLabelFor(val), detected: false });
       }
     }
     try {
@@ -105,6 +95,11 @@
       planSavedTimer = setTimeout(() => { planSavedFlash = false; }, 1800);
     } catch {}
     planSaving = false;
+  }
+
+  function checkForUpdates(): void {
+    window.dispatchEvent(new CustomEvent("pulse:check-updates"));
+    addToast("Checking for updates…", "info");
   }
 
   function fmtBytes(b: number): string {
@@ -155,6 +150,10 @@
       <h2 class="view-title">Settings</h2>
       <span class="view-sub">Tune the telemetry source, broadcast identity, and local analytics store.</span>
     </div>
+    <button type="button" class="btn check-updates-btn" onclick={checkForUpdates} aria-label="Check for application updates">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+      Check for updates
+    </button>
   </div>
 
   <!-- IDENTITY — editorial masthead + control strip -->
@@ -368,6 +367,12 @@
     color: var(--text-muted);
     line-height: var(--lh-snug);
     max-width: 560px;
+  }
+  .check-updates-btn {
+    flex-shrink: 0;
+    padding: 7px 12px;
+    font-size: var(--fs-sm);
+    font-weight: 500;
   }
 
   /* ── IDENTITY — flat, Dashboard-aligned; no overflow clip so portal menus escape ── */

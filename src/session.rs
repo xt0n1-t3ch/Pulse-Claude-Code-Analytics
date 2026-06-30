@@ -14,6 +14,9 @@ use walkdir::WalkDir;
 use crate::config;
 use crate::cost;
 
+const SESSION_SCAN_MAX_DEPTH: usize = 16;
+const SESSION_SCAN_MAX_ENTRIES: usize = 100_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {
@@ -254,9 +257,16 @@ pub struct ClaudeSessionSnapshot {
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
-    /// Maximum per-turn total API input (input + cache_creation + cache_read) across the session.
-    /// Only a single turn exceeding 200K reliably indicates 1M extended context usage.
+    /// Maximum per-turn total API input (input + cache_creation + cache_read) ever seen across
+    /// the session's lifetime, never decreasing -- including across compactions. Only a single
+    /// turn exceeding 200K reliably indicates 1M extended context usage. Do not use this for
+    /// "how full is the context right now"; see `current_context_tokens`.
     pub max_turn_api_input: u64,
+    /// Total API input (input + cache_creation + cache_read) as of the most recent turn since
+    /// the session's last compaction (or session start, if none) -- the field that answers
+    /// "how full is the context right now". Resets at each `compact_boundary` event to the
+    /// real post-compaction size Claude Code itself reports.
+    pub current_context_tokens: u64,
     pub reasoning_effort: ReasoningEffort,
     /// True when the effort was read from an explicit JSONL system-reminder
     /// injection (reasoning effort level: X / <reasoning_effort>NN</…>).
@@ -438,8 +448,17 @@ struct SessionAccumulator {
     total_output_tokens: u64,
     total_cache_creation_tokens: u64,
     total_cache_read_tokens: u64,
-    /// Maximum per-turn API input (input + cache_creation + cache_read) seen so far.
+    /// Maximum per-turn API input (input + cache_creation + cache_read) ever seen in this
+    /// session. Never decreases, including across compactions -- this answers "has this
+    /// session ever required the 1M context tier", a lifetime question. Do not use this for
+    /// "how full is the context right now"; see `current_context_tokens`.
     max_turn_api_input: u64,
+    /// Total API input (input + cache_creation + cache_read) as of the most recent turn since
+    /// the last compaction, or since session start if none. Resets to the real post-compaction
+    /// size reported in a `compact_boundary` event's `compactMetadata.postTokens`, then tracks
+    /// each subsequent turn's own total -- this is the field that answers "how full is the
+    /// context right now".
+    current_context_tokens: u64,
     total_cost: f64,
     input_cost: f64,
     output_cost: f64,
@@ -728,6 +747,7 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
         cache_creation_tokens: 0,
         cache_read_tokens: 0,
         max_turn_api_input: 0,
+        current_context_tokens: 0,
         reasoning_effort: read_claude_effort_level(),
         reasoning_effort_explicit: false,
         has_thinking_blocks: false,
@@ -789,6 +809,7 @@ pub fn merge_statusline_into_sessions(
                 .session_delta_tokens
                 .or(jsonl.session_delta_tokens),
             max_turn_api_input: jsonl.max_turn_api_input.max(statusline.max_turn_api_input),
+            current_context_tokens: jsonl.current_context_tokens,
             activity: statusline.activity.clone().or(jsonl.activity.clone()),
             last_token_event_at: statusline.last_token_event_at.or(jsonl.last_token_event_at),
             model: merged_model,
@@ -816,6 +837,8 @@ struct JsonlMessage {
     #[serde(rename = "type")]
     msg_type: Option<String>,
     #[serde(default)]
+    subtype: Option<String>,
+    #[serde(default)]
     timestamp: Option<String>,
     #[serde(rename = "sessionId")]
     #[serde(default)]
@@ -826,6 +849,20 @@ struct JsonlMessage {
     message: Option<JsonlMessageContent>,
     #[serde(default)]
     is_api_error_message: bool,
+    #[serde(rename = "compactMetadata")]
+    #[serde(default)]
+    compact_metadata: Option<CompactMetadata>,
+}
+
+/// Metadata Claude Code attaches to a `type: "system", subtype: "compact_boundary"` line when
+/// it auto- or manually compacts a session's context. `post_tokens` is the authoritative size
+/// of the context immediately after compaction -- the correct baseline for "how full is this
+/// session's context right now", as opposed to a running maximum that never decreases.
+#[derive(Debug, Deserialize)]
+struct CompactMetadata {
+    #[serde(rename = "postTokens")]
+    #[serde(default)]
+    post_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -897,10 +934,7 @@ pub fn collect_active_sessions_multi(
             continue;
         }
 
-        for entry in WalkDir::new(projects_root)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-        {
+        for entry in walk_session_root(projects_root) {
             let path = entry.path();
             if !entry.file_type().is_file() {
                 continue;
@@ -1098,6 +1132,7 @@ fn parse_session_file_cached(
     let cache_creation_tokens = entry.accumulator.total_cache_creation_tokens;
     let cache_read_tokens = entry.accumulator.total_cache_read_tokens;
     let max_turn_api_input = entry.accumulator.max_turn_api_input;
+    let current_context_tokens = entry.accumulator.current_context_tokens;
     let total_cost = entry.accumulator.total_cost;
     let input_cost = entry.accumulator.input_cost;
     let output_cost = entry.accumulator.output_cost;
@@ -1129,6 +1164,7 @@ fn parse_session_file_cached(
         cache_creation_tokens,
         cache_read_tokens,
         max_turn_api_input,
+        current_context_tokens,
         reasoning_effort: infer_effort(&entry.accumulator),
         reasoning_effort_explicit: entry.accumulator.reasoning_effort_explicitly_set,
         has_thinking_blocks: entry.accumulator.has_thinking_blocks,
@@ -1182,6 +1218,14 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
 
     let msg_type = msg.msg_type.as_deref().unwrap_or("");
 
+    if msg_type == "system" && msg.subtype.as_deref() == Some("compact_boundary") {
+        if let Some(post_tokens) = msg.compact_metadata.as_ref().and_then(|m| m.post_tokens) {
+            acc.current_context_tokens = post_tokens;
+        }
+        acc.activity_tracker.observe_timestamp(observed_at);
+        return;
+    }
+
     let Some(ref message) = msg.message else {
         acc.activity_tracker.observe_timestamp(observed_at);
         return;
@@ -1214,6 +1258,7 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
                 let all_input = input + cache_creation + cache_read;
 
                 acc.max_turn_api_input = acc.max_turn_api_input.max(all_input);
+                acc.current_context_tokens = all_input;
 
                 acc.total_input_tokens += all_input;
                 acc.total_output_tokens += output;
@@ -1261,6 +1306,32 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
             acc.activity_tracker.observe_timestamp(observed_at);
         }
     }
+}
+
+fn walk_session_root(root: &Path) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
+    walk_session_root_with_limits(root, SESSION_SCAN_MAX_DEPTH, SESSION_SCAN_MAX_ENTRIES)
+}
+
+fn walk_session_root_with_limits(
+    root: &Path,
+    max_depth: usize,
+    max_entries: usize,
+) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
+    WalkDir::new(root)
+        .max_depth(max_depth)
+        .into_iter()
+        .take(max_entries)
+        .filter_map(|entry| match entry {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                tracing::warn!(
+                    root = %root.display(),
+                    error = %err,
+                    "failed to inspect Claude session path"
+                );
+                None
+            }
+        })
 }
 
 /// Scan a `message.content` value (array or single object) for tool_use / tool_result entries.
@@ -1877,6 +1948,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn claude_session_scan_respects_depth_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("one").join("two").join("three");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("session.jsonl"), b"{}\n").unwrap();
+
+        let files_seen = walk_session_root_with_limits(temp.path(), 2, 100)
+            .filter(|entry| entry.file_type().is_file())
+            .count();
+
+        assert_eq!(files_seen, 0);
+    }
+
+    #[test]
+    fn claude_session_scan_respects_entry_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        for idx in 0..3 {
+            fs::write(temp.path().join(format!("{idx}.jsonl")), b"{}\n").unwrap();
+        }
+
+        let files_seen = walk_session_root_with_limits(temp.path(), usize::MAX, 3)
+            .filter(|entry| entry.file_type().is_file())
+            .count();
+
+        assert_eq!(files_seen, 2);
+    }
+
+    #[test]
     fn effort_label_all_variants() {
         assert_eq!(ReasoningEffort::Low.label(), "Low");
         assert_eq!(ReasoningEffort::Medium.label(), "Medium");
@@ -2244,6 +2343,114 @@ mod tests {
         assert!((acc.total_cost - expected).abs() < 0.0000001);
         assert_eq!(acc.speed, Speed::Standard);
         assert_eq!(acc.service_tier, None);
+    }
+
+    fn compact_boundary_message(post_tokens: u64) -> JsonlMessage {
+        serde_json::from_value(serde_json::json!({
+            "type": "system",
+            "subtype": "compact_boundary",
+            "content": "Conversation compacted",
+            "compactMetadata": {
+                "trigger": "manual",
+                "preTokens": 959_012,
+                "durationMs": 108_397,
+                "postTokens": post_tokens,
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn compact_boundary_resets_current_context_tokens_but_not_the_historical_max() {
+        let model = "claude-sonnet-5";
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(model, 100_000, 5_000, 50_000, 800_000, None),
+        );
+        assert_eq!(acc.max_turn_api_input, 950_000);
+        assert_eq!(acc.current_context_tokens, 950_000);
+
+        process_jsonl_message(&mut acc, &compact_boundary_message(25_500));
+        assert_eq!(
+            acc.max_turn_api_input, 950_000,
+            "the historical peak must survive a compaction -- it still answers whether this \
+             session ever needed the 1M tier"
+        );
+        assert_eq!(
+            acc.current_context_tokens, 25_500,
+            "current fill must reset to the real post-compaction size Claude Code reported, \
+             not stay frozen at the pre-compaction peak"
+        );
+
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(model, 6_000, 500, 0, 24_000, None),
+        );
+        assert_eq!(
+            acc.current_context_tokens, 30_000,
+            "current fill tracks the latest turn after a compaction, not a running max"
+        );
+        assert_eq!(
+            acc.max_turn_api_input, 950_000,
+            "a small post-compaction turn must not lower the historical peak"
+        );
+    }
+
+    #[test]
+    fn compact_boundary_with_missing_post_tokens_does_not_reset_current_context_tokens() {
+        let model = "claude-sonnet-5";
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(model, 100_000, 5_000, 0, 0, None),
+        );
+        assert_eq!(acc.current_context_tokens, 100_000);
+
+        let malformed: JsonlMessage = serde_json::from_value(serde_json::json!({
+            "type": "system",
+            "subtype": "compact_boundary",
+            "content": "Conversation compacted",
+        }))
+        .unwrap();
+        process_jsonl_message(&mut acc, &malformed);
+
+        assert_eq!(
+            acc.current_context_tokens, 100_000,
+            "a compact_boundary with no compactMetadata.postTokens must be a no-op, not a \
+             silent reset to zero"
+        );
+    }
+
+    #[test]
+    fn compact_boundary_as_the_first_message_initializes_cleanly() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &compact_boundary_message(13_269));
+        assert_eq!(acc.current_context_tokens, 13_269);
+        assert_eq!(acc.max_turn_api_input, 0);
+    }
+
+    #[test]
+    fn current_context_tokens_matches_latest_turn_when_no_compaction_ever_happened() {
+        let model = "claude-sonnet-5";
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(model, 100_000, 5_000, 10_000, 20_000, None),
+        );
+        process_jsonl_message(
+            &mut acc,
+            &assistant_usage_message_with_cache(model, 50_000, 3_000, 5_000, 80_000, None),
+        );
+
+        assert_eq!(
+            acc.current_context_tokens, 135_000,
+            "with zero compactions, current fill is simply the latest turn's total"
+        );
+        assert_eq!(acc.max_turn_api_input, 135_000);
     }
 
     fn assistant_usage_message_with_cache(

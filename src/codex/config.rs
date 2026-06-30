@@ -4,8 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Stdio;
-#[cfg(windows)]
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -63,7 +61,6 @@ pub enum OpenAiPlanTier {
     Free,
     Go,
     Plus,
-    Team,
     Business,
     Enterprise,
     #[default]
@@ -76,7 +73,6 @@ impl OpenAiPlanTier {
             Self::Free => "Free",
             Self::Go => "Go",
             Self::Plus => "Plus",
-            Self::Team => "Team",
             Self::Business => "Business",
             Self::Enterprise => "Enterprise",
             Self::Pro => "Pro",
@@ -89,7 +85,7 @@ impl OpenAiPlanTier {
             Self::Go => Some(8),
             Self::Plus => Some(20),
             Self::Pro => Some(200),
-            Self::Team | Self::Business | Self::Enterprise => None,
+            Self::Business | Self::Enterprise => None,
         }
     }
 }
@@ -111,6 +107,7 @@ pub struct OpenAiPlanDisplayConfig {
 }
 
 impl OpenAiPlanDisplayConfig {
+    // Legacy display helper kept for backwards compatibility; runtime now uses telemetry plan.
     pub fn label(&self) -> String {
         if self.show_price
             && let Some(monthly) = self.tier.monthly_price_usd()
@@ -128,7 +125,7 @@ pub struct PlanPreset {
     pub label: &'static str,
 }
 
-const PLAN_PRESETS: [PlanPreset; 8] = [
+const PLAN_PRESETS: [PlanPreset; 7] = [
     PlanPreset {
         mode: OpenAiPlanMode::Auto,
         tier: None,
@@ -148,11 +145,6 @@ const PLAN_PRESETS: [PlanPreset; 8] = [
         mode: OpenAiPlanMode::Manual,
         tier: Some(OpenAiPlanTier::Plus),
         label: "Plus",
-    },
-    PlanPreset {
-        mode: OpenAiPlanMode::Manual,
-        tier: Some(OpenAiPlanTier::Team),
-        label: "Team",
     },
     PlanPreset {
         mode: OpenAiPlanMode::Manual,
@@ -185,7 +177,7 @@ pub fn plan_preset_index(plan: &OpenAiPlanDisplayConfig) -> usize {
         .position(|preset| {
             matches!(preset.mode, OpenAiPlanMode::Manual) && preset.tier == Some(plan.tier)
         })
-        .unwrap_or(5)
+        .unwrap_or(4)
 }
 
 pub fn apply_plan_preset(plan: &mut OpenAiPlanDisplayConfig, preset_index: usize) {
@@ -353,7 +345,7 @@ impl PresenceConfig {
                 .with_context(|| format!("failed to read {}", cfg_path.display()))?;
             let mut parsed: PresenceConfig = serde_json::from_str(&raw)
                 .with_context(|| format!("invalid JSON in {}", cfg_path.display()))?;
-            if parsed.normalize_and_migrate() {
+            if parsed.normalize_for_runtime() {
                 parsed.save()?;
             }
             Ok(parsed)
@@ -376,31 +368,11 @@ impl PresenceConfig {
     }
 
     pub fn effective_client_id_for_surface(&self, surface: PresenceSurface) -> Option<String> {
-        if matches!(surface, PresenceSurface::Desktop) {
-            if let Some(desktop_env) = env_client_id("CODEX_DISCORD_CLIENT_ID_DESKTOP") {
-                return Some(desktop_env);
-            }
-            if let Some(configured_desktop) = self
-                .discord_client_id_desktop
-                .as_ref()
-                .and_then(|value| non_empty_trimmed_string(value))
-            {
-                return Some(configured_desktop);
-            }
-        }
-        self.effective_default_client_id()
+        Some(codex_client_id_for_surface(surface).to_string())
     }
 
-    fn effective_default_client_id(&self) -> Option<String> {
-        let from_env = env_client_id("CODEX_DISCORD_CLIENT_ID");
-
-        if from_env.is_some() {
-            return from_env;
-        }
-
-        self.discord_client_id
-            .as_ref()
-            .and_then(|value| non_empty_trimmed_string(value))
+    pub fn normalize_for_runtime(&mut self) -> bool {
+        self.normalize_and_migrate()
     }
 
     fn normalize_and_migrate(&mut self) -> bool {
@@ -412,16 +384,19 @@ impl PresenceConfig {
             changed = true;
         }
 
-        if is_missing(&self.discord_client_id) {
+        if self.discord_client_id.as_deref() != Some(DEFAULT_DISCORD_CLIENT_ID) {
             self.discord_client_id = Some(DEFAULT_DISCORD_CLIENT_ID.to_string());
             changed = true;
         }
-        if is_missing(&self.discord_client_id_desktop) {
+        if self.discord_client_id_desktop.as_deref() != Some(DEFAULT_DISCORD_DESKTOP_CLIENT_ID) {
             self.discord_client_id_desktop = Some(DEFAULT_DISCORD_DESKTOP_CLIENT_ID.to_string());
             changed = true;
         }
         if is_missing(&self.discord_public_key) {
             self.discord_public_key = Some(DEFAULT_DISCORD_PUBLIC_KEY.to_string());
+            changed = true;
+        }
+        if normalize_codex_display(&mut self.display, &default_display) {
             changed = true;
         }
 
@@ -478,18 +453,10 @@ impl PresenceConfig {
     }
 }
 
-fn env_client_id(name: &str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .and_then(|value| non_empty_trimmed_string(&value))
-}
-
-fn non_empty_trimmed_string(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+fn codex_client_id_for_surface(surface: PresenceSurface) -> &'static str {
+    match surface {
+        PresenceSurface::Default => DEFAULT_DISCORD_CLIENT_ID,
+        PresenceSurface::Desktop => DEFAULT_DISCORD_DESKTOP_CLIENT_ID,
     }
 }
 
@@ -532,13 +499,12 @@ pub fn sessions_path() -> PathBuf {
 pub fn sessions_paths() -> Vec<PathBuf> {
     let mut ordered: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let local_sessions = sessions_path();
 
-    push_unique_path(&mut ordered, &mut seen, local_sessions.clone());
+    push_unique_path(&mut ordered, &mut seen, sessions_path());
 
     #[cfg(windows)]
     {
-        if !sessions_dir_has_entries(&local_sessions) {
+        if include_wsl_session_roots() {
             for candidate in windows_wsl_sessions_candidates() {
                 push_unique_path(&mut ordered, &mut seen, candidate);
             }
@@ -581,6 +547,24 @@ pub fn global_state_paths() -> Vec<PathBuf> {
     ordered
 }
 
+/// Paths to the Codex CLI/App `config.toml`, where the active `service_tier`
+/// (Fast mode) is persisted by current Codex versions. The legacy
+/// `default-service-tier` key in `.codex-global-state.json` is retained as a
+/// fallback for older App installs (see `service_tier::resolve_service_tier`).
+pub fn config_toml_paths() -> Vec<PathBuf> {
+    let mut ordered: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    push_unique_path(&mut ordered, &mut seen, codex_home().join("config.toml"));
+    for sessions_root in sessions_paths() {
+        if let Some(home) = sessions_root.parent() {
+            push_unique_path(&mut ordered, &mut seen, home.join("config.toml"));
+        }
+    }
+
+    ordered
+}
+
 pub fn lock_path() -> PathBuf {
     codex_home().join("codex-discord-presence.lock")
 }
@@ -599,6 +583,48 @@ fn env_u64(name: &str, default: u64) -> u64 {
 
 fn is_missing(value: &Option<String>) -> bool {
     value.as_ref().map(|v| v.trim().is_empty()).unwrap_or(true)
+}
+
+fn normalize_codex_display(display: &mut DisplayConfig, default_display: &DisplayConfig) -> bool {
+    let mut changed = false;
+    if display.large_image_key.as_str() != default_display.large_image_key {
+        display.large_image_key = default_display.large_image_key.clone();
+        changed = true;
+    }
+    if display.large_text.as_str() != default_display.large_text {
+        display.large_text = default_display.large_text.clone();
+        changed = true;
+    }
+    if display.desktop_large_image_key.as_str() != default_display.desktop_large_image_key {
+        display.desktop_large_image_key = default_display.desktop_large_image_key.clone();
+        changed = true;
+    }
+    if display.desktop_large_text.as_str() != default_display.desktop_large_text {
+        display.desktop_large_text = default_display.desktop_large_text.clone();
+        changed = true;
+    }
+    if display.small_image_key.as_str() != default_display.small_image_key {
+        display.small_image_key = default_display.small_image_key.clone();
+        changed = true;
+    }
+    if display.small_text.as_str() != default_display.small_text {
+        display.small_text = default_display.small_text.clone();
+        changed = true;
+    }
+    if has_activity_image_overrides(&display.activity_small_image_keys) {
+        display.activity_small_image_keys = ActivitySmallImageKeys::default();
+        changed = true;
+    }
+    changed
+}
+
+fn has_activity_image_overrides(keys: &ActivitySmallImageKeys) -> bool {
+    keys.thinking.is_some()
+        || keys.reading.is_some()
+        || keys.editing.is_some()
+        || keys.running.is_some()
+        || keys.waiting.is_some()
+        || keys.idle.is_some()
 }
 
 fn normalize_optional_string(value: &mut Option<String>) -> bool {
@@ -721,14 +747,6 @@ fn path_key(path: &Path) -> String {
     }
 }
 
-#[cfg(windows)]
-fn sessions_dir_has_entries(path: &Path) -> bool {
-    fs::read_dir(path)
-        .ok()
-        .and_then(|mut entries| entries.next())
-        .is_some()
-}
-
 #[cfg(all(unix, not(windows)))]
 fn wsl_windows_sessions_candidates() -> Vec<PathBuf> {
     if !running_in_wsl() {
@@ -759,6 +777,19 @@ fn wsl_windows_sessions_candidates() -> Vec<PathBuf> {
     candidates
 }
 
+#[cfg(windows)]
+fn parse_bool_flag(value: Option<&str>) -> bool {
+    value
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+}
+
+#[cfg(windows)]
+fn include_wsl_session_roots() -> bool {
+    parse_bool_flag(env::var("CC_PRESENCE_INCLUDE_WSL").ok().as_deref())
+}
+
 #[cfg(all(unix, not(windows)))]
 fn running_in_wsl() -> bool {
     if env::var_os("WSL_DISTRO_NAME").is_some() {
@@ -771,14 +802,6 @@ fn running_in_wsl() -> bool {
 
 #[cfg(windows)]
 fn windows_wsl_sessions_candidates() -> Vec<PathBuf> {
-    static CACHE: OnceLock<Vec<PathBuf>> = OnceLock::new();
-    CACHE
-        .get_or_init(compute_windows_wsl_sessions_candidates)
-        .clone()
-}
-
-#[cfg(windows)]
-fn compute_windows_wsl_sessions_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let distros = windows_wsl_distro_names();
     for distro in distros {
@@ -883,13 +906,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn configured_client_id_is_returned() {
+    fn configured_client_id_is_rewritten_to_codex_default() {
         let cfg = PresenceConfig {
             discord_client_id: Some("from-config".to_string()),
             discord_client_id_desktop: None,
             ..PresenceConfig::default()
         };
-        assert_eq!(cfg.effective_client_id().as_deref(), Some("from-config"));
+        assert_eq!(
+            cfg.effective_client_id().as_deref(),
+            Some(DEFAULT_DISCORD_CLIENT_ID)
+        );
     }
 
     #[test]
@@ -936,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_surface_client_id_uses_desktop_config_when_present() {
+    fn desktop_surface_client_id_uses_codex_app_default() {
         let cfg = PresenceConfig {
             discord_client_id: Some("default-id".to_string()),
             discord_client_id_desktop: Some("desktop-id".to_string()),
@@ -945,7 +971,7 @@ mod tests {
         assert_eq!(
             cfg.effective_client_id_for_surface(PresenceSurface::Desktop)
                 .as_deref(),
-            Some("desktop-id")
+            Some(DEFAULT_DISCORD_DESKTOP_CLIENT_ID)
         );
     }
 
@@ -1023,7 +1049,7 @@ mod tests {
             tier: OpenAiPlanTier::Business,
             show_price: true,
         };
-        assert_eq!(plan_preset_index(&plan), 6);
+        assert_eq!(plan_preset_index(&plan), 5);
     }
 
     #[test]
@@ -1036,5 +1062,18 @@ mod tests {
         apply_plan_preset(&mut plan, 0);
         assert_eq!(plan.mode, OpenAiPlanMode::Auto);
         assert_eq!(plan.tier, OpenAiPlanTier::Plus);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_roots_are_explicit_opt_in() {
+        assert!(!parse_bool_flag(None));
+        assert!(!parse_bool_flag(Some("")));
+        assert!(!parse_bool_flag(Some("0")));
+        assert!(!parse_bool_flag(Some("false")));
+        assert!(parse_bool_flag(Some("1")));
+        assert!(parse_bool_flag(Some("true")));
+        assert!(parse_bool_flag(Some("YES")));
+        assert!(parse_bool_flag(Some("on")));
     }
 }

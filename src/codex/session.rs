@@ -26,6 +26,9 @@ use parser::{fetch_git_branch, parse_session_file_cached};
 #[cfg(test)]
 use parser::{parse_new_lines, parse_session_file, parse_utc_timestamp};
 
+const SESSION_SCAN_MAX_DEPTH: usize = 16;
+const SESSION_SCAN_MAX_ENTRIES: usize = 100_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextWindowSource {
@@ -322,10 +325,7 @@ pub fn collect_active_sessions_multi_with_diagnostics(
             continue;
         }
 
-        for entry in WalkDir::new(sessions_root)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-        {
+        for entry in walk_session_root(sessions_root) {
             let path = entry.path();
             if !entry.file_type().is_file() {
                 continue;
@@ -374,6 +374,32 @@ pub fn collect_active_sessions_multi_with_diagnostics(
     sessions = dedupe_sessions_by_id(sessions);
     sessions.sort_by_key(|session| Reverse(session_rank_key(session)));
     Ok((sessions, diagnostics))
+}
+
+fn walk_session_root(root: &Path) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
+    walk_session_root_with_limits(root, SESSION_SCAN_MAX_DEPTH, SESSION_SCAN_MAX_ENTRIES)
+}
+
+fn walk_session_root_with_limits(
+    root: &Path,
+    max_depth: usize,
+    max_entries: usize,
+) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
+    WalkDir::new(root)
+        .max_depth(max_depth)
+        .into_iter()
+        .take(max_entries)
+        .filter_map(|entry| match entry {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                tracing::warn!(
+                    root = %root.display(),
+                    error = %err,
+                    "failed to inspect Codex session path"
+                );
+                None
+            }
+        })
 }
 
 fn dedupe_sessions_by_id(sessions: Vec<CodexSessionSnapshot>) -> Vec<CodexSessionSnapshot> {
@@ -590,6 +616,34 @@ mod tests {
     use chrono::TimeZone;
     use tempfile::TempDir;
 
+    #[test]
+    fn codex_session_scan_respects_depth_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("one").join("two").join("three");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("session.jsonl"), b"{}\n").unwrap();
+
+        let files_seen = walk_session_root_with_limits(temp.path(), 2, 100)
+            .filter(|entry| entry.file_type().is_file())
+            .count();
+
+        assert_eq!(files_seen, 0);
+    }
+
+    #[test]
+    fn codex_session_scan_respects_entry_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        for idx in 0..3 {
+            std::fs::write(temp.path().join(format!("{idx}.jsonl")), b"{}\n").unwrap();
+        }
+
+        let files_seen = walk_session_root_with_limits(temp.path(), usize::MAX, 3)
+            .filter(|entry| entry.file_type().is_file())
+            .count();
+
+        assert_eq!(files_seen, 2);
+    }
+
     fn parse_one(content: &str) -> CodexSessionSnapshot {
         let tmp = TempDir::new().expect("temp dir");
         let file_path = tmp.path().join("session.jsonl");
@@ -709,6 +763,15 @@ mod tests {
         );
         assert_eq!(snapshot.originator.as_deref(), Some("Codex Desktop"));
         assert_eq!(snapshot.source.as_deref(), Some("vscode"));
+        assert!(snapshot.is_desktop_surface());
+    }
+
+    #[test]
+    fn session_meta_treats_opencode_as_codex_app_surface() {
+        let snapshot = parse_one(
+            r#"{"type":"session_meta","payload":{"id":"opencode","cwd":"C:\\repo\\app","originator":"opencode","source":"terminal"}}"#,
+        );
+        assert_eq!(snapshot.originator.as_deref(), Some("opencode"));
         assert!(snapshot.is_desktop_surface());
     }
 
