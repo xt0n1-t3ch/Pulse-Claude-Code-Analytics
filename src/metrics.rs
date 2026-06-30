@@ -12,8 +12,6 @@ use crate::util::{format_cost, format_tokens, human_duration};
 
 const PERSIST_INTERVAL: Duration = Duration::from_secs(10);
 
-// ── Public Snapshot Types (serializable) ─────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsSnapshot {
     pub daemon_started_at: DateTime<Utc>,
@@ -58,8 +56,6 @@ pub struct ModelMetrics {
     pub session_count: u32,
 }
 
-// ── Tracker ──────────────────────────────────────────────────────────────
-
 /// Internal per-session record (latest values, NOT cumulative deltas).
 #[derive(Debug, Clone, Default)]
 struct SessionRecord {
@@ -70,6 +66,10 @@ struct SessionRecord {
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
     total_cost: f64,
+    input_cost: f64,
+    output_cost: f64,
+    cache_write_cost: f64,
+    cache_read_cost: f64,
 }
 
 pub struct MetricsTracker {
@@ -109,6 +109,10 @@ impl MetricsTracker {
                 cache_creation_tokens: session.cache_creation_tokens,
                 cache_read_tokens: session.cache_read_tokens,
                 total_cost: session.total_cost,
+                input_cost: session.input_cost,
+                output_cost: session.output_cost,
+                cache_write_cost: session.cache_write_cost,
+                cache_read_cost: session.cache_read_cost,
             };
             self.sessions.insert(session.session_id.clone(), record);
         }
@@ -147,23 +151,11 @@ impl MetricsTracker {
             totals.cache_read_tokens += record.cache_read_tokens;
             totals.cost_usd += record.total_cost;
 
-            // Cost breakdown by token type (re-compute from tokens + pricing)
-            let pricing = cost::model_pricing(&record.model_id);
-            // input_tokens in the snapshot already includes cache tokens,
-            // so for the breakdown we compute: pure_input = input - cache_creation - cache_read
-            let pure_input = record
-                .input_tokens
-                .saturating_sub(record.cache_creation_tokens)
-                .saturating_sub(record.cache_read_tokens);
-            cost_bd.input_cost += (pure_input as f64 / 1_000_000.0) * pricing.input_per_million;
-            cost_bd.output_cost +=
-                (record.output_tokens as f64 / 1_000_000.0) * pricing.output_per_million;
-            cost_bd.cache_write_cost += (record.cache_creation_tokens as f64 / 1_000_000.0)
-                * pricing.cache_write_per_million;
-            cost_bd.cache_read_cost +=
-                (record.cache_read_tokens as f64 / 1_000_000.0) * pricing.cache_read_per_million;
+            cost_bd.input_cost += record.input_cost;
+            cost_bd.output_cost += record.output_cost;
+            cost_bd.cache_write_cost += record.cache_write_cost;
+            cost_bd.cache_read_cost += record.cache_read_cost;
 
-            // Per-model aggregation
             let key = record.display_name.clone();
             let entry = by_model_map.entry(key).or_insert_with(|| ModelMetrics {
                 model_id: record.model_id.clone(),
@@ -214,8 +206,6 @@ impl Default for MetricsTracker {
     }
 }
 
-// ── Persistence ──────────────────────────────────────────────────────────
-
 fn persist_json(snap: &MetricsSnapshot) {
     let path = config::claude_home().join("discord-presence-metrics.json");
     let tmp = config::claude_home().join("discord-presence-metrics.json.tmp");
@@ -257,7 +247,6 @@ fn generate_markdown(snap: &MetricsSnapshot) -> String {
         now_local, uptime
     ));
 
-    // Total spend
     md.push_str("## Total Spend\n\n");
     md.push_str("| Metric | Value |\n");
     md.push_str("|--------|-------|\n");
@@ -287,8 +276,7 @@ fn generate_markdown(snap: &MetricsSnapshot) -> String {
     ));
     md.push('\n');
 
-    // Cost breakdown by type
-    let total = snap.totals.cost_usd.max(0.0001); // avoid div by zero
+    let total = snap.totals.cost_usd.max(0.0001);
     md.push_str("## Cost Breakdown by Type\n\n");
     md.push_str("| Type | Cost | % of Total |\n");
     md.push_str("|------|------|------------|\n");
@@ -308,7 +296,6 @@ fn generate_markdown(snap: &MetricsSnapshot) -> String {
     }
     md.push('\n');
 
-    // By model
     if !snap.by_model.is_empty() {
         md.push_str("## By Model\n\n");
         md.push_str("| Model | Sessions | Tokens | Cost | % |\n");
@@ -332,12 +319,10 @@ fn generate_markdown(snap: &MetricsSnapshot) -> String {
     md
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{DataSource, RateLimits, ReasoningEffort};
+    use crate::session::{DataSource, RateLimits, ReasoningEffort, Speed};
     use std::path::PathBuf;
     use std::time::SystemTime;
 
@@ -365,8 +350,13 @@ mod tests {
             cache_creation_tokens: cache_write,
             cache_read_tokens: cache_read,
             max_turn_api_input: 0,
+            current_context_tokens: 0,
             total_api_duration_ms: 0,
             total_cost: cost,
+            input_cost: 0.0,
+            output_cost: 0.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
             limits: RateLimits::default(),
             activity: None,
             started_at: None,
@@ -375,6 +365,8 @@ mod tests {
             reasoning_effort: ReasoningEffort::default(),
             reasoning_effort_explicit: false,
             has_thinking_blocks: false,
+            speed: Speed::default(),
+            service_tier: None,
             source: DataSource::Jsonl,
             source_file: PathBuf::from("/test.jsonl"),
             subagents: Vec::new(),
@@ -383,11 +375,58 @@ mod tests {
         }
     }
 
+    fn make_fast_session_with_breakdown(
+        id: &str,
+        model: &str,
+        input: u64,
+        output: u64,
+        cache_write: u64,
+        cache_read: u64,
+    ) -> ClaudeSessionSnapshot {
+        let bd =
+            cost::calculate_category_costs(model, input, output, cache_write, cache_read, true);
+        let mut s = make_session(
+            id,
+            model,
+            input + cache_write + cache_read,
+            output,
+            cache_write,
+            cache_read,
+            bd.total(),
+        );
+        s.speed = Speed::Fast;
+        s.input_cost = bd.input_cost;
+        s.output_cost = bd.output_cost;
+        s.cache_write_cost = bd.cache_write_cost;
+        s.cache_read_cost = bd.cache_read_cost;
+        s
+    }
+
+    #[test]
+    fn fast_opus_48_snapshot_breakdown_reconciles_with_total() {
+        let mut tracker = MetricsTracker::new();
+        let sessions = vec![make_fast_session_with_breakdown(
+            "s1",
+            "claude-opus-4-8",
+            100_000,
+            20_000,
+            8_000,
+            60_000,
+        )];
+        tracker.update(&sessions);
+        let snap = tracker.snapshot().unwrap();
+
+        let bd = &snap.cost_breakdown;
+        let breakdown_sum =
+            bd.input_cost + bd.output_cost + bd.cache_write_cost + bd.cache_read_cost;
+        assert!((breakdown_sum - snap.totals.cost_usd).abs() < 1e-7);
+        assert!(snap.totals.cost_usd > 0.0);
+    }
+
     #[test]
     fn accumulates_sessions_without_double_counting() {
         let mut tracker = MetricsTracker::new();
 
-        // First update: session with 1000 input, 500 output
         let sessions = vec![make_session(
             "s1",
             "claude-opus-4-6",
@@ -403,7 +442,6 @@ mod tests {
         assert_eq!(snap.totals.output_tokens, 500);
         assert!((snap.totals.cost_usd - 0.05).abs() < 0.001);
 
-        // Second update: same session with increased values (NOT additive)
         let sessions = vec![make_session(
             "s1",
             "claude-opus-4-6",
@@ -415,7 +453,7 @@ mod tests {
         )];
         tracker.update(&sessions);
         let snap = tracker.snapshot().unwrap();
-        assert_eq!(snap.totals.input_tokens, 2000); // replaced, not 3000
+        assert_eq!(snap.totals.input_tokens, 2000);
         assert_eq!(snap.totals.output_tokens, 1000);
         assert!((snap.totals.cost_usd - 0.10).abs() < 0.001);
     }
@@ -447,7 +485,6 @@ mod tests {
         tracker.update(&sessions);
         let snap = tracker.snapshot().unwrap();
 
-        // Opus should be first (sorted by cost desc)
         assert_eq!(snap.by_model[0].display_name, "Claude Opus 4.6");
         assert_eq!(snap.by_model[0].session_count, 2);
         assert!((snap.by_model[0].cost_usd - 0.13).abs() < 0.001);

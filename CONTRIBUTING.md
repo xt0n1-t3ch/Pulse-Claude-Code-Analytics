@@ -1,61 +1,94 @@
 # Contributing to Pulse
 
-Thanks for your interest in Pulse. Every contribution — code, docs, bug reports, feature ideas — makes the project better.
+Pulse is an open-source project under the Apache License 2.0. Contributions of any size are welcome, from typo fixes to new analyzers. Thank you for helping make it better.
 
-## Ground rules
+## Code of conduct
 
-- Be kind. See the [Code of Conduct](CODE_OF_CONDUCT.md).
-- One logical change per PR. Small PRs merge faster.
-- Every PR must pass CI (`fmt`, `clippy -D warnings`, `cargo test --workspace`, frontend build).
-- Add or update tests where behavior changes.
-- No telemetry, ever. Pulse is local-first by design.
+Be respectful, assume good intent, keep discussions on-topic. Personal attacks, harassment, and discriminatory language are not tolerated. See the full [Code of Conduct](CODE_OF_CONDUCT.md). Maintainers reserve the right to remove off-topic or abusive content from issues, pull requests, and discussions.
+
+## Reporting bugs
+
+Open an issue at [github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/issues](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/issues) and include:
+
+- Pulse version (visible in Settings).
+- Operating system and version.
+- Which provider you use (Claude Code, Codex, or both).
+- Steps to reproduce.
+- Expected vs actual behavior.
+- Relevant log lines (run with `RUST_LOG=debug` — see [docs/troubleshooting.md](docs/troubleshooting.md)).
+
+Reproduction steps are the single biggest factor in turnaround time. The issue templates guide you through the fields.
+
+## Suggesting features
+
+Open an issue with the feature template. Describe the user problem first, the proposed solution second. Mock-ups or screenshots help. Keep one feature per issue.
+
+## Pull requests
+
+1. Fork the repository and create a topic branch off `main` (e.g. `feat/linux-tray`).
+2. Keep the change focused. One PR, one concern.
+3. Run the quality gates locally (see below). CI runs the same gates and must pass before review.
+4. Open the PR against `main`. Link the relevant issue and fill in the PR template.
+5. Address review feedback by pushing additional commits to the same branch; the maintainer squashes on merge.
+
+## Commit conventions
+
+Conventional Commits are enforced and feed the changelog and release notes ([cliff.toml](cliff.toml)):
+
+| Prefix | Use for |
+|---|---|
+| `feat:` | A new user-visible capability. |
+| `fix:` | A bug fix. |
+| `perf:` | A measurable performance improvement. |
+| `refactor:` | A code change that does not alter behavior. |
+| `docs:` | Documentation only. |
+| `test:` | Tests only. |
+| `chore:` | Build, tooling, or housekeeping. |
+
+Keep the subject line under 72 characters, lowercase, imperative. Use the body for context, not a restatement of the diff.
+
+## Coding standards
+
+- Match the existing patterns of the file you are editing.
+- Centralize constants, paths, and shared types rather than duplicating across crates.
+- Prefer explicit error handling over `unwrap()` outside of tests.
+- Reserve comments for external constraints (license headers, upstream-bug workarounds with links, lint suppressions). Names and types carry the rest.
+- Rust passes `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings`.
+- TypeScript / Svelte passes `svelte-check` with zero errors and zero warnings.
 
 ## Dev setup
 
-### Prereqs
-- Rust (stable)
-- Node.js 20+
-- Platform Tauri deps — see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+Prerequisites: Rust (stable, pinned by [rust-toolchain.toml](rust-toolchain.toml)), Node.js 20+, and the platform Tauri dependencies — see the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
-### Build & run
 ```bash
 # frontend dev server
 cd frontend && npm install && npm run dev
 
-# in another terminal: Tauri app (connects to the dev server)
+# in another terminal: the Tauri app (connects to the dev server)
 cd src-tauri && cargo tauri dev
 ```
 
-### Tests
-```bash
-cargo fmt --all
+## Testing
+
+Add or update tests alongside any behavior change. Tests are centralized: frontend specs live under `tests/{unit,integration,components}` (Vitest, config in [frontend/vitest.config.ts](frontend/vitest.config.ts)); Rust integration tests live under `tests/` and `src-tauri/tests/`; Rust unit tests stay inline as `#[cfg(test)]`. See [tests/index.md](tests/index.md).
+
+The full validator chain — all must pass with zero warnings:
+
+```sh
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+npm --prefix frontend run check
+npm --prefix frontend run test
+npm --prefix frontend run build
 ```
 
-## Commit style
+## Release process
 
-Conventional Commits:
-- `feat:` new feature
-- `fix:` bug fix
-- `docs:` documentation
-- `perf:` performance
-- `refactor:` non-behavioral code change
-- `test:` tests
-- `chore:` tooling / deps
+Releases are tag-driven. Maintainers bump `version` together in `Cargo.toml`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `frontend/package.json`, and the root `package.json`; add a `CHANGELOG.md` section; commit `chore(release): vX.Y.Z`; then push a `vX.Y.Z` tag. The Release workflow builds the Windows, macOS, and Linux bundles, generates SHA-256 checksums, composes release notes from the CHANGELOG section (git-cliff fallback), and publishes the GitHub release.
 
-## Pull requests
+Pre-release tags (`vX.Y.Z-rc.N`) follow the same flow and are marked as pre-release.
 
-1. Fork → branch off `main` with a descriptive name (`feat/linux-tray`).
-2. Make your changes. Keep the diff focused.
-3. Run the full CI suite locally.
-4. Open a PR. Link the issue it closes. Fill in the PR template.
-5. A maintainer will review. Expect suggestions; don't take them personally.
+## License
 
-## Releasing (maintainers)
-
-1. Bump versions in `Cargo.toml`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `frontend/package.json`.
-2. Update `CHANGELOG.md`.
-3. Commit: `chore(release): vX.Y.Z`.
-4. Tag: `git tag vX.Y.Z && git push origin main --tags`.
-5. The Release workflow builds tri-OS bundles and publishes automatically.
+By submitting a contribution, you agree that it will be licensed under the project's Apache License 2.0. See [`LICENSE`](LICENSE) and the attribution policy in [`NOTICE`](NOTICE).

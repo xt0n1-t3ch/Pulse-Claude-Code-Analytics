@@ -6,13 +6,15 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 /// Create a `Command` that won't flash a console window on Windows.
 pub fn silent_command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
+    let cmd = Command::new(program);
     #[cfg(windows)]
-    {
+    let cmd = {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut cmd = cmd;
         cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+        cmd
+    };
     cmd
 }
 
@@ -166,9 +168,8 @@ mod tests {
     fn truncation() {
         assert_eq!(truncate("short", 10), "short");
         assert_eq!(truncate("a very long string here", 10), "a very ...");
-        // Unicode: chars should not be split mid-byte
         let unicode = "██████╗██╗ █████╗";
-        assert_eq!(truncate(unicode, 50), unicode); // fits
+        assert_eq!(truncate(unicode, 50), unicode);
         assert_eq!(truncate(unicode, 10), "██████╗...");
     }
 

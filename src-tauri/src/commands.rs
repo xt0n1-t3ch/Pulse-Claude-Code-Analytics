@@ -1,13 +1,23 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use cc_discord_presence::codex::config::{PresenceConfig as CodexPresenceConfig, PresenceSurface};
+use cc_discord_presence::codex::discord::DiscordPresence as CodexDiscordPresence;
+use cc_discord_presence::codex::session::{
+    self as codex_session, CodexSessionSnapshot, GitBranchCache as CodexGitBranchCache,
+    SessionParseCache as CodexSessionParseCache,
+};
+use cc_discord_presence::codex::telemetry::plan::{DetectedPlanTier, PlanDetector};
+use cc_discord_presence::codex::telemetry::service_tier::resolve_service_tier;
 use cc_discord_presence::config::PresenceConfig;
 use cc_discord_presence::cost;
-use cc_discord_presence::discord::DiscordPresence;
+use cc_discord_presence::discord::DiscordPresence as ClaudeDiscordPresence;
+use cc_discord_presence::provider::Provider;
 use cc_discord_presence::session::{
-    self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, latest_limits_source,
+    self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, Speed, latest_limits_source,
     merge_statusline_into_sessions, preferred_active_session, read_statusline_data,
 };
 use cc_discord_presence::usage::UsageManager;
@@ -48,13 +58,23 @@ impl Default for DiscordDisplayPrefs {
 }
 
 #[derive(Default, Clone)]
+enum ActiveSessions {
+    #[default]
+    None,
+    Claude(Vec<ClaudeSessionSnapshot>),
+    Codex(Vec<CodexSessionSnapshot>),
+}
+
+#[derive(Default, Clone)]
 struct CachedData {
-    sessions: Vec<ClaudeSessionSnapshot>,
-    usage: Option<CachedUsage>,
-    usage_error: Option<String>,
+    active_provider: Provider,
+    sessions: ActiveSessions,
+    claude_usage: Option<CachedUsage>,
+    claude_usage_error: Option<String>,
     discord_status: String,
     discord_enabled: bool,
     discord_prefs: DiscordDisplayPrefs,
+    codex_opencode_running: bool,
     /// One-shot flag: when set by `refresh_usage` command, the background
     /// poller invalidates its usage cache on the next tick and forces a
     /// fresh API call. The flag is cleared after handling.
@@ -81,51 +101,45 @@ fn shared() -> &'static Arc<Mutex<CachedData>> {
     SHARED.get_or_init(|| Arc::new(Mutex::new(CachedData::default())))
 }
 
+fn current_provider() -> Provider {
+    shared()
+        .lock()
+        .ok()
+        .map(|d| d.active_provider)
+        .unwrap_or_else(cc_discord_presence::provider::load_active_provider)
+}
+
 fn plan_name_from_key(key: &str) -> String {
-    match key {
-        "free" => "Free".to_string(),
-        "pro" => "Pro".to_string(),
-        "max_5x" => "MAX 5X".to_string(),
-        "max_20x" => "MAX 20X".to_string(),
-        "max" => "MAX".to_string(),
-        "team" => "Team".to_string(),
-        "enterprise" => "Enterprise".to_string(),
-        other => other.to_uppercase(),
-    }
+    cc_discord_presence::plan::name_from_key(key)
 }
 
 fn plan_key_from_override(name: &str) -> Option<&'static str> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "" | "auto" => None,
-        "free" => Some("free"),
-        "pro" => Some("pro"),
-        "max 5x" | "max_5x" => Some("max_5x"),
-        "max 20x" | "max_20x" => Some("max_20x"),
-        "max" => Some("max"),
-        "team" => Some("team"),
-        "enterprise" => Some("enterprise"),
-        _ => None,
+    cc_discord_presence::plan::key_from_override(name)
+}
+
+fn log_save_error(scope: &str, result: anyhow::Result<()>) {
+    if let Err(err) = result {
+        tracing::warn!(scope, error = %err, "failed to save Pulse configuration");
     }
 }
 
-fn resolved_plan_key(
-    config: &PresenceConfig,
-    override_name: Option<&str>,
-    detected_key: Option<&str>,
-) -> Option<String> {
-    if let Some(name) = override_name {
-        return Some(plan_key_from_override(name).unwrap_or("max").to_string());
+fn codex_plan_key_from_tier(tier: DetectedPlanTier) -> &'static str {
+    match tier {
+        DetectedPlanTier::Free => "free",
+        DetectedPlanTier::Go => "go",
+        DetectedPlanTier::Plus => "plus",
+        DetectedPlanTier::Business => "business",
+        DetectedPlanTier::Enterprise => "enterprise",
+        DetectedPlanTier::Pro => "pro",
+        DetectedPlanTier::Unknown => "",
     }
-    config
-        .plan
-        .clone()
-        .or_else(|| detected_key.map(str::to_string))
 }
 
 pub fn start_background_poller() {
     let data = Arc::clone(shared());
 
     if let Ok(mut d) = data.lock() {
+        d.active_provider = cc_discord_presence::provider::load_active_provider();
         d.discord_enabled = true;
         if let Ok(cfg) = PresenceConfig::load_or_init() {
             d.discord_prefs = DiscordDisplayPrefs {
@@ -140,131 +154,218 @@ pub fn start_background_poller() {
     }
 
     thread::spawn(move || {
-        let mut git = GitBranchCache::new(Duration::from_secs(30));
-        let mut parse = SessionParseCache::default();
+        let mut claude_git = GitBranchCache::new(Duration::from_secs(30));
+        let mut claude_parse = SessionParseCache::default();
+        let mut codex_git = CodexGitBranchCache::new(Duration::from_secs(30));
+        let mut codex_parse = CodexSessionParseCache::default();
         let mut usage_mgr = UsageManager::new();
-        let mut config = PresenceConfig::load_or_init().unwrap_or_default();
-        let mut discord = DiscordPresence::new(config.effective_client_id());
+        let mut claude_config = PresenceConfig::load_or_init().unwrap_or_default();
+        let mut codex_config = CodexPresenceConfig::load_or_init().unwrap_or_default();
+        let mut claude_discord = ClaudeDiscordPresence::new(claude_config.effective_client_id());
+        let mut codex_discord = CodexDiscordPresence::new(codex_config.effective_client_id());
+        let mut codex_plan_detector = PlanDetector::new();
 
         loop {
-            if let Ok(fresh) = PresenceConfig::load_or_init() {
-                config = fresh;
-            }
-            let now = SystemTime::now();
-            let cutoff = now
-                .checked_sub(ACTIVE_CUTOFF)
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-
-            let mut all = session::collect_active_sessions(
-                &mut git,
-                &mut parse,
-                STALE_THRESHOLD,
-                STICKY_WINDOW,
-            )
-            .unwrap_or_default();
-
-            // Merge statusline data for more accurate activity info
-            if let Some(sl) = read_statusline_data(&mut git) {
-                merge_statusline_into_sessions(&mut all, sl);
-            }
-
-            let cutoff_chrono =
-                chrono::Utc::now() - chrono::Duration::seconds(ACTIVE_CUTOFF.as_secs() as i64);
-            let active: Vec<_> = all
-                .into_iter()
-                .filter(|s| {
-                    if s.is_subagent {
-                        return false;
-                    }
-                    if let Some(ts) = s.last_token_event_at {
-                        return ts >= cutoff_chrono;
-                    }
-                    s.last_activity >= cutoff
-                })
-                .collect();
-
-            // Honor a UI-initiated refresh request: drop the in-memory cache so
-            // the next get_usage() call skips the TTL window and hits the API.
-            let force_refresh = data
+            let provider = current_provider();
+            let (discord_enabled, prefs, force_refresh) = data
                 .lock()
                 .ok()
                 .map(|mut d| {
+                    d.active_provider = provider;
                     let req = d.usage_refresh_requested;
                     if req {
                         d.usage_refresh_requested = false;
                     }
-                    req
+                    (d.discord_enabled, d.discord_prefs.clone(), req)
                 })
-                .unwrap_or(false);
-            if force_refresh {
-                usage_mgr.invalidate_cache();
-                let _ = std::fs::remove_file(
-                    cc_discord_presence::config::claude_home()
-                        .join("discord-presence-usage-cache.json"),
-                );
-            }
+                .unwrap_or((true, DiscordDisplayPrefs::default(), false));
 
-            let usage = usage_mgr.get_usage();
-            let detected_plan_key = usage_mgr.detected_plan_key();
+            let discord_status = match provider {
+                Provider::Claude => {
+                    if let Ok(fresh) = PresenceConfig::load_or_init() {
+                        claude_config = fresh;
+                    }
 
-            let cached_usage = usage.as_ref().map(|u| {
-                let fmt_reset = |dt: Option<chrono::DateTime<chrono::Utc>>| -> String {
-                    dt.map(|d| d.to_rfc3339())
-                        .unwrap_or_else(|| "N/A".to_string())
-                };
-                CachedUsage {
-                    five_hour_pct: u.five_hour.utilization,
-                    five_hour_resets: fmt_reset(u.five_hour.resets_at),
-                    seven_day_pct: u.seven_day.utilization,
-                    seven_day_resets: fmt_reset(u.seven_day.resets_at),
-                    sonnet_pct: u.sonnet_free.as_ref().map(|s| s.utilization),
-                    sonnet_resets: u.sonnet_free.as_ref().map(|s| fmt_reset(s.resets_at)),
-                    extra_enabled: u.extra_usage.as_ref().is_some_and(|e| e.is_enabled),
-                    extra_limit: u.extra_usage.as_ref().and_then(|e| e.monthly_limit),
-                    extra_used: u.extra_usage.as_ref().and_then(|e| e.used_credits),
-                    extra_pct: u.extra_usage.as_ref().and_then(|e| e.utilization),
+                    let now = SystemTime::now();
+                    let cutoff = now
+                        .checked_sub(ACTIVE_CUTOFF)
+                        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+                    let mut all = session::collect_active_sessions(
+                        &mut claude_git,
+                        &mut claude_parse,
+                        STALE_THRESHOLD,
+                        STICKY_WINDOW,
+                    )
+                    .unwrap_or_default();
+
+                    if let Some(sl) = read_statusline_data(&mut claude_git) {
+                        merge_statusline_into_sessions(&mut all, sl);
+                    }
+
+                    let cutoff_chrono = chrono::Utc::now()
+                        - chrono::Duration::seconds(ACTIVE_CUTOFF.as_secs() as i64);
+                    let active: Vec<_> = all
+                        .into_iter()
+                        .filter(|s| {
+                            if s.is_subagent {
+                                return false;
+                            }
+                            if let Some(ts) = s.last_token_event_at {
+                                return ts >= cutoff_chrono;
+                            }
+                            s.last_activity >= cutoff
+                        })
+                        .collect();
+
+                    if force_refresh {
+                        usage_mgr.invalidate_cache();
+                        let usage_cache_path = cc_discord_presence::config::claude_home()
+                            .join("discord-presence-usage-cache.json");
+                        if let Err(err) = std::fs::remove_file(&usage_cache_path)
+                            && err.kind() != std::io::ErrorKind::NotFound
+                        {
+                            tracing::warn!(
+                                path = %usage_cache_path.display(),
+                                error = %err,
+                                "failed to remove usage cache"
+                            );
+                        }
+                    }
+
+                    let usage = usage_mgr.get_usage();
+                    let detected_plan_key = usage_mgr.detected_plan_key();
+                    let cached_usage = usage.as_ref().map(|u| {
+                        let fmt_reset = |dt: Option<chrono::DateTime<chrono::Utc>>| -> String {
+                            dt.map(|d| d.to_rfc3339())
+                                .unwrap_or_else(|| "N/A".to_string())
+                        };
+                        CachedUsage {
+                            five_hour_pct: u.five_hour.utilization,
+                            five_hour_resets: fmt_reset(u.five_hour.resets_at),
+                            seven_day_pct: u.seven_day.utilization,
+                            seven_day_resets: fmt_reset(u.seven_day.resets_at),
+                            sonnet_pct: u.sonnet_free.as_ref().map(|s| s.utilization),
+                            sonnet_resets: u.sonnet_free.as_ref().map(|s| fmt_reset(s.resets_at)),
+                            extra_enabled: u.extra_usage.as_ref().is_some_and(|e| e.is_enabled),
+                            extra_limit: u.extra_usage.as_ref().and_then(|e| e.monthly_limit),
+                            extra_used: u.extra_usage.as_ref().and_then(|e| e.used_credits),
+                            extra_pct: u.extra_usage.as_ref().and_then(|e| e.utilization),
+                        }
+                    });
+                    let usage_error = usage_mgr.error_hint_with_countdown();
+
+                    claude_config.privacy.show_project_name = prefs.show_project;
+                    claude_config.privacy.show_git_branch = prefs.show_branch;
+                    claude_config.privacy.show_model = prefs.show_model;
+                    claude_config.privacy.show_activity = prefs.show_activity;
+                    claude_config.privacy.show_tokens = prefs.show_tokens;
+                    claude_config.privacy.show_cost = prefs.show_cost;
+                    let manual_plan = PresenceConfig::load_or_init()
+                        .ok()
+                        .and_then(|cfg| cfg.plan)
+                        .filter(|p| !p.trim().is_empty());
+                    claude_config.plan = manual_plan.or_else(|| detected_plan_key.clone());
+
+                    persist_live_claude_snapshots(&active);
+                    let status = if discord_enabled {
+                        let active_session = preferred_active_session(&active);
+                        let limits = latest_limits_source(&active).map(|s| &s.limits);
+                        if let Err(err) = claude_discord.update(
+                            active_session,
+                            limits,
+                            usage.as_ref(),
+                            &claude_config,
+                        ) {
+                            tracing::warn!(error = %err, "failed to update Claude Discord presence");
+                        }
+                        codex_discord.shutdown();
+                        claude_discord.status().to_string()
+                    } else {
+                        claude_discord.shutdown();
+                        codex_discord.shutdown();
+                        "Disabled".to_string()
+                    };
+
+                    if let Ok(mut d) = data.lock() {
+                        d.sessions = ActiveSessions::Claude(active);
+                        d.claude_usage = cached_usage;
+                        d.claude_usage_error = usage_error;
+                    }
+                    status
                 }
-            });
+                Provider::Codex => {
+                    if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
+                        codex_config = fresh;
+                    }
 
-            let usage_error = usage_mgr.error_hint_with_countdown();
+                    codex_config.privacy.show_project_name = prefs.show_project;
+                    codex_config.privacy.show_git_branch = prefs.show_branch;
+                    codex_config.privacy.show_model = prefs.show_model;
+                    codex_config.privacy.show_activity = prefs.show_activity;
+                    codex_config.privacy.show_tokens = prefs.show_tokens;
+                    codex_config.privacy.show_cost = prefs.show_cost;
 
-            // Discord Rich Presence — update if enabled, shutdown if disabled
-            let (discord_enabled, prefs) = data
-                .lock()
-                .ok()
-                .map(|d| (d.discord_enabled, d.discord_prefs.clone()))
-                .unwrap_or((true, DiscordDisplayPrefs::default()));
-            config.privacy.show_project_name = prefs.show_project;
-            config.privacy.show_git_branch = prefs.show_branch;
-            config.privacy.show_model = prefs.show_model;
-            config.privacy.show_activity = prefs.show_activity;
-            config.privacy.show_tokens = prefs.show_tokens;
-            config.privacy.show_cost = prefs.show_cost;
-            let override_name = plan_override().lock().ok().and_then(|guard| guard.clone());
-            config.plan = resolved_plan_key(
-                &config,
-                override_name.as_deref(),
-                detected_plan_key.as_deref(),
-            );
+                    let sessions_roots = cc_discord_presence::codex::config::sessions_paths();
+                    let active = codex_session::collect_active_sessions_multi(
+                        &sessions_roots,
+                        STALE_THRESHOLD,
+                        STICKY_WINDOW,
+                        &mut codex_git,
+                        &mut codex_parse,
+                        &codex_config.pricing,
+                    )
+                    .unwrap_or_default();
 
-            persist_live_session_snapshots(&active);
-            let discord_status = if discord_enabled {
-                let active_session = preferred_active_session(&active);
-                let limits = latest_limits_source(&active).map(|s| &s.limits);
-                let _ = discord.update(active_session, limits, usage.as_ref(), &config);
-                discord.status().to_string()
-            } else {
-                // Disconnect from Discord IPC when disabled
-                discord.shutdown();
-                "Disabled".to_string()
+                    let resolved_plan = codex_plan_detector
+                        .resolve_from_sessions(&active, &codex_config.openai_plan);
+                    let resolved_service_tier = resolve_service_tier();
+                    let opencode_running =
+                        cc_discord_presence::codex::process::is_opencode_running();
+                    let surface_override = if opencode_running {
+                        PresenceSurface::Desktop
+                    } else {
+                        PresenceSurface::Default
+                    };
+
+                    persist_live_codex_snapshots(
+                        &active,
+                        resolved_service_tier.is_fast(),
+                        opencode_running,
+                    );
+                    let status = if discord_enabled {
+                        let active_session = codex_session::preferred_active_session(&active);
+                        let effective_limits = codex_session::latest_limits_source(&active);
+                        let limits = effective_limits.as_ref().map(|item| &item.limits);
+                        if let Err(err) = codex_discord.update(
+                            active_session,
+                            limits,
+                            &resolved_plan,
+                            &resolved_service_tier,
+                            &codex_config,
+                            surface_override,
+                        ) {
+                            tracing::warn!(error = %err, "failed to update Codex Discord presence");
+                        }
+                        claude_discord.shutdown();
+                        codex_discord.status().to_string()
+                    } else {
+                        claude_discord.shutdown();
+                        codex_discord.shutdown();
+                        "Disabled".to_string()
+                    };
+
+                    if let Ok(mut d) = data.lock() {
+                        d.sessions = ActiveSessions::Codex(active);
+                        d.codex_opencode_running = opencode_running;
+                        d.claude_usage = None;
+                        d.claude_usage_error = None;
+                    }
+                    status
+                }
             };
 
             if let Ok(mut d) = data.lock() {
-                d.sessions = active;
-                if cached_usage.is_some() {
-                    d.usage = cached_usage;
-                }
-                d.usage_error = usage_error;
                 d.discord_status = discord_status;
             }
 
@@ -273,11 +374,46 @@ pub fn start_background_poller() {
     });
 }
 
-fn read_sessions() -> Vec<ClaudeSessionSnapshot> {
-    shared().lock().ok().map_or(vec![], |d| d.sessions.clone())
+fn read_claude_sessions() -> Vec<ClaudeSessionSnapshot> {
+    shared()
+        .lock()
+        .ok()
+        .map_or_else(Vec::new, |d| match &d.sessions {
+            ActiveSessions::Claude(sessions) => sessions.clone(),
+            _ => Vec::new(),
+        })
 }
 
-// ── Response types ──
+fn read_codex_sessions() -> Vec<CodexSessionSnapshot> {
+    shared()
+        .lock()
+        .ok()
+        .map_or_else(Vec::new, |d| match &d.sessions {
+            ActiveSessions::Codex(sessions) => sessions.clone(),
+            _ => Vec::new(),
+        })
+}
+
+fn read_codex_opencode_running() -> bool {
+    shared()
+        .lock()
+        .ok()
+        .is_some_and(|d| d.codex_opencode_running)
+}
+
+fn current_live_session_infos() -> Vec<SessionInfo> {
+    match current_provider() {
+        Provider::Claude => build_claude_session_infos(&read_claude_sessions()),
+        Provider::Codex => {
+            let fast_mode = resolve_service_tier().is_fast();
+            build_codex_session_infos(
+                &read_codex_sessions(),
+                fast_mode,
+                read_codex_opencode_running(),
+            )
+        }
+    }
+}
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -350,6 +486,8 @@ fn read_session_name(session_id: &str) -> Option<String> {
 
 #[derive(Serialize)]
 pub struct SessionInfo {
+    pub provider: String,
+    pub app_name: Option<String>,
     pub session_id: String,
     pub session_name: Option<String>,
     pub project: String,
@@ -362,6 +500,8 @@ pub struct SessionInfo {
     pub output_tokens: u64,
     pub cache_write_tokens: u64,
     pub cache_read_tokens: u64,
+    pub context_used_tokens: u64,
+    pub context_window_tokens: u64,
     pub branch: Option<String>,
     pub activity: String,
     pub activity_target: Option<String>,
@@ -381,14 +521,33 @@ pub struct SessionInfo {
     pub output_cost: f64,
     pub cache_write_cost: f64,
     pub cache_read_cost: f64,
+    /// Speed tier of the most recent turn ("fast"/"standard").
+    pub speed: String,
+    /// True when the most recent turn ran in fast mode (priority speed).
+    pub fast: bool,
+    /// Service tier of the most recent turn ("priority"/"standard"), display only.
+    pub service_tier: Option<String>,
+    /// This session's model's currently-active introductory-pricing window, if
+    /// any. `None` both for models with no promo and for a promo'd model once
+    /// its window has closed — the frontend never computes its own expiry.
+    pub intro_pricing: Option<cost::IntroPricingBadge>,
+    /// True when this session's model uses a newer tokenizer that bills more
+    /// tokens than its predecessor for the same input text at an unchanged
+    /// per-token rate (currently: Opus 4.7+, Claude Sonnet 5).
+    pub has_inflated_tokenizer: bool,
 }
 
 #[derive(Serialize)]
 pub struct RateLimitInfo {
+    pub provider: String,
     pub five_hour_pct: f64,
     pub five_hour_resets: String,
+    pub five_hour_label: String,
+    pub five_hour_window_minutes: Option<u64>,
     pub seven_day_pct: f64,
     pub seven_day_resets: String,
+    pub seven_day_label: String,
+    pub seven_day_window_minutes: Option<u64>,
     pub sonnet_pct: Option<f64>,
     pub sonnet_resets: Option<String>,
     pub extra_enabled: bool,
@@ -398,7 +557,25 @@ pub struct RateLimitInfo {
     pub source: String,
 }
 
-fn build_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> {
+fn format_codex_window_label(minutes: Option<u64>, fallback: &str) -> String {
+    match minutes {
+        Some(300) => "5h Window".into(),
+        Some(10080) => "7d Window".into(),
+        Some(1440) => "24h Window".into(),
+        Some(value) if value > 0 => {
+            if value % 1440 == 0 {
+                format!("{}d Window", value / 1440)
+            } else if value % 60 == 0 {
+                format!("{}h Window", value / 60)
+            } else {
+                format!("{value}m Window")
+            }
+        }
+        _ => fallback.into(),
+    }
+}
+
+fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> {
     let now = SystemTime::now();
     let idle = now
         .checked_sub(IDLE_CUTOFF)
@@ -412,32 +589,25 @@ fn build_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> 
                 .started_at
                 .map(|st| (chrono::Utc::now() - st).num_seconds().max(0) as u64)
                 .unwrap_or(0);
-            let p = s.model.as_ref().map(|m| cost::model_pricing(m));
-            let pure_inp = s
-                .input_tokens
-                .saturating_sub(s.cache_creation_tokens)
-                .saturating_sub(s.cache_read_tokens);
-            let ic = p
-                .as_ref()
-                .map_or(0.0, |p| pure_inp as f64 * p.input_per_million / 1_000_000.0);
-            let oc = p.as_ref().map_or(0.0, |p| {
-                s.output_tokens as f64 * p.output_per_million / 1_000_000.0
-            });
-            let cwc = p.as_ref().map_or(0.0, |p| {
-                s.cache_creation_tokens as f64 * p.cache_write_per_million / 1_000_000.0
-            });
-            let crc = p.as_ref().map_or(0.0, |p| {
-                s.cache_read_tokens as f64 * p.cache_read_per_million / 1_000_000.0
-            });
+            let model_id_for_speed = s.model.clone().unwrap_or_default();
+            let fast = s.speed.is_fast() && cost::is_fast_capable(&model_id_for_speed);
+            let ic = s.input_cost;
+            let oc = s.output_cost;
+            let cwc = s.cache_write_cost;
+            let crc = s.cache_read_cost;
             let tps = if s.total_api_duration_ms > 0 {
                 s.output_tokens as f64 / (s.total_api_duration_ms as f64 / 1000.0)
             } else {
                 0.0
             };
             let model_id_raw = s.model.clone().unwrap_or_default();
+            let intro_pricing = cost::active_intro_pricing(&model_id_raw, chrono::Utc::now());
+            let has_inflated_tokenizer = cost::has_inflated_tokenizer(&model_id_raw);
             let has_1m = cost::is_ga_1m_context(&model_id_raw)
                 || model_id_raw.contains("[1m]")
                 || s.max_turn_api_input > 200_000;
+            let ctx_window_tokens = if has_1m { 1_000_000 } else { 200_000 };
+            let ctx_used_tokens = s.current_context_tokens.min(ctx_window_tokens);
             let ctx_window = if has_1m { "1M" } else { "200K" }.to_string();
             let subagent_details: Vec<SubagentDetail> = s
                 .subagents
@@ -459,6 +629,8 @@ fn build_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> 
                 .collect();
             let session_name = read_session_name(&s.session_id);
             SessionInfo {
+                provider: Provider::Claude.as_str().to_string(),
+                app_name: None,
                 session_id: s.session_id.clone(),
                 session_name,
                 project: s.project_name.clone(),
@@ -475,6 +647,8 @@ fn build_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> 
                 output_tokens: s.output_tokens,
                 cache_write_tokens: s.cache_creation_tokens,
                 cache_read_tokens: s.cache_read_tokens,
+                context_used_tokens: ctx_used_tokens,
+                context_window_tokens: ctx_window_tokens,
                 branch: s.git_branch.clone(),
                 activity: s
                     .activity
@@ -494,26 +668,159 @@ fn build_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> 
                 output_cost: oc,
                 cache_write_cost: cwc,
                 cache_read_cost: crc,
+                speed: s.speed.as_str().to_string(),
+                fast,
+                service_tier: s.service_tier.clone(),
+                intro_pricing,
+                has_inflated_tokenizer,
             }
         })
         .collect()
 }
 
-fn persist_live_session_infos(result: &[SessionInfo]) {
+fn build_codex_session_infos(
+    snapshots: &[CodexSessionSnapshot],
+    fast_mode: bool,
+    opencode_running: bool,
+) -> Vec<SessionInfo> {
+    let now = SystemTime::now();
+    let idle = now
+        .checked_sub(IDLE_CUTOFF)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    snapshots
+        .iter()
+        .map(|s| {
+            let is_idle = s.last_activity < idle;
+            let duration_secs = s
+                .started_at
+                .map(|st| (chrono::Utc::now() - st).num_seconds().max(0) as u64)
+                .unwrap_or(0);
+            let model_id_raw = s.model.clone().unwrap_or_default();
+            let model_key = if model_id_raw.is_empty() {
+                "gpt-5-codex".to_string()
+            } else {
+                model_id_raw.clone()
+            };
+            let display_name = cc_discord_presence::codex::util::format_model_display(
+                &model_key,
+                s.reasoning_effort,
+                fast_mode,
+            );
+            let speed = cc_discord_presence::codex::cost::speed_multiplier(&model_key, fast_mode);
+            let context_window = s
+                .context_window
+                .as_ref()
+                .map(|snapshot| snapshot.window_tokens)
+                .or_else(|| {
+                    cc_discord_presence::codex::cost::default_model_context_window(&model_key)
+                })
+                .unwrap_or_else(|| {
+                    if model_key.starts_with("gpt-5.4") {
+                        1_050_000
+                    } else {
+                        400_000
+                    }
+                });
+            let context_window_label = if context_window >= 1_000_000 {
+                "1M".to_string()
+            } else if context_window >= 400_000 {
+                "400K".to_string()
+            } else {
+                format!("{}K", context_window / 1_000)
+            };
+            let input_total = codex_total_input_tokens(s);
+            let cached_input = s.cached_input_tokens_total;
+            let context_used_tokens = s
+                .context_window
+                .as_ref()
+                .map(|snapshot| snapshot.used_tokens.min(context_window))
+                .unwrap_or(0);
+            let activity = s
+                .activity
+                .as_ref()
+                .map_or("Idle".into(), |a| a.action_text().to_string());
+            let activity_target = s.activity.as_ref().and_then(|a| a.target.clone());
+            SessionInfo {
+                provider: Provider::Codex.as_str().to_string(),
+                app_name: if opencode_running || s.is_desktop_surface() {
+                    Some("Codex App".to_string())
+                } else {
+                    None
+                },
+                session_id: s.session_id.clone(),
+                session_name: None,
+                project: s.project_name.clone(),
+                model: display_name,
+                model_id: model_key,
+                context_window: context_window_label,
+                cost: s.total_cost_usd * speed,
+                tokens: s
+                    .session_total_tokens
+                    .unwrap_or(input_total + s.output_tokens_total),
+                input_tokens: input_total,
+                output_tokens: s.output_tokens_total,
+                cache_write_tokens: 0,
+                cache_read_tokens: cached_input,
+                context_used_tokens,
+                context_window_tokens: context_window,
+                branch: s.git_branch.clone(),
+                activity,
+                activity_target,
+                effort: s
+                    .reasoning_effort
+                    .map(|effort| effort.label().to_string())
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                effort_explicit: s.reasoning_effort.is_some(),
+                is_idle,
+                started_at: s.started_at.map(|t| t.to_rfc3339()),
+                duration_secs,
+                has_thinking: s.reasoning_effort.is_some(),
+                subagent_count: 0,
+                subagents: Vec::new(),
+                tokens_per_sec: 0.0,
+                input_cost: s.cost_breakdown.input_cost_usd * speed,
+                output_cost: s.cost_breakdown.output_cost_usd * speed,
+                cache_write_cost: 0.0,
+                cache_read_cost: s.cost_breakdown.cached_input_cost_usd * speed,
+                speed: Speed::from_fast(fast_mode).as_str().to_string(),
+                fast: fast_mode,
+                service_tier: None,
+                intro_pricing: None,
+                has_inflated_tokenizer: false,
+            }
+        })
+        .collect()
+}
+
+fn codex_total_input_tokens(snapshot: &CodexSessionSnapshot) -> u64 {
+    snapshot
+        .input_tokens_total
+        .max(snapshot.cached_input_tokens_total)
+}
+
+fn persist_live_session_infos(provider: Provider, result: &[SessionInfo]) {
     let active_ids: Vec<String> = result.iter().map(|s| s.session_id.clone()).collect();
     for s in result {
         crate::db::upsert_session(s);
         crate::db::update_daily_stats(s);
     }
-    crate::db::mark_inactive(&active_ids);
+    crate::db::mark_inactive(provider.as_str(), &active_ids);
 }
 
-fn persist_live_session_snapshots(snapshots: &[ClaudeSessionSnapshot]) {
-    let result = build_session_infos(snapshots);
-    persist_live_session_infos(&result);
+fn persist_live_claude_snapshots(snapshots: &[ClaudeSessionSnapshot]) {
+    let result = build_claude_session_infos(snapshots);
+    persist_live_session_infos(Provider::Claude, &result);
 }
 
-// ── Commands (all instant — read from cache) ──
+fn persist_live_codex_snapshots(
+    snapshots: &[CodexSessionSnapshot],
+    fast_mode: bool,
+    opencode_running: bool,
+) {
+    let result = build_codex_session_infos(snapshots, fast_mode, opencode_running);
+    persist_live_session_infos(Provider::Codex, &result);
+}
 
 #[tauri::command]
 pub fn get_health() -> HealthResponse {
@@ -556,14 +863,29 @@ pub fn set_discord_display_prefs(
             show_cost,
         };
     }
-    if let Ok(mut cfg) = PresenceConfig::load_or_init() {
-        cfg.privacy.show_project_name = show_project;
-        cfg.privacy.show_git_branch = show_branch;
-        cfg.privacy.show_model = show_model;
-        cfg.privacy.show_activity = show_activity;
-        cfg.privacy.show_tokens = show_tokens;
-        cfg.privacy.show_cost = show_cost;
-        let _ = cfg.save();
+    match current_provider() {
+        Provider::Claude => {
+            if let Ok(mut cfg) = PresenceConfig::load_or_init() {
+                cfg.privacy.show_project_name = show_project;
+                cfg.privacy.show_git_branch = show_branch;
+                cfg.privacy.show_model = show_model;
+                cfg.privacy.show_activity = show_activity;
+                cfg.privacy.show_tokens = show_tokens;
+                cfg.privacy.show_cost = show_cost;
+                log_save_error("claude-display-prefs", cfg.save());
+            }
+        }
+        Provider::Codex => {
+            if let Ok(mut cfg) = CodexPresenceConfig::load_or_init() {
+                cfg.privacy.show_project_name = show_project;
+                cfg.privacy.show_git_branch = show_branch;
+                cfg.privacy.show_model = show_model;
+                cfg.privacy.show_activity = show_activity;
+                cfg.privacy.show_tokens = show_tokens;
+                cfg.privacy.show_cost = show_cost;
+                log_save_error("codex-display-prefs", cfg.save());
+            }
+        }
     }
 }
 
@@ -578,55 +900,30 @@ pub fn refresh_usage() {
 
 #[tauri::command]
 pub fn get_metrics() -> MetricsResponse {
-    let sessions = read_sessions();
+    let sessions = current_live_session_infos();
     let (mut cost, mut inp, mut out, mut cw, mut cr, mut tot) = (0.0, 0u64, 0u64, 0u64, 0u64, 0u64);
     for s in &sessions {
-        cost += s.total_cost;
+        cost += s.cost;
         inp += s.input_tokens;
         out += s.output_tokens;
-        cw += s.cache_creation_tokens;
+        cw += s.cache_write_tokens;
         cr += s.cache_read_tokens;
-        tot += s.session_total_tokens.unwrap_or(0);
+        tot += s.tokens;
     }
-
-    let pricing = |model: &Option<String>| -> (f64, f64, f64, f64) {
-        model
-            .as_ref()
-            .map(|m| {
-                let p = cost::model_pricing(m);
-                (
-                    p.input_per_million,
-                    p.output_per_million,
-                    p.cache_write_per_million,
-                    p.cache_read_per_million,
-                )
-            })
-            .unwrap_or((5.0, 25.0, 6.25, 0.50))
-    };
 
     let (mut ic, mut oc, mut cwc, mut crc) = (0.0, 0.0, 0.0, 0.0);
     let mut model_map: std::collections::HashMap<String, (usize, f64, u64)> =
         std::collections::HashMap::new();
     for s in &sessions {
-        let (ip, op, wp, rp) = pricing(&s.model);
-        let pure = s
-            .input_tokens
-            .saturating_sub(s.cache_creation_tokens)
-            .saturating_sub(s.cache_read_tokens);
-        ic += pure as f64 * ip / 1_000_000.0;
-        oc += s.output_tokens as f64 * op / 1_000_000.0;
-        cwc += s.cache_creation_tokens as f64 * wp / 1_000_000.0;
-        crc += s.cache_read_tokens as f64 * rp / 1_000_000.0;
+        ic += s.input_cost;
+        oc += s.output_cost;
+        cwc += s.cache_write_cost;
+        crc += s.cache_read_cost;
 
-        let model_name = s
-            .model_display
-            .clone()
-            .or(s.model.as_ref().map(|m| cost::model_display_name(m)))
-            .unwrap_or_else(|| "Unknown".into());
-        let entry = model_map.entry(model_name).or_insert((0, 0.0, 0));
+        let entry = model_map.entry(s.model.clone()).or_insert((0, 0.0, 0));
         entry.0 += 1;
-        entry.1 += s.total_cost;
-        entry.2 += s.session_total_tokens.unwrap_or(0);
+        entry.1 += s.cost;
+        entry.2 += s.tokens;
     }
 
     let pure_inp_total = inp.saturating_sub(cw).saturating_sub(cr);
@@ -672,78 +969,166 @@ pub fn get_metrics() -> MetricsResponse {
 
 #[tauri::command]
 pub fn get_live_sessions() -> Vec<SessionInfo> {
-    let snapshots = read_sessions();
-    let result = build_session_infos(&snapshots);
-    persist_live_session_infos(&result);
-    result
+    current_live_session_infos()
 }
 
 #[tauri::command]
 pub fn get_rate_limits() -> Option<RateLimitInfo> {
     let data = shared().lock().ok()?;
+    match data.active_provider {
+        Provider::Claude => {
+            if let Some(u) = data.claude_usage.as_ref() {
+                return Some(RateLimitInfo {
+                    provider: Provider::Claude.as_str().to_string(),
+                    five_hour_pct: u.five_hour_pct,
+                    five_hour_resets: u.five_hour_resets.clone(),
+                    five_hour_label: "5-hour window".into(),
+                    five_hour_window_minutes: Some(300),
+                    seven_day_pct: u.seven_day_pct,
+                    seven_day_resets: u.seven_day_resets.clone(),
+                    seven_day_label: "All Models".into(),
+                    seven_day_window_minutes: Some(10080),
+                    sonnet_pct: u.sonnet_pct,
+                    sonnet_resets: u.sonnet_resets.clone(),
+                    extra_enabled: u.extra_enabled,
+                    extra_limit: u.extra_limit,
+                    extra_used: u.extra_used,
+                    extra_pct: u.extra_pct,
+                    source: "api".into(),
+                });
+            }
 
-    // Prefer UsageManager (real API data)
-    if let Some(u) = data.usage.as_ref() {
-        return Some(RateLimitInfo {
-            five_hour_pct: u.five_hour_pct,
-            five_hour_resets: u.five_hour_resets.clone(),
-            seven_day_pct: u.seven_day_pct,
-            seven_day_resets: u.seven_day_resets.clone(),
-            sonnet_pct: u.sonnet_pct,
-            sonnet_resets: u.sonnet_resets.clone(),
-            extra_enabled: u.extra_enabled,
-            extra_limit: u.extra_limit,
-            extra_used: u.extra_used,
-            extra_pct: u.extra_pct,
-            source: "api".into(),
-        });
-    }
+            if let ActiveSessions::Claude(sessions) = &data.sessions
+                && let Some(source) = session::latest_limits_source(sessions)
+                && let Some(primary) = source.limits.primary.as_ref()
+            {
+                let secondary = source.limits.secondary.as_ref();
+                return Some(RateLimitInfo {
+                    provider: Provider::Claude.as_str().to_string(),
+                    five_hour_pct: primary.used_percent,
+                    five_hour_resets: primary
+                        .resets_at
+                        .map_or("N/A".into(), |d| d.format("%H:%M UTC").to_string()),
+                    five_hour_label: "5-hour window".into(),
+                    five_hour_window_minutes: Some(primary.window_minutes),
+                    seven_day_pct: secondary.map_or(0.0, |s| s.used_percent),
+                    seven_day_resets: secondary
+                        .and_then(|s| s.resets_at)
+                        .map_or("N/A".into(), |d| d.format("%H:%M UTC").to_string()),
+                    seven_day_label: "All Models".into(),
+                    seven_day_window_minutes: secondary.map(|s| s.window_minutes),
+                    sonnet_pct: None,
+                    sonnet_resets: None,
+                    extra_enabled: false,
+                    extra_limit: None,
+                    extra_used: None,
+                    extra_pct: None,
+                    source: data
+                        .claude_usage_error
+                        .clone()
+                        .unwrap_or_else(|| "session".into()),
+                });
+            }
 
-    // Fallback to session JSONL headers
-    if let Some(source) = session::latest_limits_source(&data.sessions) {
-        if let Some(primary) = source.limits.primary.as_ref() {
-            let secondary = source.limits.secondary.as_ref();
-            return Some(RateLimitInfo {
-                five_hour_pct: primary.used_percent,
-                five_hour_resets: primary
-                    .resets_at
-                    .map_or("N/A".into(), |d| d.format("%H:%M UTC").to_string()),
-                seven_day_pct: secondary.map_or(0.0, |s| s.used_percent),
-                seven_day_resets: secondary
-                    .and_then(|s| s.resets_at)
-                    .map_or("N/A".into(), |d| d.format("%H:%M UTC").to_string()),
+            let hint = data
+                .claude_usage_error
+                .clone()
+                .unwrap_or_else(|| "no data yet".into());
+            Some(RateLimitInfo {
+                provider: Provider::Claude.as_str().to_string(),
+                five_hour_pct: 0.0,
+                five_hour_resets: "N/A".into(),
+                five_hour_label: "5-hour window".into(),
+                five_hour_window_minutes: None,
+                seven_day_pct: 0.0,
+                seven_day_resets: "N/A".into(),
+                seven_day_label: "All Models".into(),
+                seven_day_window_minutes: None,
                 sonnet_pct: None,
                 sonnet_resets: None,
                 extra_enabled: false,
                 extra_limit: None,
                 extra_used: None,
                 extra_pct: None,
-                source: data.usage_error.clone().unwrap_or_else(|| "session".into()),
-            });
+                source: hint,
+            })
+        }
+        Provider::Codex => {
+            let sessions = match &data.sessions {
+                ActiveSessions::Codex(sessions) => sessions,
+                _ => {
+                    return Some(RateLimitInfo {
+                        provider: Provider::Codex.as_str().to_string(),
+                        five_hour_pct: 0.0,
+                        five_hour_resets: "N/A".into(),
+                        five_hour_label: "5h Window".into(),
+                        five_hour_window_minutes: None,
+                        seven_day_pct: 0.0,
+                        seven_day_resets: "N/A".into(),
+                        seven_day_label: "7d Window".into(),
+                        seven_day_window_minutes: None,
+                        sonnet_pct: None,
+                        sonnet_resets: None,
+                        extra_enabled: false,
+                        extra_limit: None,
+                        extra_used: None,
+                        extra_pct: None,
+                        source: "no codex telemetry yet".into(),
+                    });
+                }
+            };
+            if let Some(selected) = codex_session::latest_limits_source(sessions)
+                && let Some(primary) = selected.limits.primary.as_ref()
+            {
+                let secondary = selected.limits.secondary.as_ref();
+                return Some(RateLimitInfo {
+                    provider: Provider::Codex.as_str().to_string(),
+                    five_hour_pct: primary.used_percent,
+                    five_hour_resets: primary.resets_at.map_or("N/A".into(), |d| d.to_rfc3339()),
+                    five_hour_label: format_codex_window_label(
+                        Some(primary.window_minutes),
+                        "Primary Window",
+                    ),
+                    five_hour_window_minutes: Some(primary.window_minutes),
+                    seven_day_pct: secondary.map_or(0.0, |s| s.used_percent),
+                    seven_day_resets: secondary
+                        .and_then(|s| s.resets_at)
+                        .map_or("N/A".into(), |d| d.to_rfc3339()),
+                    seven_day_label: format_codex_window_label(
+                        secondary.map(|s| s.window_minutes),
+                        "Secondary Window",
+                    ),
+                    seven_day_window_minutes: secondary.map(|s| s.window_minutes),
+                    sonnet_pct: None,
+                    sonnet_resets: None,
+                    extra_enabled: false,
+                    extra_limit: None,
+                    extra_used: None,
+                    extra_pct: None,
+                    source: selected.source_label(),
+                });
+            }
+            Some(RateLimitInfo {
+                provider: Provider::Codex.as_str().to_string(),
+                five_hour_pct: 0.0,
+                five_hour_resets: "N/A".into(),
+                five_hour_label: "5h Window".into(),
+                five_hour_window_minutes: None,
+                seven_day_pct: 0.0,
+                seven_day_resets: "N/A".into(),
+                seven_day_label: "7d Window".into(),
+                seven_day_window_minutes: None,
+                sonnet_pct: None,
+                sonnet_resets: None,
+                extra_enabled: false,
+                extra_limit: None,
+                extra_used: None,
+                extra_pct: None,
+                source: "codex telemetry unavailable".into(),
+            })
         }
     }
-
-    // Return zeroed data with error hint so the UI doesn't show "Waiting..." forever
-    let hint = data
-        .usage_error
-        .clone()
-        .unwrap_or_else(|| "no data yet".into());
-    Some(RateLimitInfo {
-        five_hour_pct: 0.0,
-        five_hour_resets: "N/A".into(),
-        seven_day_pct: 0.0,
-        seven_day_resets: "N/A".into(),
-        sonnet_pct: None,
-        sonnet_resets: None,
-        extra_enabled: false,
-        extra_limit: None,
-        extra_used: None,
-        extra_pct: None,
-        source: hint,
-    })
 }
-
-// ── Discord User from local LevelDB ──
 
 #[derive(Serialize)]
 pub struct DiscordUserInfo {
@@ -758,6 +1143,7 @@ pub struct DiscordUserInfo {
 
 fn discord_leveldb_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let variants = ["discord", "discordcanary", "discordptb"];
 
     #[cfg(target_os = "windows")]
@@ -771,7 +1157,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
                 );
             }
         }
-        // Portable/per-user installs land under %LOCALAPPDATA% with PascalCase names.
         if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
             let pascal = ["Discord", "DiscordCanary", "DiscordPTB"];
             for v in &pascal {
@@ -787,7 +1172,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     if let Ok(home) = std::env::var("HOME") {
         let home_path = PathBuf::from(&home);
-        // Both lowercase and display-name variants have been observed across versions.
         let variants_mac = [
             "discord",
             "discordcanary",
@@ -809,7 +1193,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
     #[cfg(target_os = "linux")]
     if let Ok(home) = std::env::var("HOME") {
         let home_path = PathBuf::from(&home);
-        // Standard install via package manager or AppImage.
         for v in &variants {
             dirs.push(
                 home_path
@@ -818,7 +1201,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
                     .join("Local Storage/leveldb"),
             );
         }
-        // Flatpak — sandbox places config under ~/.var/app/<app-id>/config/.
         let flatpak_ids = [
             "com.discordapp.Discord",
             "com.discordapp.DiscordCanary",
@@ -832,7 +1214,6 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
                     .join("config/discord/Local Storage/leveldb"),
             );
         }
-        // Snap — config lives under ~/snap/<app>/current/.config/.
         for v in &variants {
             dirs.push(
                 home_path
@@ -861,7 +1242,6 @@ pub fn get_discord_user() -> Option<DiscordUserInfo> {
         })
         .collect();
 
-    // Sort by modified time descending — newest first for freshest avatar hash
     entries.sort_by(|a, b| {
         let ta = a
             .metadata()
@@ -884,7 +1264,6 @@ pub fn get_discord_user() -> Option<DiscordUserInfo> {
 }
 
 fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
-    // Search for the MultiAccountStore user JSON pattern
     let needle = b"\"id\":\"";
     let mut pos = 0;
     while pos < data.len().saturating_sub(100) {
@@ -907,8 +1286,6 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                         }
                     };
 
-                    // "0" discriminator means the account uses the new unique-username
-                    // system (no #tag). Empty / missing → normalize to "0".
                     let discriminator = extract_json_field(&chunk_str, "discriminator")
                         .filter(|d| !d.is_empty())
                         .unwrap_or_else(|| "0".to_string());
@@ -917,8 +1294,6 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                         .filter(|h| !h.is_empty())
                         .unwrap_or_default();
 
-                    // If the user has no custom avatar, Discord serves a default
-                    // based on (user_id >> 22) % 6 (new usernames) or discriminator % 5 (legacy).
                     let avatar_url = if avatar_hash.is_empty() {
                         default_avatar_url(&user_id, &discriminator)
                     } else {
@@ -987,65 +1362,150 @@ fn extract_json_field(text: &str, field: &str) -> Option<String> {
     Some(text[start..end].to_string())
 }
 
-// ── Plan Detection ──
-
 #[derive(Serialize)]
 pub struct PlanInfo {
+    pub provider: String,
+    pub plan_key: String,
     pub plan_name: String,
     pub detected: bool,
 }
 
-static PLAN_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
-    std::sync::OnceLock::new();
-
-fn plan_override() -> &'static std::sync::Mutex<Option<String>> {
-    PLAN_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None))
-}
-
 #[tauri::command]
 pub fn get_plan_info() -> PlanInfo {
-    if let Ok(guard) = plan_override().lock() {
-        if let Some(ref name) = *guard {
-            return PlanInfo {
-                plan_name: name.clone(),
-                detected: false,
+    match current_provider() {
+        Provider::Claude => {
+            if let Ok(cfg) = PresenceConfig::load_or_init()
+                && let Some(plan) = cfg.plan.as_deref().filter(|plan| !plan.trim().is_empty())
+            {
+                return PlanInfo {
+                    provider: Provider::Claude.as_str().to_string(),
+                    plan_key: plan.to_string(),
+                    plan_name: plan_name_from_key(plan),
+                    detected: false,
+                };
+            }
+
+            let mut usage_mgr = UsageManager::new();
+            let plan_key = usage_mgr.detected_plan_key().unwrap_or_default();
+            let plan_name = if plan_key.is_empty() {
+                "Unknown".to_string()
+            } else {
+                plan_name_from_key(&plan_key)
             };
+
+            PlanInfo {
+                provider: Provider::Claude.as_str().to_string(),
+                plan_key,
+                plan_name,
+                detected: true,
+            }
         }
-    }
-
-    if let Ok(cfg) = PresenceConfig::load_or_init()
-        && let Some(plan) = cfg.plan.as_deref()
-    {
-        return PlanInfo {
-            plan_name: plan_name_from_key(plan),
-            detected: false,
-        };
-    }
-
-    let mut usage_mgr = UsageManager::new();
-    let plan_name = usage_mgr
-        .detected_plan_key()
-        .map(|key| plan_name_from_key(&key))
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    PlanInfo {
-        plan_name,
-        detected: true,
+        Provider::Codex => {
+            let config = CodexPresenceConfig::load_or_init().unwrap_or_default();
+            let sessions = read_codex_sessions();
+            let mut detector = PlanDetector::new();
+            let resolved = detector.resolve_from_sessions(&sessions, &config.openai_plan);
+            PlanInfo {
+                provider: Provider::Codex.as_str().to_string(),
+                plan_key: codex_plan_key_from_tier(resolved.tier).to_string(),
+                plan_name: resolved.label(config.openai_plan.show_price),
+                detected: !matches!(
+                    resolved.source,
+                    cc_discord_presence::codex::telemetry::plan::DetectedPlanSource::Manual
+                ),
+            }
+        }
     }
 }
 
 #[tauri::command]
 pub fn set_plan_override(plan: String) {
-    if let Ok(mut guard) = plan_override().lock() {
-        if plan_key_from_override(&plan).is_none() {
-            *guard = None;
-        } else {
-            *guard = Some(plan_name_from_key(plan_key_from_override(&plan).unwrap()));
+    match current_provider() {
+        Provider::Claude => {
+            if let Ok(mut cfg) = PresenceConfig::load_or_init() {
+                cfg.plan = plan_key_from_override(&plan).map(str::to_string);
+                log_save_error("claude-plan-override", cfg.save());
+            }
+        }
+        Provider::Codex => {
+            if let Ok(mut cfg) = CodexPresenceConfig::load_or_init() {
+                let normalized = plan.trim().to_ascii_lowercase();
+                let tier = match normalized.as_str() {
+                    "" | "auto" => None,
+                    "free" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Free),
+                    "go" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Go),
+                    "plus" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Plus),
+                    "team" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business),
+                    "pro" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro),
+                    "business" => {
+                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business)
+                    }
+                    "enterprise" => {
+                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Enterprise)
+                    }
+                    _ => None,
+                };
+                if let Some(tier) = tier {
+                    cfg.openai_plan.mode =
+                        cc_discord_presence::codex::config::OpenAiPlanMode::Manual;
+                    cfg.openai_plan.tier = tier;
+                } else {
+                    cfg.openai_plan.mode = cc_discord_presence::codex::config::OpenAiPlanMode::Auto;
+                }
+                log_save_error("codex-plan-override", cfg.save());
+            }
         }
     }
 }
 
-// ── Historical Analytics (SQLite) ──
+#[derive(Serialize)]
+pub struct ProviderInfo {
+    pub active_provider: String,
+}
+
+#[derive(Serialize)]
+pub struct ProviderCopyInfo {
+    pub provider: String,
+    pub provider_label: String,
+    pub instruction_file: String,
+    pub home_dir: String,
+    pub sessions_store: String,
+    pub fix_label: String,
+    pub global_state_source: String,
+}
+
+#[tauri::command]
+pub fn get_active_provider() -> ProviderInfo {
+    ProviderInfo {
+        active_provider: current_provider().as_str().to_string(),
+    }
+}
+
+#[tauri::command]
+pub fn get_provider_copy() -> ProviderCopyInfo {
+    let provider = current_provider();
+    ProviderCopyInfo {
+        provider: provider.as_str().to_string(),
+        provider_label: provider.display_name().to_string(),
+        instruction_file: provider.instruction_file_name().to_string(),
+        home_dir: provider.home_dir_name().to_string(),
+        sessions_store: provider.sessions_glob_label().to_string(),
+        fix_label: provider.fix_action_label().to_string(),
+        global_state_source: provider.global_state_label().to_string(),
+    }
+}
+
+#[tauri::command]
+pub fn set_active_provider(provider: String) {
+    if let Some(provider) = Provider::parse(&provider) {
+        if let Err(err) = cc_discord_presence::provider::save_active_provider(provider) {
+            tracing::warn!(provider = provider.as_str(), error = %err, "failed to save active provider");
+        }
+        if let Ok(mut d) = shared().lock() {
+            d.active_provider = provider;
+        }
+    }
+}
 
 #[tauri::command]
 pub fn get_session_history(
@@ -1101,15 +1561,13 @@ pub fn get_analytics_summary() -> crate::db::AnalyticsSummary {
     crate::db::get_analytics_summary()
 }
 
-// ── Context Breakdown (like /context) ──
-
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ContextFileEntry {
     pub name: String,
     pub tokens: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ContextBreakdown {
     pub model: String,
     pub context_window: u64,
@@ -1127,6 +1585,52 @@ pub struct ContextBreakdown {
     pub mcp_total: u64,
 }
 
+#[derive(Serialize)]
+pub struct SessionContextBreakdown {
+    pub session_id: String,
+    pub project: String,
+    pub model_id: String,
+    pub is_idle: bool,
+    pub activity: String,
+    pub breakdown: ContextBreakdown,
+}
+
+#[derive(Serialize)]
+pub struct SessionContextUsage {
+    pub session_id: String,
+    pub project: String,
+    pub model: String,
+    pub model_display: String,
+    pub used_tokens: u64,
+    pub window_tokens: u64,
+    pub utilization_pct: f64,
+    pub recommendation: String,
+}
+
+const CONTEXT_WATCH_PCT: f64 = 50.0;
+const CONTEXT_COMPACT_SOON_PCT: f64 = 80.0;
+const CONTEXT_COMPACT_NOW_PCT: f64 = 95.0;
+
+fn context_utilization_pct(used_tokens: u64, window_tokens: u64) -> f64 {
+    if window_tokens == 0 {
+        0.0
+    } else {
+        ((used_tokens as f64 / window_tokens as f64) * 100.0).clamp(0.0, 100.0)
+    }
+}
+
+fn context_recommendation(utilization_pct: f64) -> String {
+    if utilization_pct >= CONTEXT_COMPACT_NOW_PCT {
+        "Context is nearly full — compact now or start a fresh session before the next turn.".into()
+    } else if utilization_pct >= CONTEXT_COMPACT_SOON_PCT {
+        "Context is filling up — plan to compact soon to avoid an autocompact mid-task.".into()
+    } else if utilization_pct >= CONTEXT_WATCH_PCT {
+        "Context is past half — keep an eye on it and compact when you shift topics.".into()
+    } else {
+        "Context is healthy — plenty of headroom for this session.".into()
+    }
+}
+
 fn estimate_tokens(text: &str) -> u64 {
     (text.len() as f64 / 3.5).ceil() as u64
 }
@@ -1137,39 +1641,222 @@ fn estimate_tokens_from_file(path: &std::path::Path) -> u64 {
         .unwrap_or(0)
 }
 
-#[tauri::command]
-pub fn get_context_breakdown() -> ContextBreakdown {
-    let claude_home = cc_discord_presence::config::claude_home();
-    let sessions = read_sessions();
+fn resolve_instruction_include(
+    base_file: &std::path::Path,
+    raw: &str,
+) -> Option<std::path::PathBuf> {
+    let trimmed = raw.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = std::path::PathBuf::from(trimmed);
+    if candidate.is_absolute() {
+        Some(candidate)
+    } else {
+        base_file.parent().map(|parent| parent.join(candidate))
+    }
+}
 
-    // Determine model & context window from active session
-    let (model, ctx_window) = sessions
-        .first()
-        .map(|s| {
-            let name = s
-                .model_display
-                .clone()
-                .or(s.model.as_ref().map(|m| cost::model_display_name(m)))
-                .unwrap_or_else(|| "Unknown".into());
-            let model_id = s.model.clone().unwrap_or_default();
-            let is_1m = cost::is_ga_1m_context(&model_id)
-                || model_id.contains("[1m]")
-                || s.max_turn_api_input > 200_000;
-            let window: u64 = if is_1m { 1_000_000 } else { 200_000 };
-            (name, window)
+fn discover_instruction_includes(
+    base_file: &std::path::Path,
+    content: &str,
+) -> Vec<std::path::PathBuf> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            if let Some(include) = trimmed.strip_prefix('@') {
+                return resolve_instruction_include(base_file, include);
+            }
+            if let Some(include) = trimmed.strip_prefix("file:") {
+                return resolve_instruction_include(base_file, include);
+            }
+            None
         })
-        .unwrap_or(("Unknown".into(), 200_000));
+        .collect()
+}
 
-    // Use max single-turn input as best estimate for current context window usage
-    let latest_input: u64 = sessions
-        .iter()
-        .map(|s| s.max_turn_api_input)
-        .max()
-        .unwrap_or(0);
+fn label_context_file(
+    path: &std::path::Path,
+    provider: Provider,
+    project_root: Option<&std::path::Path>,
+    project_name: Option<&str>,
+) -> String {
+    let provider_home = provider.home_path();
+    if path.starts_with(&provider_home)
+        && let Ok(relative) = path.strip_prefix(&provider_home)
+    {
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        return format!("{}/{}", provider.home_dir_name(), relative);
+    }
+    if let (Some(root), Some(name)) = (project_root, project_name)
+        && path.starts_with(root)
+        && let Ok(relative) = path.strip_prefix(root)
+    {
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() {
+            return name.to_string();
+        }
+        return format!("{name}/{relative}");
+    }
+    path.to_string_lossy().replace('\\', "/")
+}
 
-    // Memory files: CLAUDE.md + rules
+fn collect_instruction_tree(
+    provider: Provider,
+    root_file: &std::path::Path,
+    project_root: Option<&std::path::Path>,
+    project_name: Option<&str>,
+    seen: &mut HashSet<std::path::PathBuf>,
+    out: &mut Vec<ContextFileEntry>,
+) {
+    let canonical = std::fs::canonicalize(root_file).unwrap_or_else(|_| root_file.to_path_buf());
+    if !seen.insert(canonical.clone()) {
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(&canonical) else {
+        return;
+    };
+    let tokens = estimate_tokens(&content);
+    if tokens > 0 {
+        let name = label_context_file(&canonical, provider, project_root, project_name);
+        out.push(ContextFileEntry { name, tokens });
+    }
+    for include in discover_instruction_includes(&canonical, &content) {
+        if include.exists() {
+            collect_instruction_tree(provider, &include, project_root, project_name, seen, out);
+        }
+    }
+}
+
+fn collect_skills_from_dir(skills_dir: &std::path::Path) -> Vec<ContextFileEntry> {
+    let mut skills = Vec::new();
+    if skills_dir.is_dir()
+        && let Ok(entries) = std::fs::read_dir(skills_dir)
+    {
+        let mut dirs: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .collect();
+        dirs.sort_by_key(|e| e.file_name());
+        for entry in dirs {
+            let skill_file = entry.path().join("SKILL.md");
+            if skill_file.exists() {
+                let tokens = estimate_tokens_from_file(&skill_file);
+                if tokens > 0 {
+                    skills.push(ContextFileEntry {
+                        name: entry.file_name().to_string_lossy().to_string(),
+                        tokens,
+                    });
+                }
+            }
+        }
+    }
+    skills.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.name.cmp(&b.name)));
+    skills
+}
+
+fn collect_codex_mcp_tools(config_path: &std::path::Path) -> Vec<ContextFileEntry> {
+    let Ok(content) = std::fs::read_to_string(config_path) else {
+        return Vec::new();
+    };
+
+    let mut tools = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current_block = String::new();
+
+    let flush = |name: &mut Option<String>, block: &mut String, out: &mut Vec<ContextFileEntry>| {
+        if let Some(name) = name.take() {
+            let tokens = estimate_tokens(block).max(20);
+            out.push(ContextFileEntry { name, tokens });
+        }
+        block.clear();
+    };
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            flush(&mut current_name, &mut current_block, &mut tools);
+
+            if let Some(name) = trimmed
+                .strip_prefix("[mcp_servers.")
+                .and_then(|value| value.strip_suffix(']'))
+                .map(|value| value.trim_matches('"').trim_matches('\'').to_string())
+                .filter(|value| !value.is_empty())
+            {
+                current_name = Some(name);
+                current_block.push_str(line);
+                current_block.push('\n');
+            }
+            continue;
+        }
+
+        if current_name.is_some() {
+            current_block.push_str(line);
+            current_block.push('\n');
+        }
+    }
+
+    flush(&mut current_name, &mut current_block, &mut tools);
+    tools.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.name.cmp(&b.name)));
+    tools
+}
+
+fn empty_context_breakdown(model: &str, context_window: u64) -> ContextBreakdown {
+    ContextBreakdown {
+        model: model.to_string(),
+        context_window,
+        used_tokens: 0,
+        free_space: context_window,
+        autocompact_buffer: (context_window as f64 * 0.033) as u64,
+        system_prompt: 0,
+        system_tools: 0,
+        memory_files: Vec::new(),
+        memory_total: 0,
+        skills: Vec::new(),
+        skills_total: 0,
+        messages: 0,
+        mcp_tools: Vec::new(),
+        mcp_total: 0,
+    }
+}
+
+fn is_claude_session_idle(session: &ClaudeSessionSnapshot, idle: SystemTime) -> bool {
+    session.last_activity < idle
+}
+
+fn is_codex_session_idle(session: &CodexSessionSnapshot, idle: SystemTime) -> bool {
+    session.last_activity < idle
+}
+
+fn claude_context_window(session: &ClaudeSessionSnapshot) -> u64 {
+    let model_id = session.model.as_deref().unwrap_or("");
+    if cost::is_ga_1m_context(model_id)
+        || model_id.contains("[1m]")
+        || session.max_turn_api_input > 200_000
+    {
+        1_000_000
+    } else {
+        200_000
+    }
+}
+
+fn claude_context_model(session: &ClaudeSessionSnapshot) -> String {
+    session
+        .model_display
+        .clone()
+        .or(session.model.as_ref().map(|m| cost::model_display_name(m)))
+        .unwrap_or_else(|| "Unknown".into())
+}
+
+fn collect_claude_memory_files(
+    claude_home: &std::path::Path,
+    selected: Option<&ClaudeSessionSnapshot>,
+) -> Vec<ContextFileEntry> {
     let mut memory_files = Vec::new();
-
     let global_claude_md = claude_home.join("CLAUDE.md");
     if global_claude_md.exists() {
         let tokens = estimate_tokens_from_file(&global_claude_md);
@@ -1182,115 +1869,95 @@ pub fn get_context_breakdown() -> ContextBreakdown {
     }
 
     let rules_dir = claude_home.join("rules");
-    if rules_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&rules_dir) {
-            let mut files: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .is_some_and(|ext| ext == "md" || ext == "txt")
-                })
-                .collect();
-            files.sort_by_key(|e| e.file_name());
-            for entry in files {
-                let path = entry.path();
-                let tokens = estimate_tokens_from_file(&path);
-                if tokens > 0 {
-                    memory_files.push(ContextFileEntry {
-                        name: format!(
-                            ".claude/rules/{}",
-                            path.file_name().unwrap().to_string_lossy()
-                        ),
-                        tokens,
-                    });
-                }
+    if rules_dir.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&rules_dir)
+    {
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext == "md" || ext == "txt")
+            })
+            .collect();
+        files.sort_by_key(|e| e.file_name());
+        for entry in files {
+            let path = entry.path();
+            let tokens = estimate_tokens_from_file(&path);
+            if tokens > 0 {
+                memory_files.push(ContextFileEntry {
+                    name: format!(
+                        ".claude/rules/{}",
+                        path.file_name().unwrap().to_string_lossy()
+                    ),
+                    tokens,
+                });
             }
         }
     }
 
-    // Project-specific CLAUDE.md from active sessions
-    for s in &sessions {
-        let project_claude = s.cwd.join("CLAUDE.md");
+    if let Some(session) = selected {
+        let project_claude = session.cwd.join("CLAUDE.md");
         if project_claude.exists() {
             let tokens = estimate_tokens_from_file(&project_claude);
-            let name = format!("{}/CLAUDE.md", s.project_name);
+            let name = format!("{}/CLAUDE.md", session.project_name);
             if tokens > 0 && !memory_files.iter().any(|f| f.name == name) {
                 memory_files.push(ContextFileEntry { name, tokens });
             }
         }
     }
 
-    let memory_total: u64 = memory_files.iter().map(|f| f.tokens).sum();
+    memory_files.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.name.cmp(&b.name)));
+    memory_files
+}
 
-    // Skills
-    let mut skills = Vec::new();
-    let skills_dir = claude_home.join("skills");
-    if skills_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-            let mut dirs: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
-                .collect();
-            dirs.sort_by_key(|e| e.file_name());
-            for entry in dirs {
-                let skill_file = entry.path().join("SKILL.md");
-                if skill_file.exists() {
-                    let tokens = estimate_tokens_from_file(&skill_file);
-                    if tokens > 0 {
-                        skills.push(ContextFileEntry {
-                            name: entry.file_name().to_string_lossy().to_string(),
-                            tokens,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    let skills_total: u64 = skills.iter().map(|f| f.tokens).sum();
-
-    // MCP tools — read from settings.json
+fn collect_claude_mcp_tools(settings_file: &std::path::Path) -> Vec<ContextFileEntry> {
     let mut mcp_tools = Vec::new();
-    let settings_file = claude_home.join("settings.json");
-    if settings_file.exists() {
-        if let Ok(data) = std::fs::read_to_string(&settings_file) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                if let Some(servers) = json.get("mcpServers").and_then(|v| v.as_object()) {
-                    for (name, config) in servers {
-                        let config_str = serde_json::to_string(config).unwrap_or_default();
-                        let tokens = estimate_tokens(&config_str).max(20);
-                        mcp_tools.push(ContextFileEntry {
-                            name: name.clone(),
-                            tokens,
-                        });
-                    }
-                }
-            }
+    if settings_file.exists()
+        && let Ok(data) = std::fs::read_to_string(settings_file)
+        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&data)
+        && let Some(servers) = json.get("mcpServers").and_then(|v| v.as_object())
+    {
+        for (name, config) in servers {
+            let config_str = serde_json::to_string(config).unwrap_or_default();
+            let tokens = estimate_tokens(&config_str).max(20);
+            mcp_tools.push(ContextFileEntry {
+                name: name.clone(),
+                tokens,
+            });
         }
     }
-    mcp_tools.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+    mcp_tools.sort_by_key(|f| std::cmp::Reverse(f.tokens));
+    mcp_tools
+}
+
+fn build_claude_context_breakdown(selected: Option<&ClaudeSessionSnapshot>) -> ContextBreakdown {
+    let claude_home = cc_discord_presence::config::claude_home();
+    let model = selected.map_or_else(|| "Unknown".into(), claude_context_model);
+    let ctx_window = selected.map_or(200_000, claude_context_window);
+    let current_context_tokens = selected.map_or(0, |s| s.current_context_tokens);
+    let memory_files = collect_claude_memory_files(&claude_home, selected);
+    let memory_total: u64 = memory_files.iter().map(|f| f.tokens).sum();
+    let skills = collect_skills_from_dir(&claude_home.join("skills"));
+    let skills_total: u64 = skills.iter().map(|f| f.tokens).sum();
+    let mcp_tools = collect_claude_mcp_tools(&claude_home.join("settings.json"));
     let mcp_total: u64 = mcp_tools.iter().map(|f| f.tokens).sum();
-
-    // System prompt estimate (~10k base for Claude Code)
     let system_prompt: u64 = 10_000;
-    // System tools estimate (~6k for built-in tools)
     let system_tools: u64 = 6_000;
-
-    // Calculate used and free
     let known = system_prompt + system_tools + memory_total + skills_total + mcp_total;
-    let used = if latest_input > 0 {
-        latest_input
+    let used_tokens = if current_context_tokens > 0 {
+        current_context_tokens.min(ctx_window)
     } else {
-        known + 1_000
+        (known + u64::from(selected.is_some()) * 1_000).min(ctx_window)
     };
-    let messages = used.saturating_sub(known);
+    let messages = used_tokens.saturating_sub(known);
     let autocompact_buffer = (ctx_window as f64 * 0.033) as u64;
-    let free_space = ctx_window.saturating_sub(used + autocompact_buffer);
+    let free_space = ctx_window.saturating_sub(used_tokens.saturating_add(autocompact_buffer));
 
     ContextBreakdown {
         model,
         context_window: ctx_window,
-        used_tokens: used,
+        used_tokens,
         free_space,
         autocompact_buffer,
         system_prompt,
@@ -1303,6 +1970,282 @@ pub fn get_context_breakdown() -> ContextBreakdown {
         mcp_tools,
         mcp_total,
     }
+}
+
+fn build_codex_context_breakdown(selected: Option<&CodexSessionSnapshot>) -> ContextBreakdown {
+    let codex_home = cc_discord_presence::codex::config::codex_home();
+    let model = selected
+        .and_then(|s| s.model.clone())
+        .map(|model| {
+            cc_discord_presence::codex::util::format_model_display(
+                &model,
+                selected.and_then(|session| session.reasoning_effort),
+                resolve_service_tier().is_fast(),
+            )
+        })
+        .unwrap_or_else(|| "Codex".to_string());
+    let ctx_window = selected
+        .and_then(|s| s.context_window.as_ref().map(|w| w.window_tokens))
+        .or_else(|| {
+            selected
+                .and_then(|s| s.model.as_deref())
+                .and_then(cc_discord_presence::codex::cost::default_model_context_window)
+        })
+        .unwrap_or(400_000);
+    let used_tokens = selected
+        .and_then(|s| {
+            s.context_window
+                .as_ref()
+                .map(|w| w.used_tokens.min(ctx_window))
+        })
+        .unwrap_or(0);
+    let mut memory_files = Vec::new();
+    let mut seen_instruction_files = HashSet::new();
+    let global_agents = codex_home.join("AGENTS.md");
+    if global_agents.exists() {
+        collect_instruction_tree(
+            Provider::Codex,
+            &global_agents,
+            None,
+            None,
+            &mut seen_instruction_files,
+            &mut memory_files,
+        );
+    }
+    let generated_instructions = codex_home.join("generated-model-instructions.md");
+    if generated_instructions.exists() {
+        collect_instruction_tree(
+            Provider::Codex,
+            &generated_instructions,
+            None,
+            None,
+            &mut seen_instruction_files,
+            &mut memory_files,
+        );
+    }
+    if let Some(session) = selected {
+        let project_agents = session.cwd.join("AGENTS.md");
+        if project_agents.exists() {
+            collect_instruction_tree(
+                Provider::Codex,
+                &project_agents,
+                Some(&session.cwd),
+                Some(&session.project_name),
+                &mut seen_instruction_files,
+                &mut memory_files,
+            );
+        }
+    }
+    memory_files.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.name.cmp(&b.name)));
+    let memory_total: u64 = memory_files.iter().map(|f| f.tokens).sum();
+    let skills = collect_skills_from_dir(&codex_home.join("skills"));
+    let skills_total: u64 = skills.iter().map(|f| f.tokens).sum();
+    let mcp_tools = collect_codex_mcp_tools(&codex_home.join("config.toml"));
+    let mcp_total: u64 = mcp_tools.iter().map(|f| f.tokens).sum();
+    let autocompact_buffer = (ctx_window as f64 * 0.033) as u64;
+    let system_prompt = memory_total.min(used_tokens);
+    let known = system_prompt + skills_total + mcp_total;
+    let messages = used_tokens.saturating_sub(known);
+    let free_space = ctx_window.saturating_sub(used_tokens.saturating_add(autocompact_buffer));
+
+    ContextBreakdown {
+        model,
+        context_window: ctx_window,
+        used_tokens,
+        free_space,
+        autocompact_buffer,
+        system_prompt,
+        system_tools: 0,
+        memory_files,
+        memory_total,
+        skills,
+        skills_total,
+        messages,
+        mcp_tools,
+        mcp_total,
+    }
+}
+
+fn selected_claude_context_sessions<'a>(
+    sessions: &'a [ClaudeSessionSnapshot],
+    session_ids: Option<&[String]>,
+) -> Vec<&'a ClaudeSessionSnapshot> {
+    if let Some(ids) = session_ids
+        && !ids.is_empty()
+    {
+        let mut seen = HashSet::new();
+        return ids
+            .iter()
+            .filter(|id| seen.insert((*id).clone()))
+            .filter_map(|id| sessions.iter().find(|s| s.session_id == *id))
+            .collect();
+    }
+
+    let idle = SystemTime::now()
+        .checked_sub(IDLE_CUTOFF)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let active: Vec<_> = sessions
+        .iter()
+        .filter(|session| !is_claude_session_idle(session, idle))
+        .collect();
+    if active.is_empty() {
+        preferred_active_session(sessions).into_iter().collect()
+    } else {
+        active
+    }
+}
+
+fn selected_codex_context_sessions<'a>(
+    sessions: &'a [CodexSessionSnapshot],
+    session_ids: Option<&[String]>,
+) -> Vec<&'a CodexSessionSnapshot> {
+    if let Some(ids) = session_ids
+        && !ids.is_empty()
+    {
+        let mut seen = HashSet::new();
+        return ids
+            .iter()
+            .filter(|id| seen.insert((*id).clone()))
+            .filter_map(|id| sessions.iter().find(|s| s.session_id == *id))
+            .collect();
+    }
+
+    let idle = SystemTime::now()
+        .checked_sub(IDLE_CUTOFF)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let active: Vec<_> = sessions
+        .iter()
+        .filter(|session| !is_codex_session_idle(session, idle))
+        .collect();
+    if active.is_empty() {
+        codex_session::preferred_active_session(sessions)
+            .into_iter()
+            .collect()
+    } else {
+        active
+    }
+}
+
+fn claude_context_entry(
+    session: &ClaudeSessionSnapshot,
+    idle: SystemTime,
+) -> SessionContextBreakdown {
+    SessionContextBreakdown {
+        session_id: session.session_id.clone(),
+        project: session.project_name.clone(),
+        model_id: session.model.clone().unwrap_or_default(),
+        is_idle: is_claude_session_idle(session, idle),
+        activity: session
+            .activity
+            .as_ref()
+            .map_or("Idle".into(), |a| a.action_text().to_string()),
+        breakdown: build_claude_context_breakdown(Some(session)),
+    }
+}
+
+fn codex_context_entry(
+    session: &CodexSessionSnapshot,
+    idle: SystemTime,
+) -> SessionContextBreakdown {
+    SessionContextBreakdown {
+        session_id: session.session_id.clone(),
+        project: session.project_name.clone(),
+        model_id: session.model.clone().unwrap_or_default(),
+        is_idle: is_codex_session_idle(session, idle),
+        activity: session
+            .activity
+            .as_ref()
+            .map_or("Idle".into(), |a| a.action_text().to_string()),
+        breakdown: build_codex_context_breakdown(Some(session)),
+    }
+}
+
+#[tauri::command]
+pub fn get_context_breakdown(session_id: Option<String>) -> ContextBreakdown {
+    get_context_breakdowns(session_id.map(|id| vec![id]))
+        .into_iter()
+        .next()
+        .map(|entry| entry.breakdown)
+        .unwrap_or_else(|| match current_provider() {
+            Provider::Claude => empty_context_breakdown("Unknown", 200_000),
+            Provider::Codex => empty_context_breakdown("Codex", 400_000),
+        })
+}
+
+#[tauri::command]
+pub fn get_context_breakdowns(session_ids: Option<Vec<String>>) -> Vec<SessionContextBreakdown> {
+    let idle = SystemTime::now()
+        .checked_sub(IDLE_CUTOFF)
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    match current_provider() {
+        Provider::Claude => {
+            let sessions = read_claude_sessions();
+            selected_claude_context_sessions(&sessions, session_ids.as_deref())
+                .into_iter()
+                .map(|session| claude_context_entry(session, idle))
+                .collect()
+        }
+        Provider::Codex => {
+            let sessions = read_codex_sessions();
+            selected_codex_context_sessions(&sessions, session_ids.as_deref())
+                .into_iter()
+                .map(|session| codex_context_entry(session, idle))
+                .collect()
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_sessions_context_usage(days: Option<i64>) -> Vec<SessionContextUsage> {
+    let mut seen = HashSet::new();
+    let mut rows: Vec<SessionContextUsage> = get_context_breakdowns(None)
+        .into_iter()
+        .filter(|entry| seen.insert(entry.session_id.clone()))
+        .map(|entry| {
+            let breakdown = entry.breakdown;
+            let used_tokens = breakdown.used_tokens.min(breakdown.context_window);
+            let utilization_pct = context_utilization_pct(used_tokens, breakdown.context_window);
+            SessionContextUsage {
+                session_id: entry.session_id,
+                project: entry.project,
+                model: entry.model_id,
+                model_display: breakdown.model,
+                used_tokens,
+                window_tokens: breakdown.context_window,
+                utilization_pct,
+                recommendation: context_recommendation(utilization_pct),
+            }
+        })
+        .collect();
+
+    rows.extend(
+        crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
+            .into_iter()
+            .filter(|s| seen.insert(s.id.clone()))
+            .map(|s| {
+                let window_tokens = if s.window_tokens > 0 {
+                    s.window_tokens as u64
+                } else if cost::is_ga_1m_context(&s.model_id) || s.context_window == "1M" {
+                    1_000_000
+                } else {
+                    200_000
+                };
+                let used_tokens = (s.used_tokens.max(0) as u64).min(window_tokens);
+                let utilization_pct = context_utilization_pct(used_tokens, window_tokens);
+                SessionContextUsage {
+                    session_id: s.id,
+                    project: s.project,
+                    model: s.model_id,
+                    model_display: s.model,
+                    used_tokens,
+                    window_tokens,
+                    utilization_pct,
+                    recommendation: context_recommendation(utilization_pct),
+                }
+            }),
+    );
+    rows
 }
 
 #[tauri::command]
@@ -1359,19 +2302,34 @@ pub fn get_db_size() -> u64 {
 }
 
 #[tauri::command]
-pub fn generate_html_report(days: Option<i64>, project: Option<String>) -> String {
-    crate::report::generate_html_report(days, project.as_deref())
+pub async fn generate_html_report(days: Option<i64>, project: Option<String>) -> String {
+    offload(move || crate::report::generate_html_report(days, project.as_deref())).await
 }
 
 #[tauri::command]
-pub fn generate_markdown_report(days: Option<i64>, project: Option<String>) -> String {
-    crate::report::generate_markdown_report(days, project.as_deref())
+pub async fn generate_markdown_report(days: Option<i64>, project: Option<String>) -> String {
+    offload(move || crate::report::generate_markdown_report(days, project.as_deref())).await
 }
 
-// ── cchubber-style analyzers (Phase 3) ──────────────────────────────────
+async fn offload<T, F>(work: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .expect("analyzer blocking task panicked")
+}
 
 fn analyzer_sessions(days: Option<i64>) -> Vec<crate::db::HistoricalSession> {
     crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
+}
+
+fn analyzer_roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
+    (
+        cc_discord_presence::config::projects_paths(),
+        cc_discord_presence::codex::config::sessions_paths(),
+    )
 }
 
 fn analyzer_traces(
@@ -1380,106 +2338,151 @@ fn analyzer_traces(
     crate::analyzers::session_trace::load_session_traces(sessions)
 }
 
-#[tauri::command]
-pub fn get_cache_health(days: Option<i64>) -> crate::analyzers::cache_health::CacheHealthReport {
-    crate::analyzers::cache_health::analyze(&analyzer_sessions(days))
+fn analyzer_provider() -> Provider {
+    current_provider()
 }
 
 #[tauri::command]
-pub fn get_inflection_points(
+pub async fn get_cache_health(
+    days: Option<i64>,
+) -> crate::analyzers::cache_health::CacheHealthReport {
+    let provider = analyzer_provider();
+    offload(move || {
+        crate::analyzers::cache_health::analyze_for_provider(provider, &analyzer_sessions(days))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_inflection_points(
     days: Option<i64>,
 ) -> Vec<crate::analyzers::inflection::InflectionPoint> {
-    crate::analyzers::inflection::detect(&analyzer_sessions(days))
+    let provider = analyzer_provider();
+    offload(move || {
+        crate::analyzers::inflection::detect_for_provider(provider, &analyzer_sessions(days))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_model_routing(days: Option<i64>) -> crate::analyzers::model_routing::ModelRoutingReport {
-    crate::analyzers::model_routing::analyze(&analyzer_sessions(days))
+pub async fn get_model_routing(
+    days: Option<i64>,
+) -> crate::analyzers::model_routing::ModelRoutingReport {
+    offload(move || crate::analyzers::model_routing::analyze(&analyzer_sessions(days))).await
 }
 
 #[tauri::command]
-pub fn get_tool_frequency(
+pub async fn get_tool_frequency(
     days: Option<i64>,
 ) -> crate::analyzers::tool_frequency::ToolFrequencyReport {
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    crate::analyzers::tool_frequency::analyze(&sessions, &traces)
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        crate::analyzers::tool_frequency::analyze(&sessions, &traces)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_prompt_complexity(
+pub async fn get_prompt_complexity(
     days: Option<i64>,
 ) -> crate::analyzers::prompt_complexity::PromptComplexityReport {
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    crate::analyzers::prompt_complexity::analyze(&sessions, &traces)
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        crate::analyzers::prompt_complexity::analyze(&sessions, &traces)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_session_health(
+pub async fn get_session_health(
     days: Option<i64>,
 ) -> crate::analyzers::session_health::SessionHealthReport {
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
-    crate::analyzers::session_health::analyze(
-        &sessions,
-        &traces,
-        &tool_frequency,
-        &prompt_complexity,
-    )
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
+        let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
+        crate::analyzers::session_health::analyze(
+            &sessions,
+            &traces,
+            &tool_frequency,
+            &prompt_complexity,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_recommendations(
+pub async fn get_trace_overview(
+    days: Option<i64>,
+) -> crate::analyzers::trace_overview::TraceOverview {
+    let provider = analyzer_provider();
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        let cache = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
+        crate::analyzers::trace_overview::build(
+            provider,
+            &sessions,
+            &traces,
+            cache.trend_weighted_ratio,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_recommendations(
     days: Option<i64>,
 ) -> Vec<crate::analyzers::recommendations::Recommendation> {
-    let sessions = analyzer_sessions(days);
-    let traces = analyzer_traces(&sessions);
-    let cache = crate::analyzers::cache_health::analyze(&sessions);
-    let routing = crate::analyzers::model_routing::analyze(&sessions);
-    let inflections = crate::analyzers::inflection::detect(&sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
-    let session_health = crate::analyzers::session_health::analyze(
-        &sessions,
-        &traces,
-        &tool_frequency,
-        &prompt_complexity,
-    );
-    let ctx = crate::analyzers::recommendations::AnalysisContext {
-        sessions: &sessions,
-        cache: &cache,
-        routing: &routing,
-        inflections: &inflections,
-        tool_frequency: Some(&tool_frequency),
-        prompt_complexity: Some(&prompt_complexity),
-        session_health: Some(&session_health),
-    };
-    crate::analyzers::recommendations::generate(&ctx)
+    let provider = analyzer_provider();
+    offload(move || {
+        let sessions = analyzer_sessions(days);
+        let traces = analyzer_traces(&sessions);
+        recommendations_from_traces(provider, &sessions, &traces)
+    })
+    .await
 }
 
 /// Look up a recommendation by id and return its `fix_prompt` so the frontend
 /// can `navigator.clipboard.writeText(...)` it. Returns an empty string if
 /// no matching recommendation exists for the current data window.
 #[tauri::command]
-pub fn copy_fix_prompt(rec_id: String) -> String {
-    let sessions = analyzer_sessions(None);
-    let traces = analyzer_traces(&sessions);
-    let cache = crate::analyzers::cache_health::analyze(&sessions);
-    let routing = crate::analyzers::model_routing::analyze(&sessions);
-    let inflections = crate::analyzers::inflection::detect(&sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
+pub async fn copy_fix_prompt(rec_id: String) -> String {
+    let provider = analyzer_provider();
+    offload(move || {
+        let sessions = analyzer_sessions(None);
+        let traces = analyzer_traces(&sessions);
+        recommendations_from_traces(provider, &sessions, &traces)
+            .into_iter()
+            .find(|r| r.id == rec_id)
+            .map(|r| r.fix_prompt)
+            .unwrap_or_default()
+    })
+    .await
+}
+
+fn recommendations_from_traces(
+    provider: Provider,
+    sessions: &[crate::db::HistoricalSession],
+    traces: &std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace>,
+) -> Vec<crate::analyzers::recommendations::Recommendation> {
+    let cache = crate::analyzers::cache_health::analyze_for_provider(provider, sessions);
+    let routing = crate::analyzers::model_routing::analyze(sessions);
+    let inflections = crate::analyzers::inflection::detect_for_provider(provider, sessions);
+    let tool_frequency = crate::analyzers::tool_frequency::analyze(sessions, traces);
+    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(sessions, traces);
     let session_health = crate::analyzers::session_health::analyze(
-        &sessions,
-        &traces,
+        sessions,
+        traces,
         &tool_frequency,
         &prompt_complexity,
     );
     let ctx = crate::analyzers::recommendations::AnalysisContext {
-        sessions: &sessions,
+        provider,
+        sessions,
         cache: &cache,
         routing: &routing,
         inflections: &inflections,
@@ -1488,8 +2491,358 @@ pub fn copy_fix_prompt(rec_id: String) -> String {
         session_health: Some(&session_health),
     };
     crate::analyzers::recommendations::generate(&ctx)
-        .into_iter()
-        .find(|r| r.id == rec_id)
-        .map(|r| r.fix_prompt)
-        .unwrap_or_default()
+}
+
+#[derive(Serialize)]
+pub struct ReportsBundle {
+    pub provider: String,
+    pub days: i64,
+    pub total_sessions: usize,
+    pub recommendations: Vec<crate::analyzers::recommendations::Recommendation>,
+    pub trace_overview: crate::analyzers::trace_overview::TraceOverview,
+    pub tool_frequency: crate::analyzers::tool_frequency::ToolFrequencyReport,
+    pub prompt_complexity: crate::analyzers::prompt_complexity::PromptComplexityReport,
+    pub session_health: crate::analyzers::session_health::SessionHealthReport,
+    pub cache_health: crate::analyzers::cache_health::CacheHealthReport,
+    pub model_routing: crate::analyzers::model_routing::ModelRoutingReport,
+    pub inflection_points: Vec<crate::analyzers::inflection::InflectionPoint>,
+}
+
+#[tauri::command]
+pub async fn get_reports_bundle(days: Option<i64>, project: Option<String>) -> ReportsBundle {
+    let provider = analyzer_provider();
+    let (claude_roots, codex_roots) = analyzer_roots();
+    offload(move || {
+        let sessions = crate::db::get_session_history(
+            Some(days.unwrap_or(30)),
+            project.as_deref(),
+            Some(5000),
+        );
+        build_reports_bundle_from_roots(provider, days, sessions, claude_roots, codex_roots)
+    })
+    .await
+}
+
+pub fn build_reports_bundle_from_roots(
+    provider: Provider,
+    days: Option<i64>,
+    sessions: Vec<crate::db::HistoricalSession>,
+    claude_roots: Vec<PathBuf>,
+    codex_roots: Vec<PathBuf>,
+) -> ReportsBundle {
+    let traces = crate::analyzers::session_trace::load_session_traces_from_roots(
+        &sessions,
+        claude_roots,
+        codex_roots,
+    );
+
+    let cache_health = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
+    let model_routing = crate::analyzers::model_routing::analyze(&sessions);
+    let inflection_points = crate::analyzers::inflection::detect_for_provider(provider, &sessions);
+    let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
+    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
+    let session_health = crate::analyzers::session_health::analyze(
+        &sessions,
+        &traces,
+        &tool_frequency,
+        &prompt_complexity,
+    );
+    let trace_overview = crate::analyzers::trace_overview::build(
+        provider,
+        &sessions,
+        &traces,
+        cache_health.trend_weighted_ratio,
+    );
+    let ctx = crate::analyzers::recommendations::AnalysisContext {
+        provider,
+        sessions: &sessions,
+        cache: &cache_health,
+        routing: &model_routing,
+        inflections: &inflection_points,
+        tool_frequency: Some(&tool_frequency),
+        prompt_complexity: Some(&prompt_complexity),
+        session_health: Some(&session_health),
+    };
+    let recommendations = crate::analyzers::recommendations::generate(&ctx);
+
+    ReportsBundle {
+        provider: provider.as_str().to_string(),
+        days: days.unwrap_or(30),
+        total_sessions: sessions.len(),
+        recommendations,
+        trace_overview,
+        tool_frequency,
+        prompt_complexity,
+        session_health,
+        cache_health,
+        model_routing,
+        inflection_points,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_claude_context_breakdown, build_claude_session_infos, build_codex_session_infos,
+        codex_plan_key_from_tier, codex_total_input_tokens, plan_key_from_override,
+    };
+    use cc_discord_presence::codex::cost::{PricingSource, TokenCostBreakdown};
+    use cc_discord_presence::codex::session::CodexSessionSnapshot;
+    use cc_discord_presence::codex::telemetry::limits::RateLimits;
+    use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
+    use cc_discord_presence::cost;
+    use cc_discord_presence::session::{ClaudeSessionSnapshot, DataSource, ReasoningEffort, Speed};
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+
+    fn sample_claude_snapshot(model_id: &str) -> ClaudeSessionSnapshot {
+        ClaudeSessionSnapshot {
+            session_id: format!("{model_id}-session"),
+            cwd: PathBuf::from("D:/X/Pulse"),
+            project_name: "pulse".into(),
+            git_branch: None,
+            model: Some(model_id.to_string()),
+            model_display: Some(cost::model_display_name(model_id)),
+            session_total_tokens: Some(120_000),
+            last_turn_tokens: Some(2_000),
+            session_delta_tokens: None,
+            input_tokens: 100_000,
+            output_tokens: 20_000,
+            cache_creation_tokens: 0,
+            cache_read_tokens: 0,
+            max_turn_api_input: 100_000,
+            current_context_tokens: 100_000,
+            reasoning_effort: ReasoningEffort::High,
+            reasoning_effort_explicit: true,
+            has_thinking_blocks: false,
+            speed: Speed::Standard,
+            service_tier: None,
+            total_cost: 2.0,
+            input_cost: 1.0,
+            output_cost: 1.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
+            total_api_duration_ms: 0,
+            limits: cc_discord_presence::session::RateLimits::default(),
+            activity: None,
+            started_at: None,
+            last_token_event_at: None,
+            last_activity: SystemTime::now(),
+            source: DataSource::Jsonl,
+            source_file: PathBuf::from("session.jsonl"),
+            subagents: Vec::new(),
+            is_subagent: false,
+            parent_session_id: None,
+        }
+    }
+
+    #[test]
+    fn claude_session_info_carries_the_real_time_sonnet_5_intro_pricing_badge() {
+        let snapshots = [sample_claude_snapshot("claude-sonnet-5")];
+        let infos = build_claude_session_infos(&snapshots);
+        let expected = cost::active_intro_pricing("claude-sonnet-5", chrono::Utc::now());
+
+        assert_eq!(infos[0].intro_pricing, expected);
+    }
+
+    #[test]
+    fn claude_session_info_has_no_intro_pricing_badge_for_a_model_with_no_promo() {
+        let snapshots = [sample_claude_snapshot("claude-sonnet-4-6")];
+        let infos = build_claude_session_infos(&snapshots);
+
+        assert!(infos[0].intro_pricing.is_none());
+    }
+
+    #[test]
+    fn claude_session_info_flags_inflated_tokenizer_for_sonnet_5_and_opus_4_7_plus() {
+        for model_id in ["claude-sonnet-5", "claude-opus-4-8"] {
+            let snapshots = [sample_claude_snapshot(model_id)];
+            let infos = build_claude_session_infos(&snapshots);
+            assert!(infos[0].has_inflated_tokenizer, "{model_id}");
+        }
+    }
+
+    #[test]
+    fn claude_session_info_does_not_flag_inflated_tokenizer_for_sonnet_4_6() {
+        let snapshots = [sample_claude_snapshot("claude-sonnet-4-6")];
+        let infos = build_claude_session_infos(&snapshots);
+
+        assert!(!infos[0].has_inflated_tokenizer);
+    }
+
+    #[test]
+    fn codex_session_info_never_carries_an_intro_pricing_badge_or_inflated_tokenizer_flag() {
+        let standard = build_codex_session_infos(&[sample_codex_snapshot()], false, false);
+
+        assert!(standard[0].intro_pricing.is_none());
+        assert!(!standard[0].has_inflated_tokenizer);
+    }
+
+    #[test]
+    fn session_info_context_used_tokens_reflects_current_fill_not_the_historical_peak() {
+        let snapshot = ClaudeSessionSnapshot {
+            max_turn_api_input: 999_486,
+            current_context_tokens: 25_500,
+            ..sample_claude_snapshot("claude-sonnet-5")
+        };
+        let infos = build_claude_session_infos(&[snapshot]);
+
+        assert_eq!(
+            infos[0].context_used_tokens, 25_500,
+            "the live-session ctx-1m badge must show current fill, not the all-time peak"
+        );
+        assert_eq!(
+            infos[0].context_window_tokens, 1_000_000,
+            "the 1M-vs-200K window-size decision is unaffected -- it stays keyed off the \
+             historical peak (max_turn_api_input), which correctly never decreases"
+        );
+    }
+
+    #[test]
+    fn context_breakdown_used_tokens_reflects_current_fill_not_the_historical_peak() {
+        let snapshot = ClaudeSessionSnapshot {
+            max_turn_api_input: 999_486,
+            current_context_tokens: 25_500,
+            ..sample_claude_snapshot("claude-sonnet-5")
+        };
+        let breakdown = build_claude_context_breakdown(Some(&snapshot));
+
+        assert_eq!(
+            breakdown.used_tokens, 25_500,
+            "the Context Window view must show current fill, not the session's all-time peak"
+        );
+        assert_eq!(breakdown.context_window, 1_000_000);
+        assert!(
+            breakdown.free_space > 0,
+            "a session that genuinely emptied out after compaction must show real free space, \
+             not 0 (the exact symptom Tony reported: a CRITICAL \"100% full\" recommendation \
+             for a session that isn't actually full right now)"
+        );
+    }
+
+    #[test]
+    fn plan_key_from_override_accepts_display_labels_and_auto() {
+        assert_eq!(plan_key_from_override("Max 20x ($200/mo)"), Some("max_20x"));
+        assert_eq!(plan_key_from_override("Max 5x ($100/mo)"), Some("max_5x"));
+        assert_eq!(plan_key_from_override("  Team plan  "), Some("team"));
+        assert_eq!(plan_key_from_override("enterprise"), Some("enterprise"));
+        assert_eq!(plan_key_from_override("pro monthly"), Some("pro"));
+        assert_eq!(plan_key_from_override("free"), Some("free"));
+        assert_eq!(plan_key_from_override("Max"), Some("max"));
+        assert_eq!(plan_key_from_override("auto"), None);
+        assert_eq!(plan_key_from_override(""), None);
+    }
+
+    #[test]
+    fn codex_plan_key_maps_detected_tiers_to_frontend_contract() {
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Free), "free");
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Go), "go");
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Plus), "plus");
+        assert_eq!(
+            codex_plan_key_from_tier(DetectedPlanTier::Business),
+            "business"
+        );
+        assert_eq!(
+            codex_plan_key_from_tier(DetectedPlanTier::Enterprise),
+            "enterprise"
+        );
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Pro), "pro");
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Unknown), "");
+    }
+
+    fn sample_codex_snapshot() -> CodexSessionSnapshot {
+        CodexSessionSnapshot {
+            session_id: "session".into(),
+            cwd: PathBuf::from("D:/X/Web Development/MCP Servers/cc-discord-presence"),
+            project_name: "pulse".into(),
+            git_branch: None,
+            model: Some("gpt-5.4".into()),
+            originator: None,
+            source: None,
+            reasoning_effort: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            session_total_tokens: Some(54_764_083),
+            last_turn_tokens: None,
+            session_delta_tokens: None,
+            input_tokens_total: 54_626_018,
+            cached_input_tokens_total: 52_219_136,
+            output_tokens_total: 138_065,
+            last_input_tokens: None,
+            last_cached_input_tokens: None,
+            last_output_tokens: None,
+            total_cost_usd: 0.0,
+            cost_breakdown: TokenCostBreakdown {
+                input_cost_usd: 0.0,
+                cached_input_cost_usd: 0.0,
+                output_cost_usd: 0.0,
+            },
+            pricing_source: PricingSource::Fallback,
+            context_window: None,
+            limits: RateLimits::default(),
+            rate_limit_envelopes: Vec::new(),
+            activity: None,
+            started_at: None,
+            last_token_event_at: None,
+            last_activity: SystemTime::UNIX_EPOCH,
+            source_file: PathBuf::from("C:/Users/xt0n1/.codex/sessions/sample.jsonl"),
+        }
+    }
+
+    #[test]
+    fn codex_total_input_tokens_uses_telemetry_total_without_double_counting_cache() {
+        let snapshot = sample_codex_snapshot();
+        assert_eq!(codex_total_input_tokens(&snapshot), 54_626_018);
+    }
+
+    #[test]
+    fn context_recommendation_maps_each_tier_at_boundaries() {
+        use super::{
+            CONTEXT_COMPACT_NOW_PCT, CONTEXT_COMPACT_SOON_PCT, CONTEXT_WATCH_PCT,
+            context_recommendation,
+        };
+
+        assert_eq!(CONTEXT_WATCH_PCT, 50.0);
+        assert_eq!(CONTEXT_COMPACT_SOON_PCT, 80.0);
+        assert_eq!(CONTEXT_COMPACT_NOW_PCT, 95.0);
+
+        let healthy = context_recommendation(49.0);
+        let watch = context_recommendation(50.0);
+        let soon = context_recommendation(80.0);
+        let now = context_recommendation(95.0);
+        let full = context_recommendation(100.0);
+
+        assert!(healthy.contains("healthy"));
+        assert!(watch.contains("half"));
+        assert!(soon.contains("compact soon"));
+        assert!(now.contains("compact now"));
+        assert!(full.contains("compact now"));
+
+        assert_ne!(healthy, watch);
+        assert_ne!(watch, soon);
+        assert_ne!(soon, now);
+    }
+
+    #[test]
+    fn fast_mode_scales_codex_cost_by_speed_multiplier() {
+        use super::build_codex_session_infos;
+
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.model = Some("gpt-5.5".into());
+        snapshot.total_cost_usd = 4.0;
+        snapshot.cost_breakdown = TokenCostBreakdown {
+            input_cost_usd: 1.0,
+            cached_input_cost_usd: 0.5,
+            output_cost_usd: 2.5,
+        };
+
+        let standard = build_codex_session_infos(&[snapshot.clone()], false, false);
+        let fast = build_codex_session_infos(&[snapshot], true, false);
+
+        assert!((standard[0].cost - 4.0).abs() < 0.0001);
+        assert!((fast[0].cost - 10.0).abs() < 0.0001);
+        assert!((fast[0].input_cost - 2.5).abs() < 0.0001);
+        assert!((fast[0].output_cost - 6.25).abs() < 0.0001);
+        assert!((fast[0].cache_read_cost - 1.25).abs() < 0.0001);
+    }
 }
