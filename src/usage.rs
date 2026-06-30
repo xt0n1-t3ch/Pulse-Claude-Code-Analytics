@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
@@ -112,6 +113,21 @@ struct OAuthRefreshResponse {
     expires_in: u64,
 }
 
+#[derive(Debug)]
+struct PlanFields {
+    subscription_type: Option<String>,
+    rate_limit_tier: Option<String>,
+}
+
+fn read_plan_fields_from_path(path: &Path) -> Option<PlanFields> {
+    let data = std::fs::read_to_string(path).ok()?;
+    let creds = serde_json::from_str::<CredentialsFile>(&data).ok()?;
+    Some(PlanFields {
+        subscription_type: creds.claude_ai_oauth.subscription_type,
+        rate_limit_tier: creds.claude_ai_oauth.rate_limit_tier,
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct ApiUsageData {
     five_hour: UsageWindow,
@@ -192,6 +208,8 @@ pub struct UsageManager {
     agent: ureq::Agent,
     /// Number of fetch attempts — use shorter cache TTL for first 3 fetches.
     fetch_count: u32,
+    /// Test-only override for the credentials file path.
+    credentials_path_override: Option<PathBuf>,
 }
 
 impl UsageManager {
@@ -206,6 +224,7 @@ impl UsageManager {
             last_error_hint: None,
             agent: http_agent(),
             fetch_count: 0,
+            credentials_path_override: None,
         }
     }
 
@@ -233,7 +252,13 @@ impl UsageManager {
         }) else {
             return;
         };
-        let _ = std::fs::write(path, json);
+        if let Err(err) = std::fs::write(&path, json) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "failed to write usage cache"
+            );
+        }
     }
 
     pub fn get_usage(&mut self) -> Option<UsageData> {
@@ -308,6 +333,15 @@ impl UsageManager {
     }
 
     pub fn detected_plan_key(&mut self) -> Option<String> {
+        if let Some(fields) = self.read_plan_fields_from_disk()
+            && let Some(key) = detect_plan_key(
+                fields.subscription_type.as_deref(),
+                fields.rate_limit_tier.as_deref(),
+            )
+        {
+            return Some(key.to_string());
+        }
+
         self.ensure_credentials();
         let creds = self.credentials.as_ref()?;
         detect_plan_key(
@@ -579,12 +613,34 @@ impl UsageManager {
         true
     }
 
+    fn read_plan_fields_from_disk(&self) -> Option<PlanFields> {
+        let cred_path = self
+            .credentials_path_override
+            .clone()
+            .unwrap_or_else(config::credentials_path);
+        read_plan_fields_from_path(&cred_path)
+    }
+
+    fn credentials_path(&self) -> PathBuf {
+        self.credentials_path_override
+            .clone()
+            .unwrap_or_else(config::credentials_path)
+    }
+
+    #[cfg(test)]
+    fn with_credentials_path(path: PathBuf) -> Self {
+        Self {
+            credentials_path_override: Some(path),
+            ..Self::new()
+        }
+    }
+
     fn ensure_credentials(&mut self) {
         if self.credentials.is_some() {
             return;
         }
 
-        let cred_path = config::credentials_path();
+        let cred_path = self.credentials_path();
         let Ok(data) = std::fs::read_to_string(&cred_path) else {
             debug!("Cannot read credentials file: {}", cred_path.display());
             return;
@@ -764,6 +820,42 @@ mod tests {
         let extra = usage.extra_usage.unwrap();
         assert_eq!(extra.monthly_limit, Some(200.0));
         assert_eq!(extra.used_credits, Some(200.35));
+    }
+
+    #[test]
+    fn detected_plan_key_reads_fresh_plan_fields_from_credentials_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".credentials.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "claudeAiOauth": {
+                    "accessToken": "token",
+                    "expiresAt": 4102444800000,
+                    "subscriptionType": "max",
+                    "rateLimitTier": "default_claude_max_5x"
+                }
+            }"#,
+        )
+        .expect("write credentials");
+
+        let mut manager = UsageManager::with_credentials_path(path.clone());
+        assert_eq!(manager.detected_plan_key().as_deref(), Some("max_5x"));
+
+        std::fs::write(
+            &path,
+            r#"{
+                "claudeAiOauth": {
+                    "accessToken": "token",
+                    "expiresAt": 4102444800000,
+                    "subscriptionType": "max",
+                    "rateLimitTier": "default_claude_max_20x"
+                }
+            }"#,
+        )
+        .expect("rewrite credentials");
+
+        assert_eq!(manager.detected_plan_key().as_deref(), Some("max_20x"));
     }
 
     #[test]

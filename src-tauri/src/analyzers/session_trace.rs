@@ -10,6 +10,8 @@ use crate::db::HistoricalSession;
 
 pub const MAX_JSONL_BYTES: u64 = 25 * 1024 * 1024;
 pub const MAX_JSONL_FILES: usize = 4000;
+const MAX_SCAN_DEPTH: usize = 16;
+const MAX_SCAN_DIRS: usize = 20_000;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -131,11 +133,21 @@ fn scan_provider_roots(
         if remaining.is_empty() || !root.exists() {
             continue;
         }
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
+        let mut dirs_scanned = 0usize;
+        let mut stack = vec![(root, 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
             if remaining.is_empty() {
                 break;
             }
+            if dirs_scanned >= MAX_SCAN_DIRS {
+                tracing::warn!(
+                    provider = provider.as_str(),
+                    cap = MAX_SCAN_DIRS,
+                    "session-trace scan hit MAX_SCAN_DIRS cap; remaining directories skipped"
+                );
+                return;
+            }
+            dirs_scanned += 1;
             let Ok(entries) = fs::read_dir(&dir) else {
                 continue;
             };
@@ -145,7 +157,9 @@ fn scan_provider_roots(
                     continue;
                 };
                 if file_type.is_dir() {
-                    stack.push(path);
+                    if depth < MAX_SCAN_DEPTH {
+                        stack.push((path, depth + 1));
+                    }
                     continue;
                 }
                 if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
@@ -159,6 +173,7 @@ fn scan_provider_roots(
                     );
                     return;
                 }
+                *budget -= 1;
                 let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
@@ -183,7 +198,6 @@ fn scan_provider_roots(
                     remaining.remove(&matched_id);
                     continue;
                 }
-                *budget -= 1;
                 remaining.remove(&matched_id);
                 found.insert((provider.as_str().to_string(), matched_id), path);
             }
@@ -465,6 +479,51 @@ fn extract_codex_text(content: &Value) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn historical_session(provider: &str, id: &str) -> HistoricalSession {
+        HistoricalSession {
+            id: id.into(),
+            provider: provider.into(),
+            session_name: None,
+            project: "pulse".into(),
+            model: "model".into(),
+            model_id: "model".into(),
+            context_window: "200K".into(),
+            branch: None,
+            effort: "Medium".into(),
+            started_at: None,
+            ended_at: None,
+            duration_secs: 0,
+            total_cost: 0.0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_write_tokens: 0,
+            cache_read_tokens: 0,
+            total_tokens: 0,
+            input_cost: 0.0,
+            output_cost: 0.0,
+            cache_write_cost: 0.0,
+            cache_read_cost: 0.0,
+            has_thinking: false,
+            subagent_count: 0,
+            is_active: false,
+            used_tokens: 0,
+            window_tokens: 0,
+        }
+    }
+
+    fn temp_trace_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::current_dir().unwrap().join(format!(
+            "pulse-session-trace-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     #[test]
     fn extract_text_joins_text_items() {
         let value = serde_json::json!([
@@ -519,6 +578,23 @@ mod tests {
             raw_session_id(&session),
             "019daa02-33ad-7c40-8ea4-6d003a58e803"
         );
+    }
+
+    #[test]
+    fn trace_scan_ignores_files_beyond_depth_cap() {
+        let root = temp_trace_dir("depth");
+        let mut nested = root.clone();
+        for idx in 0..=MAX_SCAN_DEPTH {
+            nested = nested.join(format!("d{idx}"));
+        }
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("wanted.jsonl"), b"{}\n").unwrap();
+
+        let sessions = vec![historical_session("claude", "wanted")];
+        let traces = load_session_traces_from_roots(&sessions, vec![root.clone()], Vec::new());
+
+        assert!(!traces.contains_key("wanted"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

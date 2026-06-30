@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref_name }}
 
       - name: Install Linux deps
         if: matrix.os == 'ubuntu-latest'
@@ -122,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref_name }}
           fetch-depth: 0
 
       - uses: actions/download-artifact@v4
@@ -151,86 +151,33 @@ jobs:
         id: notes
         shell: bash
         env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
-          python3 scripts/extract-changelog-section.py "$VERSION" CHANGELOG.md > notes-body.md || : > notes-body.md
-          if [ ! -s notes-body.md ] || [ "$(wc -c < notes-body.md)" -lt 40 ]; then
+          python3 scripts/extract-changelog-section.py "$VERSION" CHANGELOG.md > release-body.md || : > release-body.md
+          if [ ! -s release-body.md ] || [ "$(wc -c < release-body.md)" -lt 80 ]; then
             echo "CHANGELOG.md section for $VERSION missing or too short; falling back to git-cliff."
-            git-cliff --config cliff.toml --tag "$TAG" --strip header --latest -o notes-body.md || : > notes-body.md
+            git-cliff --config cliff.toml --tag "$TAG" --strip header --latest -o release-body.md || : > release-body.md
           fi
-          if [ ! -s notes-body.md ]; then
-            printf "Release **%s**. See the [full changelog](https://github.com/%s/blob/main/CHANGELOG.md) for details.\n" "$TAG" "$REPO" > notes-body.md
+          if [ ! -s release-body.md ]; then
+            printf "Release **%s**.\n\nSee the [full changelog](https://github.com/%s/blob/main/CHANGELOG.md) for details.\n" "$TAG" "$REPO" > release-body.md
           fi
-          echo "::group::notes-body.md"
-          cat notes-body.md
+          echo "::group::release-body.md"
+          cat release-body.md
           echo "::endgroup::"
-
-      - name: Compose release body
-        id: body
-        shell: bash
-        env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          VERSION="${TAG#v}"
-          BASE="https://github.com/${REPO}/releases/download/${TAG}"
-
-          pick() {
-            local pat="$1"
-            (cd release-assets && ls | grep -i -E "$pat" | head -n1 || true)
-          }
-
-          WIN_NSIS=$(pick '\.exe$')
-          WIN_MSI=$(pick '\.msi$')
-          MAC_ARM=$(pick 'aarch64.*\.dmg$|arm64.*\.dmg$')
-          MAC_X64=$(pick 'x64.*\.dmg$|x86_64.*\.dmg$|intel.*\.dmg$')
-          LINUX_DEB=$(pick '\.deb$')
-          LINUX_RPM=$(pick '\.rpm$')
-          LINUX_APP=$(pick '\.AppImage$')
-
-          {
-            echo "## Pulse ${TAG}"
-            echo
-            echo "_Claude Code analytics dashboard + Discord Rich Presence — native desktop, 100% local._"
-            echo
-            echo "### Downloads"
-            echo
-            echo "| Platform | Installer |"
-            echo "| --- | --- |"
-            [ -n "$WIN_NSIS" ] && echo "| Windows (NSIS) | [\`${WIN_NSIS}\`](${BASE}/${WIN_NSIS}) |"
-            [ -n "$WIN_MSI" ]  && echo "| Windows (MSI) | [\`${WIN_MSI}\`](${BASE}/${WIN_MSI}) |"
-            [ -n "$MAC_ARM" ]  && echo "| macOS (Apple Silicon) | [\`${MAC_ARM}\`](${BASE}/${MAC_ARM}) |"
-            [ -n "$MAC_X64" ]  && echo "| macOS (Intel) | [\`${MAC_X64}\`](${BASE}/${MAC_X64}) |"
-            [ -n "$LINUX_DEB" ] && echo "| Linux (Debian / Ubuntu) | [\`${LINUX_DEB}\`](${BASE}/${LINUX_DEB}) |"
-            [ -n "$LINUX_RPM" ] && echo "| Linux (Fedora / RHEL) | [\`${LINUX_RPM}\`](${BASE}/${LINUX_RPM}) |"
-            [ -n "$LINUX_APP" ] && echo "| Linux (AppImage) | [\`${LINUX_APP}\`](${BASE}/${LINUX_APP}) |"
-            echo
-            echo "Verify any download with [\`SHA256SUMS.txt\`](${BASE}/SHA256SUMS.txt)."
-            echo
-            echo "### What's new"
-            echo
-            cat notes-body.md
-            echo
-            echo "---"
-            echo
-            echo "**Full changelog:** https://github.com/${REPO}/blob/main/CHANGELOG.md"
-          } > body.md
-
-          echo "body_path=body.md" >> "$GITHUB_OUTPUT"
+          echo "body_path=release-body.md" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: Pulse ${{ github.event.inputs.tag || github.ref_name }}
-          body_path: body.md
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Pulse ${{ inputs.tag || github.ref_name }}
+          body_path: ${{ steps.notes.outputs.body_path }}
           append_body: false
           generate_release_notes: false
           draft: false
-          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           files: release-assets/*
           fail_on_unmatched_files: true

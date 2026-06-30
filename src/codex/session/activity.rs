@@ -523,7 +523,8 @@ impl SessionAccumulator {
 }
 
 pub(super) fn looks_like_desktop_surface(value: &str) -> bool {
-    value.to_ascii_lowercase().contains("desktop")
+    let normalized = value.to_ascii_lowercase();
+    normalized.contains("desktop") || normalized.contains("opencode")
 }
 
 fn classify_shell_command(arguments: &str) -> PendingActivity {
@@ -660,7 +661,6 @@ fn extract_read_target(command: &str) -> Option<String> {
         return None;
     }
 
-    // Heuristic-only parser for common read-only shell command patterns.
     let prefixes = [
         "Get-Content ",
         "cat ",

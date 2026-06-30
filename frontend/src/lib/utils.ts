@@ -52,6 +52,20 @@ export function fmtClock(raw: string | null | undefined): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+const PROMO_END_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+export function fmtPromoEndDate(raw: string): string {
+  const exclusiveCutoff = new Date(raw);
+  if (Number.isNaN(exclusiveCutoff.getTime())) return raw;
+  const lastInclusiveMoment = new Date(exclusiveCutoff.getTime() - 1);
+  return PROMO_END_DATE_FORMAT.format(lastInclusiveMoment);
+}
+
 export function formatResetRelative(raw: string): string {
   const reset = parseResetDate(raw);
   if (!reset) return raw;

@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor } from "@testing-library/svelte";
+import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
-import type { SessionInfo, ContextBreakdown, SessionContextUsage } from "@/lib/api";
+import type {
+  SessionInfo,
+  ContextBreakdown,
+  SessionContextBreakdown,
+  SessionContextUsage,
+} from "@/lib/api";
 
 const breakdown: ContextBreakdown = {
   model: "Claude Opus 4.8",
@@ -33,7 +38,13 @@ const usage: SessionContextUsage[] = [
   },
 ];
 
+const breakdowns: SessionContextBreakdown[] = [
+  { session_id: "s1", project: "pulse", model_id: "claude-opus-4-8", is_idle: false, activity: "Idle", breakdown },
+  { session_id: "s2", project: "other", model_id: "claude-opus-4-8", is_idle: false, activity: "Idle", breakdown },
+];
+
 const getContextBreakdown = vi.fn(async () => breakdown);
+const getContextBreakdowns = vi.fn(async () => breakdowns);
 const getSessionsContextUsage = vi.fn(async () => usage);
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -41,6 +52,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     getContextBreakdown: (...args: unknown[]) => getContextBreakdown(...(args as [])),
+    getContextBreakdowns: (...args: unknown[]) => getContextBreakdowns(...(args as [])),
     getSessionsContextUsage: (...args: unknown[]) => getSessionsContextUsage(...(args as [])),
   };
 });
@@ -86,6 +98,7 @@ function makeSession(id: string, project: string): SessionInfo {
 describe("Context.svelte", () => {
   beforeEach(() => {
     getContextBreakdown.mockClear();
+    getContextBreakdowns.mockClear();
     getSessionsContextUsage.mockClear();
   });
 
@@ -105,6 +118,45 @@ describe("Context.svelte", () => {
     expect(projects).toContain("other");
     await waitFor(() => {
       expect(container.querySelector(".usage-row")).not.toBeNull();
+    });
+  });
+
+  it("renders a context card for every active session simultaneously", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    const { container } = render(Context);
+    await tick();
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".active-ctx-card").length).toBe(2);
+    });
+    const cardProjects = [...container.querySelectorAll(".act-project")].map((el) => el.textContent?.trim());
+    expect(cardProjects).toContain("pulse");
+    expect(cardProjects).toContain("other");
+    expect(getContextBreakdowns).toHaveBeenCalled();
+  });
+
+  it("selects the detailed breakdown when an active card is clicked", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    const { container } = render(Context);
+    await tick();
+
+    let cards: HTMLElement[] = [];
+    await waitFor(() => {
+      cards = [...container.querySelectorAll<HTMLElement>(".active-ctx-card")];
+      expect(cards.length).toBe(2);
+    });
+    const otherCard = cards.find((c) => c.textContent?.includes("other"));
+    expect(otherCard).toBeTruthy();
+    await fireEvent.click(otherCard!);
+
+    await waitFor(() => {
+      expect(otherCard!.classList.contains("selected")).toBe(true);
     });
   });
 

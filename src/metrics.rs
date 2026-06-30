@@ -350,6 +350,7 @@ mod tests {
             cache_creation_tokens: cache_write,
             cache_read_tokens: cache_read,
             max_turn_api_input: 0,
+            current_context_tokens: 0,
             total_api_duration_ms: 0,
             total_cost: cost,
             input_cost: 0.0,

@@ -1,6 +1,5 @@
 <script lang="ts">
-  let props: { config?: unknown; updateData?: unknown } = $props();
-  void props;
+  let { config, updateData }: { config?: unknown; updateData?: unknown } = $props();
 </script>
 
-<div class="chart-stub"></div>
+<div class="chart-stub" data-config={config ? "set" : "empty"} data-update={updateData ? "set" : "empty"}></div>

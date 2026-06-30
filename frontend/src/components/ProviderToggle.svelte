@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { provider, PROVIDERS, type Provider } from "../lib/provider";
+  import { provider, setProvider, PROVIDERS, type Provider } from "../lib/provider";
 
   let { compact = false }: { compact?: boolean } = $props();
 
   const options: Provider[] = ["claude", "codex"];
 
   function pick(id: Provider): void {
-    provider.set(id);
+    if (id !== $provider) void setProvider(id);
   }
 
   let activeIndex = $derived(options.indexOf($provider));

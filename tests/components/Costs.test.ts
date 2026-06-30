@@ -91,7 +91,7 @@ describe("Costs.svelte", () => {
 
     await waitFor(() => expect(getSessionHistory).toHaveBeenCalled());
     const labels = [...container.querySelectorAll(".stat-label")].map((e) => e.textContent?.trim());
-    expect(labels).toEqual(["Total Spent", "Avg / Session", "Cost / 1K Tokens", "Cache Savings"]);
+    expect(labels).toEqual(["Total Spent (30d)", "Avg / Session", "Cost / 1M Tokens", "Cache Savings"]);
   });
 
   it("renders a Cost by Type breakdown whose legend reconciles to the per-component total", async () => {
