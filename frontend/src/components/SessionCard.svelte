@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SessionInfo } from "../lib/api";
-  import { fmtTokens, fmtCost, fmtDuration, fmtTps, classifyActivity } from "../lib/utils";
+  import { fmtTokens, fmtCost, fmtDuration, fmtTps, classifyActivity, fmtPromoEndDate } from "../lib/utils";
   import { slide } from "svelte/transition";
 
   let { session }: { session: SessionInfo } = $props();
@@ -18,6 +18,13 @@
       ? (session.cache_read_tokens / (session.cache_read_tokens + pureInput)) * 100
       : 0,
   );
+
+  let isMythosClass = $derived(/(?:fable|mythos)/.test(session.model_id.toLowerCase()));
+  let introPricingTitle = $derived(
+    session.intro_pricing
+      ? `Introductory pricing — $${session.intro_pricing.intro.input_per_million.toFixed(2)} / $${session.intro_pricing.intro.output_per_million.toFixed(2)} per MTok in/out through ${fmtPromoEndDate(session.intro_pricing.ends_at)}, then $${session.intro_pricing.regular.input_per_million.toFixed(2)} / $${session.intro_pricing.regular.output_per_million.toFixed(2)} automatically.`
+      : "",
+  );
 </script>
 
 <div
@@ -34,7 +41,16 @@
     {#if session.branch}
       <span class="badge branch">{session.branch}</span>
     {/if}
-    <span class="badge model">{session.model}</span>
+    <span class="badge model" class:mythos-class={isMythosClass}>{session.model}{#if session.has_inflated_tokenizer}<span
+          class="inflated-marker"
+          title="Inflated tokenizer — this model can produce more tokens than its predecessor for the same text, raising cost at unchanged per-token rates."
+        >⚠</span>{/if}</span>
+    {#if session.intro_pricing}
+      <span class="badge promo" title={introPricingTitle}>Intro Pricing</span>
+    {/if}
+    {#if session.fast}
+      <span class="badge fast" title="Fast mode — priority speed billing on this turn">⚡ Fast</span>
+    {/if}
     <span class="badge ctx" class:ctx-1m={session.context_window === "1M"}>{session.context_window}</span>
     <span
       class="badge effort"
@@ -178,10 +194,20 @@
 
   .badge.branch { color: var(--accent); background: var(--accent-dim); }
   .badge.model { color: var(--success); background: rgba(76, 175, 80, 0.12); }
+  .badge.model.mythos-class { color: var(--info); background: var(--info-dim); }
   .badge.effort { color: var(--text-muted); background: var(--bg-elevated); }
   .badge.effort.effort-implicit { opacity: 0.65; font-style: italic; cursor: help; }
   .badge.thinking { color: #c3b1e1; background: rgba(195, 177, 225, 0.12); }
   .badge.subagent { color: #7cb9e8; background: rgba(124, 185, 232, 0.12); }
+  .badge.fast { color: var(--warning); background: var(--warning-dim); }
+  .badge.promo { color: var(--success); background: var(--success-dim); cursor: help; }
+
+  .inflated-marker {
+    margin-left: 4px;
+    color: var(--warning);
+    cursor: help;
+    font-weight: 700;
+  }
 
   .session-body {
     display: flex;

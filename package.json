@@ -1,0 +1,19 @@
+{
+  "name": "pulse",
+  "version": "1.3.0",
+  "private": true,
+  "description": "Native local-first analytics dashboard for Claude Code and Codex, with Discord Rich Presence.",
+  "scripts": {
+    "dev": "cargo tauri dev",
+    "build": "npm --prefix frontend run build && cargo tauri build",
+    "build:frontend": "npm --prefix frontend run build",
+    "check": "npm --prefix frontend run check",
+    "test": "npm --prefix frontend run test && cargo test --workspace",
+    "test:frontend": "npm --prefix frontend run test",
+    "test:rust": "cargo test --workspace",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "fmt:rust": "cargo fmt --all",
+    "fmt:rust:check": "cargo fmt --all -- --check"
+  },
+  "packageManager": "npm@11.10.1"
+}
