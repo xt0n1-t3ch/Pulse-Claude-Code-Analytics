@@ -77,7 +77,7 @@ Per-crate, per-module unit tests compiled with each crate. Representative covera
 |:---|:---|:---|
 | cost / pricing | `src/cost.rs` | per-tier pricing, Fable/Mythos rates, Sonnet 5 introductory/standard pricing across the clock-injected cutoff boundary, digit-boundary-safe Sonnet 5 id classification, cache math, speed-aware totals, 1M-context surcharge, GA no-surcharge table, fast-capable model table |
 | presence lines | `src/discord.rs` | Claude presence details/state/tooltip composition across model/effort/speed/marker permutations, including Fable 5 (1M) and Mythos 5 (1M) labels |
-| session collect | `src/session.rs` | JSONL parse, token/cost accumulation, reasoning-effort + speed + service-tier extraction, git-branch + parse caching |
+| session collect | `src/session.rs` | JSONL parse, token/cost accumulation, reasoning-effort + speed + service-tier extraction, git-branch + parse caching; compaction-boundary detection resets `current_context_tokens` to the real post-compaction size while `max_turn_api_input` (the 1M-tier lifetime peak) survives unchanged, including the missing-`compactMetadata`, compaction-as-first-line, and zero-compaction edge cases |
 | metrics / usage | `src/metrics.rs`, `src/usage.rs` | aggregate metrics rollups, plan/usage-window derivation |
 | config | `src/config.rs`, `src/codex/config.rs` | presence/pricing config defaults + round-trip + Windows WSL opt-in flag parsing |
 | util / process | `src/util.rs`, `src/process_guard.rs` | path/format helpers, single-instance process guard |
@@ -85,8 +85,26 @@ Per-crate, per-module unit tests compiled with each crate. Representative covera
 | codex telemetry | `src/codex/telemetry/{plan.rs,service_tier.rs,limits.rs}` | plan-tier + service-tier resolution, rate-limit window parsing |
 | db | `src-tauri/src/db.rs` | SQLite historical-session insert/query/round-trip + context snapshot storage clamped to the model window |
 | analyzers | `src-tauri/src/analyzers/{session_trace.rs,cache_health.rs,model_routing.rs,prompt_complexity.rs,inflection.rs}` | trace scan + scan-pass counting, cache-health grading, model-routing split, prompt-complexity scoring, inflection-point detection |
-| commands | `src-tauri/src/commands.rs` | reports-bundle assembly from roots; `SessionInfo.intro_pricing`/`has_inflated_tokenizer` wiring for Claude sessions (real-clock, matched against a fresh `cost::active_intro_pricing` call so the test never goes stale across the real cutoff date) and confirmed absent for Codex sessions |
+| commands | `src-tauri/src/commands.rs` | reports-bundle assembly from roots; `SessionInfo.intro_pricing`/`has_inflated_tokenizer` wiring for Claude sessions (real-clock, matched against a fresh `cost::active_intro_pricing` call so the test never goes stale across the real cutoff date) and confirmed absent for Codex sessions; `SessionInfo.context_used_tokens` and `build_claude_context_breakdown`'s `used_tokens` reflect current fill (`current_context_tokens`) rather than the historical peak (`max_turn_api_input`), while `context_window_tokens`/the 1M-vs-200K decision still correctly keys off the peak |
 | update checks | `src-tauri/src/update_check.rs` | SemVer tag comparison, newer-release detection, prerelease/draft suppression, release URL allowlist |
+
+## v1.4.1 targeted validators
+
+Run these before cutting the context-tracking-fix release:
+
+```bash
+cargo test --workspace --jobs 2 compact_boundary
+cargo test --workspace --jobs 2 current_context_tokens
+cargo test -p pulse --lib --jobs 2 reflects_current_fill
+npm --prefix frontend run test -- tests/components/Dashboard.test.ts tests/components/Costs.test.ts
+npm --prefix frontend run check
+```
+
+Live re-proof (not part of the automated suite -- run manually before release): rebuild, relaunch
+with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<port>`, and re-issue the
+exact original repro (`window.__TAURI_INTERNALS__.invoke("get_context_breakdown", {sessionId})`
+via CDP `Runtime.evaluate`) against the real session that first surfaced the bug; confirm
+`used_tokens` is no longer pinned at the stale historical peak.
 
 ## v1.4.0 targeted validators
 

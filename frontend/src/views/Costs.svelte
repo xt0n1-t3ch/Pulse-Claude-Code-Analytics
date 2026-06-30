@@ -144,7 +144,7 @@
   </div>
 
   <div class="stats-row">
-    <StatCard label="Total Spent" value={fmtCost(totalCost)} />
+    <StatCard label="Total Spent (30d)" value={fmtCost(totalCost)} />
     <StatCard label="Avg / Session" value={fmtCost(avgCost)} />
     <StatCard label="Cost / 1M Tokens" value={fmtCost(costPerMToken)} />
     <StatCard label="Cache Savings" value={fmtCost(cacheSavings)} />

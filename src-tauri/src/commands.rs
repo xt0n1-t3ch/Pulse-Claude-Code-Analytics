@@ -607,7 +607,7 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 || model_id_raw.contains("[1m]")
                 || s.max_turn_api_input > 200_000;
             let ctx_window_tokens = if has_1m { 1_000_000 } else { 200_000 };
-            let ctx_used_tokens = s.max_turn_api_input.min(ctx_window_tokens);
+            let ctx_used_tokens = s.current_context_tokens.min(ctx_window_tokens);
             let ctx_window = if has_1m { "1M" } else { "200K" }.to_string();
             let subagent_details: Vec<SubagentDetail> = s
                 .subagents
@@ -1935,7 +1935,7 @@ fn build_claude_context_breakdown(selected: Option<&ClaudeSessionSnapshot>) -> C
     let claude_home = cc_discord_presence::config::claude_home();
     let model = selected.map_or_else(|| "Unknown".into(), claude_context_model);
     let ctx_window = selected.map_or(200_000, claude_context_window);
-    let latest_input = selected.map_or(0, |s| s.max_turn_api_input);
+    let current_context_tokens = selected.map_or(0, |s| s.current_context_tokens);
     let memory_files = collect_claude_memory_files(&claude_home, selected);
     let memory_total: u64 = memory_files.iter().map(|f| f.tokens).sum();
     let skills = collect_skills_from_dir(&claude_home.join("skills"));
@@ -1945,8 +1945,8 @@ fn build_claude_context_breakdown(selected: Option<&ClaudeSessionSnapshot>) -> C
     let system_prompt: u64 = 10_000;
     let system_tools: u64 = 6_000;
     let known = system_prompt + system_tools + memory_total + skills_total + mcp_total;
-    let used_tokens = if latest_input > 0 {
-        latest_input.min(ctx_window)
+    let used_tokens = if current_context_tokens > 0 {
+        current_context_tokens.min(ctx_window)
     } else {
         (known + u64::from(selected.is_some()) * 1_000).min(ctx_window)
     };
@@ -2583,8 +2583,8 @@ pub fn build_reports_bundle_from_roots(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_claude_session_infos, build_codex_session_infos, codex_plan_key_from_tier,
-        codex_total_input_tokens, plan_key_from_override,
+        build_claude_context_breakdown, build_claude_session_infos, build_codex_session_infos,
+        codex_plan_key_from_tier, codex_total_input_tokens, plan_key_from_override,
     };
     use cc_discord_presence::codex::cost::{PricingSource, TokenCostBreakdown};
     use cc_discord_presence::codex::session::CodexSessionSnapshot;
@@ -2611,6 +2611,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             max_turn_api_input: 100_000,
+            current_context_tokens: 100_000,
             reasoning_effort: ReasoningEffort::High,
             reasoning_effort_explicit: true,
             has_thinking_blocks: false,
@@ -2675,6 +2676,48 @@ mod tests {
 
         assert!(standard[0].intro_pricing.is_none());
         assert!(!standard[0].has_inflated_tokenizer);
+    }
+
+    #[test]
+    fn session_info_context_used_tokens_reflects_current_fill_not_the_historical_peak() {
+        let snapshot = ClaudeSessionSnapshot {
+            max_turn_api_input: 999_486,
+            current_context_tokens: 25_500,
+            ..sample_claude_snapshot("claude-sonnet-5")
+        };
+        let infos = build_claude_session_infos(&[snapshot]);
+
+        assert_eq!(
+            infos[0].context_used_tokens, 25_500,
+            "the live-session ctx-1m badge must show current fill, not the all-time peak"
+        );
+        assert_eq!(
+            infos[0].context_window_tokens, 1_000_000,
+            "the 1M-vs-200K window-size decision is unaffected -- it stays keyed off the \
+             historical peak (max_turn_api_input), which correctly never decreases"
+        );
+    }
+
+    #[test]
+    fn context_breakdown_used_tokens_reflects_current_fill_not_the_historical_peak() {
+        let snapshot = ClaudeSessionSnapshot {
+            max_turn_api_input: 999_486,
+            current_context_tokens: 25_500,
+            ..sample_claude_snapshot("claude-sonnet-5")
+        };
+        let breakdown = build_claude_context_breakdown(Some(&snapshot));
+
+        assert_eq!(
+            breakdown.used_tokens, 25_500,
+            "the Context Window view must show current fill, not the session's all-time peak"
+        );
+        assert_eq!(breakdown.context_window, 1_000_000);
+        assert!(
+            breakdown.free_space > 0,
+            "a session that genuinely emptied out after compaction must show real free space, \
+             not 0 (the exact symptom Tony reported: a CRITICAL \"100% full\" recommendation \
+             for a session that isn't actually full right now)"
+        );
     }
 
     #[test]

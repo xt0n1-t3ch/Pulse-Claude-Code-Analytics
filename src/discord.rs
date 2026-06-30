@@ -1102,6 +1102,7 @@ mod tests {
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
             max_turn_api_input: 100_000,
+            current_context_tokens: 100_000,
             reasoning_effort: crate::session::ReasoningEffort::High,
             reasoning_effort_explicit: true,
             has_thinking_blocks: false,

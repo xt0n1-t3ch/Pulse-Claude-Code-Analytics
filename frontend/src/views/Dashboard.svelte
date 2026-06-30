@@ -139,7 +139,7 @@
 
 <div class="dashboard">
   <div class="stats-row">
-    <StatCard label="Total Cost" value={fmtCost(totalCost)}>
+    <StatCard label="Total Cost (Live)" value={fmtCost(totalCost)}>
       {#snippet extra()}<Sparkline data={sparkCost} color="var(--accent)" />{/snippet}
     </StatCard>
     <StatCard label="Total Tokens" value={fmtTokens(totalTokens)}>
