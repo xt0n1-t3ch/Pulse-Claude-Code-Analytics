@@ -39,6 +39,19 @@ export interface SubagentDetail {
     activity: string;
 }
 
+export interface ModelPricingRates {
+    input_per_million: number;
+    output_per_million: number;
+    cache_write_per_million: number;
+    cache_read_per_million: number;
+}
+
+export interface IntroPricingInfo {
+    intro: ModelPricingRates;
+    regular: ModelPricingRates;
+    ends_at: string;
+}
+
 export interface SessionInfo {
     session_id: string;
     session_name: string | null;
@@ -75,6 +88,8 @@ export interface SessionInfo {
     fast: boolean;
     service_tier: string | null;
     app_name?: string | null;
+    intro_pricing: IntroPricingInfo | null;
+    has_inflated_tokenizer: boolean;
 }
 
 export interface RateLimitInfo {

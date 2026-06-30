@@ -8,6 +8,7 @@ import {
   usageColor,
   classifyActivity,
   fmtClock,
+  fmtPromoEndDate,
 } from "@/lib/utils";
 
 describe("fmtTokens", () => {
@@ -71,5 +72,16 @@ describe("fmtClock", () => {
     expect(fmtClock("14:30")).toBe("14:30");
     expect(fmtClock(null)).toBe("—");
     expect(fmtClock(undefined)).toBe("—");
+  });
+});
+
+describe("fmtPromoEndDate", () => {
+  it("renders the exclusive UTC cutoff instant as the last inclusive calendar day", () => {
+    expect(fmtPromoEndDate("2026-09-01T00:00:00+00:00")).toBe("Aug 31, 2026");
+    expect(fmtPromoEndDate("2026-09-01T00:00:00Z")).toBe("Aug 31, 2026");
+  });
+
+  it("falls back to the raw string on an unparseable date", () => {
+    expect(fmtPromoEndDate("not-a-date")).toBe("not-a-date");
   });
 });

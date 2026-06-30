@@ -1158,6 +1158,8 @@ mod tests {
             speed: "standard".into(),
             fast: false,
             service_tier: None,
+            intro_pricing: None,
+            has_inflated_tokenizer: false,
         }
     }
 
