@@ -121,13 +121,14 @@ In order of likelihood:
   but the **images won't** — image keys are resolved against that specific app's
   uploaded assets.
 - **Logo / activity icons missing, text shows.** The large image and the
-  per-activity small icons (`claude-code`, `thinking`, `reading`, `editing`,
+  per-activity small icons (`large`, `thinking`, `reading`, `editing`,
   `running`, `waiting`, `idle`) are **asset keys** that must be uploaded to the
   Developer Portal for the configured app. Discord silently drops plain
   `https://` image URLs on many client versions; the resolver wraps them as
   `mp:external/...` but that is best-effort. Upload the assets — see
-  [discord-assets.md](discord-assets.md). (Config schema v3 auto-migrates the
-  old GitHub-raw URL default, which 404'd, to the `claude-code` asset key.)
+  [discord-assets.md](discord-assets.md). Config migrations move legacy defaults
+  from the old GitHub-raw URL and the letterboxed `claude-code` portal asset to
+  the square Developer Portal asset.
 - **Presence is stuck or one-line.** The daemon dedups identical payloads and
   rate-limits publishes to once per 2s, with a 30s heartbeat re-send to keep the
   IPC alive. A frozen presence usually means the underlying session went stale

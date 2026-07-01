@@ -1,3 +1,4 @@
+pub mod activity_target;
 pub mod app;
 pub mod chrome_session;
 pub mod cli;
@@ -13,3 +14,4 @@ pub mod session;
 pub mod sound;
 pub mod usage;
 pub mod util;
+pub mod workflow_state;

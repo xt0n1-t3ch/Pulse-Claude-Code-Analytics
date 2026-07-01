@@ -4,12 +4,15 @@ import { tick } from "svelte";
 import type { SessionInfo, DiscordUserInfo, HealthResponse } from "@/lib/api";
 
 const setDiscordEnabled = vi.fn(async () => undefined);
+let discordPreviewPayload: unknown = null;
+const getDiscordPreview = vi.fn(async () => discordPreviewPayload);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
     setDiscordEnabled: (enabled: boolean) => setDiscordEnabled(enabled),
+    getDiscordPreview: () => getDiscordPreview(),
   };
 });
 
@@ -37,6 +40,7 @@ function makeSession(id: string, project: string): SessionInfo {
     started_at: "2026-05-28T10:00:00Z",
     duration_secs: 600,
     has_thinking: true,
+    workflow_label: null,
     subagent_count: 0,
     subagents: [],
     tokens_per_sec: 42,
@@ -71,10 +75,22 @@ const healthFixture: HealthResponse = {
 describe("Discord.svelte", () => {
   beforeEach(async () => {
     setDiscordEnabled.mockClear();
-    const { sessions, discordUser, health } = await import("@/lib/stores");
+    getDiscordPreview.mockClear();
+    discordPreviewPayload = null;
+    const { sessions, discordUser, health, discordPreview, discordPresencePreview } = await import("@/lib/stores");
     sessions.set([makeSession("s1", "pulse")]);
     discordUser.set(discordUserFixture);
     health.set(healthFixture);
+    discordPresencePreview.set(null);
+    discordPreview.set({
+      showProject: true,
+      showBranch: true,
+      showModel: true,
+      showActivity: true,
+      showTokens: false,
+      showCost: false,
+      showSystems: true,
+    });
   });
 
   it("mounts and shows the live-preview profile with the active session details", async () => {
@@ -90,14 +106,85 @@ describe("Discord.svelte", () => {
     expect(getByText("xt0n1")).toBeTruthy();
   });
 
+  it("renders the backend Discord payload instead of recomputing branch visibility locally", async () => {
+    const { sessions, discordPresencePreview } = await import("@/lib/stores");
+    const session = makeSession("active1", "PropertyAlpha-Agent");
+    session.branch = "feat/marketplace-addtochat-liveview-management";
+    sessions.set([session]);
+    discordPresencePreview.set({
+      provider: "claude",
+      app_name: "Claude Code",
+      details: "Thinking · PropertyAlpha-Agent",
+      state: "Claude Opus 4.8 · ULTRACODE · 1 agent · 161.5M tokens · $195.35",
+      has_session: true,
+      duration_secs: 19_200,
+    });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    const details = container.querySelector(".dp-activity-details")?.textContent ?? "";
+    const state = container.querySelector(".dp-activity-state")?.textContent ?? "";
+    expect(details).toBe("Thinking · PropertyAlpha-Agent");
+    expect(details).not.toContain("feat/marketplace");
+    expect(state).toContain("ULTRACODE");
+    expect(state).toContain("1 agent");
+  });
+
   it("renders the field toggles and the master Rich Presence toggle", async () => {
     const Discord = (await import("@/views/Discord.svelte")).default;
     const { container, getByText } = render(Discord);
     await tick();
 
     expect(getByText("Rich Presence")).toBeTruthy();
-    expect(container.querySelectorAll(".field-cell").length).toBe(6);
+    expect(container.querySelectorAll(".field-cell").length).toBe(7);
     expect(container.querySelectorAll(".preset-opt").length).toBe(3);
+  });
+
+  it("shows safe systems signals without exposing subagent names", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const active = makeSession("active1", "active-project");
+    active.has_thinking = true;
+    active.workflow_label = "ULTRACODE";
+    active.subagent_count = 1;
+    active.subagents = [
+      {
+        agent_type: "secret-researcher",
+        model: "Claude Opus 4.8",
+        tokens: 10,
+        cost: 0.01,
+        activity: "Reading private.md",
+      },
+    ];
+    sessions.set([active]);
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    const state = container.querySelector(".dp-activity-state")?.textContent ?? "";
+    expect(state).toContain("ULTRACODE");
+    expect(state).toContain("1 agent");
+    expect(state).not.toContain("secret-researcher");
+    expect(state).not.toContain("private.md");
+  });
+
+  it("does not label plain Claude thinking as a workflow", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const active = makeSession("active1", "active-project");
+    active.has_thinking = true;
+    active.workflow_label = null;
+    active.subagent_count = 0;
+    sessions.set([active]);
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    const state = container.querySelector(".dp-activity-state")?.textContent ?? "";
+    expect(state).not.toContain("workflow active");
+    expect(state).not.toContain("ULTRACODE");
   });
 
   it("previews the active session first and ignores idle sessions", async () => {

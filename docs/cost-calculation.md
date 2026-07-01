@@ -32,7 +32,7 @@ All prices are per 1 million tokens. The code uses the **5-minute cache write** 
 | Model | Input | Output | Cache Write (5m) | Cache Write (1h) | Cache Read |
 |-------|-------|--------|------------------|-------------------|------------|
 | Fable 5 / Mythos 5 | $10.00 | $50.00 | $12.50 (1.25x) | $20.00 (2x) | $1.00 |
-| **Sonnet 5 — introductory, through 2026-08-31** | **$2.00** | **$10.00** | **$2.50 (1.25x)** | — | **$0.20** |
+| **Sonnet 5 — introductory, through 2026-08-31** | **$2.00** | **$10.00** | **$2.50 (1.25x)** | **$4.00 (2x)** | **$0.20** |
 | Sonnet 5 — standard, from 2026-09-01 | $3.00 | $15.00 | $3.75 (1.25x) | $6.00 (2x) | $0.30 |
 | Opus 4.5 / 4.6 / 4.7 / 4.8 | $5.00 | $25.00 | $6.25 (1.25x) | $10.00 (2x) | $0.50 |
 | Opus 4.0 / 4.1 / 3 (legacy) | $15.00 | $75.00 | $18.75 (1.25x) | $30.00 (2x) | $1.50 |
@@ -41,10 +41,10 @@ All prices are per 1 million tokens. The code uses the **5-minute cache write** 
 | Haiku 3.5 | $0.80 | $4.00 | $1.00 (1.25x) | $1.60 (2x) | $0.08 |
 | Haiku 3 | $0.25 | $1.25 | $0.30 (1.25x) | $0.50 (2x) | $0.03 |
 
-> Source: `src/cost.rs` → `model_pricing()` / `model_pricing_at()`. Sonnet 5's introductory
-> rate is time-boxed and resolved against the real clock automatically — see
-> [sonnet-5.md](sonnet-5.md) for the date-driven mechanism and the cache-rate derivation
-> note (not separately published by Anthropic).
+> Source: `src/cost.rs` → `model_pricing()` / `model_pricing_at()`, checked against
+> Anthropic's pricing page. Sonnet 5's introductory rate is time-boxed and resolved
+> against the real clock automatically — see [sonnet-5.md](sonnet-5.md) for the
+> date-driven mechanism and official cache multipliers.
 
 ## Cost Formula
 

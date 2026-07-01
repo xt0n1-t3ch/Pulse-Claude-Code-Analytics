@@ -63,7 +63,7 @@
       <span class="badge thinking">Thinking</span>
     {/if}
     {#if session.subagent_count > 0}
-      <span class="badge subagent">{session.subagent_count} agents</span>
+      <span class="badge subagent">{session.subagent_count} {session.subagent_count === 1 ? "agent" : "agents"}</span>
     {/if}
   </div>
 

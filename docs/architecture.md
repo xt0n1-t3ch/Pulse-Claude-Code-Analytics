@@ -74,7 +74,7 @@ overridable via `CC_DISCORD_CLIENT_ID`) and the multi-tier asset resolver: a
 `mp:` reference passes through, a portal-confirmed asset key is used directly, a
 plain `https://` URL is wrapped as `mp:external/https/<rest>` for the Discord
 Media Proxy, and anything else falls back to passing the key as-is. Uploading
-the `claude-code` large-image key so the logo actually renders is covered in
+the `large` large-image key so the logo actually renders is covered in
 [`discord-assets.md`](discord-assets.md). Plan-level limits and Extra Usage come
 from [`../src/usage.rs`](../src/usage.rs), which calls the Anthropic usage API on
 a tiered cache (30s for the first few fetches, then 300s, backed by an on-disk

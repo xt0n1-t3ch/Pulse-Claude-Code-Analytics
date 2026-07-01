@@ -1,6 +1,6 @@
 {
   "name": "pulse",
-  "version": "1.3.0",
+  "version": "1.4.2",
   "private": true,
   "description": "Native local-first analytics dashboard for Claude Code and Codex, with Discord Rich Presence.",
   "scripts": {

@@ -400,6 +400,7 @@ mod tests {
             last_token_event_at: None,
             last_activity: SystemTime::now(),
             source_file: PathBuf::from("s.jsonl"),
+            is_subagent: false,
         }
     }
 

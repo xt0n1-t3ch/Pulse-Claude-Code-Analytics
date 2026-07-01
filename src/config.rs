@@ -13,18 +13,15 @@ const DEFAULT_STALE_SECONDS: u64 = 90;
 const DEFAULT_POLL_SECONDS: u64 = 2;
 const DEFAULT_ACTIVE_STICKY_SECONDS: u64 = 300;
 const MIN_ACTIVE_STICKY_SECONDS: u64 = 30;
-/// Bumped to 3 when the default `large_image_key` switched from a GitHub raw URL
-/// (which returns 404 because the mascot file was never pushed to `main`) to the
-/// asset key `"claude-code"`. Configs at schema_version < 3 whose `large_image_key`
-/// still points to the legacy URL are auto-migrated to the new default.
-const CONFIG_SCHEMA_VERSION: u32 = 3;
+const CONFIG_SCHEMA_VERSION: u32 = 5;
 pub const DEFAULT_DISCORD_CLIENT_ID: &str = "1466664856261230716";
 
 /// Default large_image asset key — must be uploaded to the Developer Portal at
 /// https://discord.com/developers/applications/{client_id}/rich-presence/assets
 /// Discord Rich Presence ONLY reliably renders asset keys; external URLs are
 /// unreliable (silently dropped by Discord on many client versions).
-pub const DEFAULT_LARGE_IMAGE_KEY: &str = "claude-code";
+pub const DEFAULT_LARGE_IMAGE_KEY: &str = "large";
+const PREVIOUS_DEFAULT_LARGE_IMAGE_KEY: &str = "claude-code";
 
 /// Fallback URL for the `mp:external` asset pathway. Points at the committed
 /// mascot under the canonical repo so it resolves on a fresh clone.
@@ -64,6 +61,7 @@ pub struct PrivacyConfig {
     pub show_limits: bool,
     pub show_activity: bool,
     pub show_activity_target: bool,
+    pub show_systems: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -150,6 +148,7 @@ impl Default for PrivacyConfig {
             show_limits: true,
             show_activity: true,
             show_activity_target: true,
+            show_systems: true,
         }
     }
 }
@@ -281,6 +280,18 @@ impl PresenceConfig {
 
         if previous_version < 3 && self.display.large_image_key.trim() == DEFAULT_MASCOT_ASSET_URL {
             self.display.large_image_key = DEFAULT_LARGE_IMAGE_KEY.to_string();
+            changed = true;
+        }
+
+        if previous_version < 4
+            && self.display.large_image_key.trim() == PREVIOUS_DEFAULT_LARGE_IMAGE_KEY
+        {
+            self.display.large_image_key = DEFAULT_LARGE_IMAGE_KEY.to_string();
+            changed = true;
+        }
+
+        if previous_version < 5 {
+            self.privacy.show_systems = true;
             changed = true;
         }
 
@@ -843,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_v2_url_to_v3_asset_key() {
+    fn migration_v2_url_to_current_asset_key() {
         let mut cfg = PresenceConfig {
             schema_version: 2,
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
@@ -857,7 +868,26 @@ mod tests {
         };
         let changed = cfg.normalize_and_migrate();
         assert!(changed);
-        assert_eq!(cfg.schema_version, 3);
+        assert_eq!(cfg.schema_version, CONFIG_SCHEMA_VERSION);
+        assert_eq!(cfg.display.large_image_key, DEFAULT_LARGE_IMAGE_KEY);
+    }
+
+    #[test]
+    fn migration_v3_claude_code_asset_key_to_square_large_key() {
+        let mut cfg = PresenceConfig {
+            schema_version: 3,
+            discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
+            plan: None,
+            initialized: true,
+            privacy: PrivacyConfig::default(),
+            display: DisplayConfig {
+                large_image_key: PREVIOUS_DEFAULT_LARGE_IMAGE_KEY.to_string(),
+                ..DisplayConfig::default()
+            },
+        };
+        let changed = cfg.normalize_and_migrate();
+        assert!(changed);
+        assert_eq!(cfg.schema_version, CONFIG_SCHEMA_VERSION);
         assert_eq!(cfg.display.large_image_key, DEFAULT_LARGE_IMAGE_KEY);
     }
 

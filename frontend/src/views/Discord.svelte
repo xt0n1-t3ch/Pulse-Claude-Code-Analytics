@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { sessions, activeSessions, discordUser, health, discordPreview } from "../lib/stores";
+  import { sessions, activeSessions, discordUser, health, discordPreview, discordPresencePreview } from "../lib/stores";
   import { provider, providerProfile } from "../lib/provider";
   import { setDiscordEnabled } from "../lib/api";
+  import type { SessionInfo } from "../lib/api";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
   import { rpArtFor } from "../lib/rpArt";
   import PulseMark from "../components/PulseMark.svelte";
@@ -23,9 +24,9 @@
 
   type Preset = "minimal" | "standard" | "full";
   const presets: Record<Preset, typeof $discordPreview> = {
-    minimal: { showProject: true, showBranch: false, showModel: false, showActivity: false, showTokens: false, showCost: false },
-    standard: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: false, showCost: false },
-    full: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: true, showCost: true },
+    minimal: { showProject: true, showBranch: false, showModel: false, showActivity: false, showTokens: false, showCost: false, showSystems: false },
+    standard: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: false, showCost: false, showSystems: true },
+    full: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: true, showCost: true, showSystems: true },
   };
   const presetOrder: Preset[] = ["minimal", "standard", "full"];
 
@@ -49,11 +50,13 @@
   let previewSession = $derived($activeSessions[0] ?? $sessions[0]);
   let activeSessionCount = $derived($activeSessions.length);
   let previewAppName = $derived(previewSession?.app_name ?? $providerProfile.productName);
+  let presenceAppName = $derived($discordPresencePreview?.app_name ?? previewAppName);
   let previewArt = $derived(rpArtFor(previewSession?.provider ?? $provider, previewSession?.app_name));
   let previewAssetKey = $derived(previewArt.assetKey);
   let previewFast = $derived(previewSession?.fast ?? false);
 
   let detailsLine = $derived.by(() => {
+    if ($discordPresencePreview) return $discordPresencePreview.details;
     if (!previewSession) return "No active session";
     const s = $discordPreview;
     let parts: string[] = [];
@@ -64,6 +67,7 @@
   });
 
   let stateLine = $derived.by(() => {
+    if ($discordPresencePreview) return $discordPresencePreview.state;
     if (!previewSession) return "Idle";
     const s = $discordPreview;
     let parts: string[] = [];
@@ -75,9 +79,21 @@
       parts.push(model);
     }
     if (s.showActivity) parts.push(previewSession.activity);
+    if (s.showSystems) parts.push(...systemParts(previewSession));
     if (s.showTokens) parts.push(fmtTokens(previewSession.tokens) + " tokens");
     return parts.join(" · ") || "Idle";
   });
+
+  function systemParts(session: SessionInfo): string[] {
+    const parts: string[] = [];
+    if (session.workflow_label) {
+      parts.push(session.workflow_label);
+    }
+    if (session.subagent_count > 0) {
+      parts.push(`${session.subagent_count} ${session.subagent_count === 1 ? "agent" : "agents"}`);
+    }
+    return parts;
+  }
 
   const fieldRows = [
     { key: "showProject",  label: "Project name",  hint: "Repository or folder name." },
@@ -86,6 +102,7 @@
     { key: "showActivity", label: "Activity",      hint: "What Pulse thinks you're doing." },
     { key: "showTokens",   label: "Token count",   hint: "Cumulative tokens this session." },
     { key: "showCost",     label: "Cost",          hint: "Running USD total for the session." },
+    { key: "showSystems",  label: "Systems",       hint: "Safe workflow and agent signals." },
   ] as const;
 
   let activeCount = $derived.by(() => {
@@ -103,7 +120,7 @@
       <span class="view-kicker">Pulse · Rich Presence</span>
       <h2 class="view-title">Discord</h2>
       <span class="view-sub">
-        Broadcasting as <strong style="color: {$providerProfile.accent}">{previewAppName}</strong>
+        Broadcasting as <strong style="color: {$providerProfile.accent}">{presenceAppName}</strong>
         <span class="sub-dot">·</span>
         {activeCount} of {fieldRows.length} fields shown
         {#if activeSessionCount > 1}
@@ -141,7 +158,7 @@
             <span class="bt-title">Rich Presence</span>
             <span class="bt-sub">
               {discordEnabled
-                ? `Broadcasting your ${previewAppName} session to Discord`
+                ? `Broadcasting your ${presenceAppName} session to Discord`
                 : "Presence is paused — Discord shows no activity"}
             </span>
           </span>
@@ -246,11 +263,11 @@
                 {/if}
               </div>
               <div class="dp-activity-info">
-                <div class="dp-activity-name">{previewAppName}</div>
+                <div class="dp-activity-name">{presenceAppName}</div>
                 <div class="dp-activity-details" title={detailsLine}>{detailsLine}</div>
                 <div class="dp-activity-state" title={stateLine}>{stateLine}</div>
-                {#if previewSession}
-                  <div class="dp-activity-elapsed">{fmtDuration(previewSession.duration_secs)} elapsed</div>
+                {#if $discordPresencePreview?.duration_secs || previewSession}
+                  <div class="dp-activity-elapsed">{fmtDuration($discordPresencePreview?.duration_secs ?? previewSession?.duration_secs ?? 0)} elapsed</div>
                 {/if}
               </div>
             </div>

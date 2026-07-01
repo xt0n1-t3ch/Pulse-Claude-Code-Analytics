@@ -79,6 +79,7 @@ fn main() {
             commands::get_health,
             commands::get_metrics,
             commands::get_live_sessions,
+            commands::get_discord_preview,
             commands::get_rate_limits,
             commands::refresh_usage,
             commands::get_discord_user,

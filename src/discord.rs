@@ -32,6 +32,7 @@ struct ResolvedAssets {
 
 /// GitHub repo URL shown as a button on Discord profile popout.
 const GITHUB_REPO_URL: &str = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics";
+const ACTIVE_PRESENTATION_SECS: u64 = 300;
 
 pub struct DiscordPresence {
     client_id: Option<String>,
@@ -445,27 +446,20 @@ pub fn presence_lines(
         "private project".to_string()
     };
 
-    let subagent_suffix = if !session.subagents.is_empty() {
-        format!(" + {} agents", session.subagents.len())
-    } else {
-        String::new()
-    };
-
     let details = if config.privacy.show_activity {
         if let Some(activity) = &session.activity {
             format!(
-                "{} \u{2022} {}{}",
-                activity.to_text(config.privacy.show_activity_target),
-                project_label,
-                subagent_suffix,
+                "{} \u{2022} {}",
+                effective_activity_text(session, activity, config.privacy.show_activity_target),
+                project_label
             )
         } else if config.privacy.show_project_name {
-            format!("Working on {}{}", project_label, subagent_suffix)
+            format!("Working on {}", project_label)
         } else {
-            format!("Working in Claude Code{}", subagent_suffix)
+            "Working in Claude Code".to_string()
         }
     } else if config.privacy.show_project_name {
-        format!("{}{}", project_label, subagent_suffix)
+        project_label.clone()
     } else {
         "Using Claude Code".to_string()
     };
@@ -516,6 +510,10 @@ pub fn presence_lines(
         }
     }
 
+    if config.privacy.show_systems {
+        render_systems_to_state(&mut state_parts, session);
+    }
+
     if config.privacy.show_tokens
         && let Some(total) = session.session_total_tokens
         && total > 0
@@ -559,6 +557,50 @@ pub fn presence_lines(
     let tooltip = compact_join_prioritized(&tooltip_parts, 128);
 
     (truncate_for_discord(&details), state, tooltip)
+}
+
+fn effective_activity_text(
+    session: &ClaudeSessionSnapshot,
+    activity: &crate::session::ActivitySnapshot,
+    show_target: bool,
+) -> String {
+    if matches!(activity.kind, ActivityKind::Idle) && session_is_recently_active(session) {
+        return crate::session::ActivitySnapshot {
+            kind: ActivityKind::Thinking,
+            ..Default::default()
+        }
+        .to_text(false);
+    }
+
+    activity.to_text(show_target)
+}
+
+fn session_is_recently_active(session: &ClaudeSessionSnapshot) -> bool {
+    let file_cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(ACTIVE_PRESENTATION_SECS))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    if session.last_activity >= file_cutoff {
+        return true;
+    }
+
+    let token_cutoff = Utc::now() - chrono::Duration::seconds(ACTIVE_PRESENTATION_SECS as i64);
+    session
+        .last_token_event_at
+        .is_some_and(|ts| ts >= token_cutoff)
+}
+
+fn render_systems_to_state(parts: &mut Vec<String>, session: &ClaudeSessionSnapshot) {
+    if session.background_work.workflow_active {
+        parts.push("ULTRACODE".to_string());
+    }
+    let count = session
+        .subagents
+        .len()
+        .max(session.background_work.active_agent_count);
+    if count > 0 {
+        let label = if count == 1 { "agent" } else { "agents" };
+        parts.push(format!("{count} {label}"));
+    }
 }
 
 fn render_extra_usage_to_state(parts: &mut Vec<String>, api_usage: Option<&UsageData>) {
@@ -1121,6 +1163,7 @@ mod tests {
             last_activity: std::time::SystemTime::now(),
             source: crate::session::DataSource::Jsonl,
             source_file: std::path::PathBuf::from("session.jsonl"),
+            background_work: crate::workflow_state::BackgroundWorkInfo::default(),
             subagents: Vec::new(),
             is_subagent: false,
             parent_session_id: None,
@@ -1139,5 +1182,63 @@ mod tests {
             assert!(state.contains(expected), "{model_id}: {state}");
             assert!(!state.contains("(claude-"), "{model_id}: {state}");
         }
+    }
+
+    #[test]
+    fn branch_toggle_and_systems_toggle_control_claude_presence_lines() {
+        let mut session = mythos_class_session("claude-opus-4-8");
+        session.project_name = "PropertyAlpha-Agent".to_string();
+        session.git_branch = Some("feat/marketplace-addtochat-liveview-management".to_string());
+        session.has_thinking_blocks = true;
+        session.background_work = crate::workflow_state::BackgroundWorkInfo {
+            workflow_active: true,
+            active_agent_count: 1,
+            latest_signal_at: Some(std::time::SystemTime::now()),
+        };
+        session.activity = Some(crate::session::ActivitySnapshot {
+            kind: crate::session::ActivityKind::ReadingFile,
+            target: Some(
+                "channel-events.ts - PropertyAlpha-Agent (feat/marketplace-addtochat-liveview-management)"
+                    .to_string(),
+            ),
+            ..Default::default()
+        });
+        session.subagents.push(crate::session::SubagentInfo {
+            agent_type: "researcher".to_string(),
+            model: None,
+            model_display: None,
+            activity: None,
+            tokens: 0,
+            cost: 0.0,
+        });
+
+        let mut config = PresenceConfig::default();
+        config.privacy.show_git_branch = false;
+        let (details, state, _tooltip) = presence_lines(&session, None, None, &config);
+
+        assert!(details.starts_with("Reading channel-events.ts"));
+        assert!(details.contains("PropertyAlpha-Agent"));
+        assert!(!details.contains("feat/marketplace"));
+        assert!(!details.contains("researcher"));
+        assert!(state.contains("ULTRACODE"));
+        assert!(state.contains("1 agent"));
+
+        config.privacy.show_systems = false;
+        let (_details, state, _tooltip) = presence_lines(&session, None, None, &config);
+        assert!(!state.contains("ULTRACODE"));
+        assert!(!state.contains("agent"));
+    }
+
+    #[test]
+    fn thinking_blocks_do_not_render_as_workflow_system_status() {
+        let mut session = mythos_class_session("claude-opus-4-8");
+        session.has_thinking_blocks = true;
+        session.background_work = crate::workflow_state::BackgroundWorkInfo::default();
+
+        let config = PresenceConfig::default();
+        let (_details, state, _tooltip) = presence_lines(&session, None, None, &config);
+
+        assert!(!state.contains("workflow active"));
+        assert!(!state.contains("ULTRACODE"));
     }
 }

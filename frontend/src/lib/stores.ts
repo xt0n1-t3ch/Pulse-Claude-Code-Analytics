@@ -5,12 +5,14 @@ import type {
   SessionInfo,
   RateLimitInfo,
   DiscordUserInfo,
+  DiscordPresencePreview,
   PlanInfo,
 } from "./api";
 import {
   getHealth,
   getMetrics,
   getLiveSessions,
+  getDiscordPreview,
   getRateLimits,
   getDiscordUser,
   getPlanInfo,
@@ -19,7 +21,16 @@ import {
 
 function persisted<T>(key: string, initial: T): Writable<T> {
   const stored = localStorage.getItem(key);
-  const value = stored !== null ? (JSON.parse(stored) as T) : initial;
+  const parsed = stored !== null ? (JSON.parse(stored) as T) : initial;
+  const value =
+    typeof initial === "object" &&
+    initial !== null &&
+    typeof parsed === "object" &&
+    parsed !== null &&
+    !Array.isArray(initial) &&
+    !Array.isArray(parsed)
+      ? ({ ...initial, ...parsed } as T)
+      : parsed;
   const store = writable<T>(value);
   store.subscribe((v) => localStorage.setItem(key, JSON.stringify(v)));
   return store;
@@ -30,6 +41,7 @@ export const metrics = writable<MetricsResponse | null>(null);
 export const sessions = writable<SessionInfo[]>([]);
 export const rateLimits = writable<RateLimitInfo | null>(null);
 export const discordUser = writable<DiscordUserInfo | null>(null);
+export const discordPresencePreview = writable<DiscordPresencePreview | null>(null);
 export const planInfo = writable<PlanInfo | null>(null);
 export const currentView = writable<string>("dashboard");
 
@@ -40,6 +52,7 @@ export interface DiscordPreviewSettings {
   showActivity: boolean;
   showTokens: boolean;
   showCost: boolean;
+  showSystems: boolean;
 }
 
 export const discordPreview = persisted<DiscordPreviewSettings>("pulse-discord-preview", {
@@ -49,6 +62,7 @@ export const discordPreview = persisted<DiscordPreviewSettings>("pulse-discord-p
   showActivity: true,
   showTokens: false,
   showCost: false,
+  showSystems: true,
 });
 
 let discordPrefsInitialized = false;
@@ -63,7 +77,10 @@ discordPreview.subscribe((s) => {
     show_activity: s.showActivity,
     show_tokens: s.showTokens,
     show_cost: s.showCost,
-  }).catch(() => {});
+    show_systems: s.showSystems,
+  })
+    .then(refreshDiscordPresencePreview)
+    .catch(() => {});
 });
 
 export interface Toast {
@@ -95,16 +112,18 @@ let prevRateLimits: RateLimitInfo | null = null;
 
 export async function poll(): Promise<void> {
   try {
-    const [h, m, s, r, p] = await Promise.all([
+    const [h, m, s, preview, r, p] = await Promise.all([
       getHealth(),
       getMetrics(),
       getLiveSessions(),
+      getDiscordPreview(),
       getRateLimits(),
       getPlanInfo(),
     ]);
     health.set(h);
     metrics.set(m);
     sessions.set(s);
+    discordPresencePreview.set(preview);
     rateLimits.set(r);
     planInfo.set(p);
 
@@ -130,6 +149,14 @@ export async function poll(): Promise<void> {
     prevRateLimits = r;
   } catch (e) {
     console.warn("Poll error:", e);
+  }
+}
+
+export async function refreshDiscordPresencePreview(): Promise<void> {
+  try {
+    discordPresencePreview.set(await getDiscordPreview());
+  } catch (e) {
+    console.warn("Discord preview:", e);
   }
 }
 

@@ -64,6 +64,7 @@ function makeSession(id: string, project: string): SessionInfo {
     started_at: "2026-05-28T10:00:00Z",
     duration_secs: 600,
     has_thinking: true,
+    workflow_label: null,
     subagent_count: 0,
     subagents: [],
     tokens_per_sec: 42,
@@ -143,6 +144,7 @@ function hist(id: string, project: string): HistoricalSession {
     cache_write_cost: 1.2,
     cache_read_cost: 0.6,
     has_thinking: false,
+    workflow_label: null,
     subagent_count: 0,
     is_active: false,
   };
@@ -167,6 +169,14 @@ const projects: ProjectStat[] = [
 const getHealth = vi.fn(async () => health);
 const getMetrics = vi.fn(async () => metrics);
 const getLiveSessions = vi.fn(async () => liveSessions);
+const getDiscordPreview = vi.fn(async () => ({
+  provider: "claude",
+  app_name: "Claude Code",
+  details: "Editing · pulse",
+  state: "Claude Opus 4.8",
+  has_session: true,
+  duration_secs: 600,
+}));
 const getRateLimits = vi.fn(async () => rateLimitInfo);
 const getPlanInfo = vi.fn(async () => planInfoFixture);
 
@@ -177,6 +187,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getHealth: () => getHealth(),
     getMetrics: () => getMetrics(),
     getLiveSessions: () => getLiveSessions(),
+    getDiscordPreview: () => getDiscordPreview(),
     getRateLimits: () => getRateLimits(),
     getPlanInfo: () => getPlanInfo(),
     getAnalyticsSummary: async () => summary,
@@ -193,14 +204,19 @@ describe("poll() to stores to Dashboard full flow", () => {
     getHealth.mockClear();
     getMetrics.mockClear();
     getLiveSessions.mockClear();
+    getDiscordPreview.mockClear();
     getRateLimits.mockClear();
     getPlanInfo.mockClear();
-    const { health: h, metrics: m, sessions: s, rateLimits: r, planInfo: p } = await import("@/lib/stores");
+    const { health: h, metrics: m, sessions: s, discordPresencePreview: dp, rateLimits: r, planInfo: p } = await import("@/lib/stores");
     h.set(null);
     m.set(null);
     s.set([]);
+    dp.set(null);
     r.set(null);
     p.set(null);
+    await Promise.resolve();
+    await Promise.resolve();
+    getDiscordPreview.mockClear();
   });
 
   it("hydrates every global store from a single poll() pass", async () => {
@@ -210,12 +226,14 @@ describe("poll() to stores to Dashboard full flow", () => {
     expect(getHealth).toHaveBeenCalledTimes(1);
     expect(getMetrics).toHaveBeenCalledTimes(1);
     expect(getLiveSessions).toHaveBeenCalledTimes(1);
+    expect(getDiscordPreview).toHaveBeenCalledTimes(1);
     expect(getRateLimits).toHaveBeenCalledTimes(1);
     expect(getPlanInfo).toHaveBeenCalledTimes(1);
 
     expect(get(stores.health)).toEqual(health);
     expect(get(stores.metrics)).toEqual(metrics);
     expect(get(stores.sessions)).toHaveLength(2);
+    expect(get(stores.discordPresencePreview)?.details).toBe("Editing · pulse");
     expect(get(stores.rateLimits)).toEqual(rateLimitInfo);
     expect(get(stores.planInfo)).toEqual(planInfoFixture);
     expect(get(stores.activeSessions)).toHaveLength(2);

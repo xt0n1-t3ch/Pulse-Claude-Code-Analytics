@@ -24,16 +24,16 @@ The open-source **Claude Code &amp; OpenAI Codex analytics dashboard** + **Disco
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.3.0</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.4.2</h2>
 
-- **Faithful Discord Live Preview** — the preview now renders the real Rich Presence artwork (the Claude Code mascot and the Codex mark), bundled in-app and mapped by provider/surface, in a card that mirrors Discord's layout, with a Fast-tier `⚡` indicator.
-- **Plan override that sticks** — a manual plan choice in Settings now persists to disk, reaches the live broadcast, and stays selected instead of snapping back to Auto-detect; the control uses a canonical plan-key contract.
-- **Live plan auto-detect** — a Claude plan upgrade (e.g. Max 5x → Max 20x) is reflected without restarting Pulse.
-- **Codex Fast mode detected** — the Codex service tier is read from `~/.codex/config.toml` (where current Codex versions store it), so Fast renders as `⚡ … · Fast` again.
-- **Clearer cost + cache UI** — cost is reported per **1M tokens** (the per-1K figure rounded to `$0.00`), and the dashboard cache grade shows a neutral `—` instead of a red `F` when there's no data yet.
-- **Hardened core** — centralized the Claude plan mapping, bounded the session/report scans, and log previously-swallowed failures instead of dropping them.
+- **Claude Sonnet 5, priced correctly** — Pulse now treats `claude-sonnet-5` as a native 1M-context model with Anthropic's introductory $2 input / $10 output per MTok window through August 31, 2026, then automatically reverts to standard $3 / $15 pricing on September 1, 2026.
+- **Published cache pricing** — Sonnet 5 cache rates are sourced from Anthropic's visible pricing table: 5-minute writes at $2.50 / MTok, 1-hour writes at $4.00 / MTok, and cache reads at $0.20 / MTok during the introductory window.
+- **Discord controls that match Discord** — the Live Preview and live broadcaster now share one backend payload. Turning off Git branch removes it from the real Discord card, not just the preview.
+- **Cleaner Rich Presence activity** — noisy shell banners, temp launcher paths, stale `Idle` states, and plain-thinking pseudo-workflow labels are suppressed. Active work reads like `Reading channel-events.ts`; systems context stays short and safe.
+- **Safe Systems signal** — the optional Systems toggle can show `ULTRACODE`, `Tool active`, or `1 agent` without exposing subagent names, private paths, prompts, or branch names.
+- **Release hygiene** — v1.4.2 is the immutable-release-safe follow-up to v1.4.1: docs, release notes, pricing copy, dependency bumps, tests, and local runtime proof now agree.
 
-**[Download v1.3.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.4.2](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
@@ -43,14 +43,14 @@ You pay for Claude Code every month. Maybe $20 on **Pro**, $100 – $200 on **Ma
 
 - **A – F cache-health letter grade** — trend-weighted, so you see the *direction* your cache efficiency is heading, not just today's number.
 - **Opus-4.7-tokenizer aware** — Opus 4.7's new tokenizer inflates tokens by up to 35 %; Pulse flags the inflation so you know when you're hitting limits faster than expected.
-- **1 M context GA pricing** — flat per-token rate across the full 1 M window for **Fable 5 · Mythos 5 · Opus 4.6 · Opus 4.7 · Opus 4.8 · Sonnet 4.6** (per [Anthropic's official pricing](https://platform.claude.com/docs/en/about-claude/pricing)). Older betas (Sonnet 4 / 4.5, Opus 4 / 4.5) still get 2× input · 1.5× output · 2× cache at > 200 K. Pulse applies the correct math per-model so you compare sessions like-for-like. Plan-level **Extra Usage** on Pro / Max / Teams is tracked separately.
+- **1 M context GA pricing** — flat per-token rate across the full 1 M window for **Fable 5 · Mythos 5 · Opus 4.6 · Opus 4.7 · Opus 4.8 · Sonnet 4.6 · Sonnet 5** (per [Anthropic's official pricing](https://platform.claude.com/docs/en/about-claude/pricing)). Older betas (Sonnet 4 / 4.5, Opus 4 / 4.5) still get 2× input · 1.5× output · 2× cache at > 200 K. Pulse applies the correct math per-model so you compare sessions like-for-like. Plan-level **Extra Usage** on Pro / Max / Teams is tracked separately.
 - **Inflection alerts** — any session that blows past 2 × your rolling baseline gets flagged with context and a suggested fix.
 - **Fix-with-Claude prompts** — every recommendation has a **Copy Fix Prompt** button. Paste it into Claude Code. Problem fixed.
 - **Plan usage limits** — live tracking of your 5-hour window, weekly, Sonnet-only, and Extra Usage quotas. Sound alert when Extra Usage spikes.
 - **Release awareness** — startup and 6-hour update checks surface new stable GitHub Releases inside the app without pretending a signed auto-installer exists before release metadata is published.
 - **Discord Rich Presence** — five-tier reasoning effort, live project / model / branch. Your flow state, on your profile.
 
-**Works with OpenAI Codex too.** Flip the provider toggle and Pulse reads your Codex CLI sessions the same way — per-model pricing for the GPT-5 family **including GPT-5.5** ($5 / $30 per Mtok), 400 K context tracking, and reasoning-effort detection. **Fast mode** (`/fast`) is priced correctly on both sides: Codex **GPT-5.5 bills at 2.5×** and **GPT-5.4 at 2×** the standard rate, and Claude **Opus 4.8 Fast** bills at **2×** — each flagged with a ⚡ marker in Sessions and Discord presence.
+**Works with OpenAI Codex too.** Flip the provider toggle and Pulse reads your Codex CLI sessions the same way — per-model pricing for the GPT-5 family **including GPT-5.5** ($5 / $30 per MTok), 400 K context tracking, and reasoning-effort detection. **Fast mode** (`/fast`) is priced correctly on both sides: Codex **GPT-5.5 bills at 2.5×** and **GPT-5.4 at 2×** the standard rate, and Claude **Opus 4.8 Fast** bills at **2×** — each flagged with a ⚡ marker in Sessions and Discord presence.
 
 Codex Discord Rich Presence has its own source-of-truth repo: **[xt0n1-t3ch/Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)**. Pulse mirrors that Rust core into `src/codex/` through checked sync scripts and CI freshness gates, so Codex support can move fast here while the standalone Rich Presence project keeps its own audience.
 

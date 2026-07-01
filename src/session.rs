@@ -184,8 +184,10 @@ impl ActivitySnapshot {
     pub fn to_text(&self, show_target: bool) -> String {
         if show_target && let Some(ref target) = self.target {
             let trimmed = target.trim();
-            if !trimmed.is_empty() {
-                let short = shorten_activity_target(&self.kind, trimmed);
+            if !trimmed.is_empty()
+                && let Some(short) = shorten_activity_target(&self.kind, trimmed)
+                && !short.trim().is_empty()
+            {
                 return format!("{} {}", self.action_text(), short);
             }
         }
@@ -194,20 +196,14 @@ impl ActivitySnapshot {
 }
 
 /// Condenses an activity target to its most readable short form for Discord/UI display.
-/// Files → filename only. Commands → first token (command name) only.
-fn shorten_activity_target(kind: &ActivityKind, target: &str) -> String {
+/// Files → filename only. Commands → clean command summary only.
+fn shorten_activity_target(kind: &ActivityKind, target: &str) -> Option<String> {
     match kind {
-        ActivityKind::ReadingFile | ActivityKind::EditingFile => std::path::Path::new(target)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(target)
-            .to_string(),
-        ActivityKind::RunningCommand => target
-            .split_whitespace()
-            .next()
-            .unwrap_or(target)
-            .to_string(),
-        _ => target.to_string(),
+        ActivityKind::ReadingFile | ActivityKind::EditingFile => {
+            crate::activity_target::readable_file_target(target, 50).into()
+        }
+        ActivityKind::RunningCommand => summarize_command_for_presence(target, 50),
+        _ => target.to_string().into(),
     }
 }
 
@@ -304,6 +300,8 @@ pub struct ClaudeSessionSnapshot {
     pub last_activity: SystemTime,
     pub source: DataSource,
     pub source_file: PathBuf,
+    #[serde(default)]
+    pub background_work: crate::workflow_state::BackgroundWorkInfo,
     /// Subagents spawned by this session (populated after collection).
     #[serde(default)]
     pub subagents: Vec<SubagentInfo>,
@@ -492,6 +490,8 @@ impl SessionAccumulator {
 }
 
 const IDLE_DEBOUNCE_SECS: i64 = 45;
+const ORPHANED_PENDING_CALL_SECS: i64 = 600;
+const LIVE_FILE_ACTIVITY_SECS: i64 = 30;
 
 #[derive(Debug, Default)]
 struct ActivityTracker {
@@ -614,13 +614,77 @@ impl ActivityTracker {
             return;
         };
         let elapsed = now.signed_duration_since(idle_candidate).num_seconds();
-        if elapsed >= IDLE_DEBOUNCE_SECS {
-            self.mark_activity(ActivityKind::Idle, None, Some(now));
+        if elapsed >= IDLE_DEBOUNCE_SECS
+            && let Some(snapshot) = self.snapshot.as_mut()
+        {
+            snapshot.kind = ActivityKind::Idle;
+            snapshot.target = None;
+            snapshot.observed_at = snapshot.last_active_at.or(snapshot.observed_at);
+            snapshot.idle_candidate_at = None;
+            snapshot.pending_calls = 0;
         }
     }
 
-    fn finalize(&self) -> Option<ActivitySnapshot> {
-        self.snapshot.clone()
+    fn note_live_file_activity(&mut self, modified_at: DateTime<Utc>, now: DateTime<Utc>) {
+        if now.signed_duration_since(modified_at).num_seconds() > LIVE_FILE_ACTIVITY_SECS {
+            return;
+        }
+
+        self.observe_effective_signal(Some(modified_at));
+        if let Some(snapshot) = self.snapshot.as_mut() {
+            snapshot.last_active_at = max_datetime(snapshot.last_active_at, Some(modified_at));
+            snapshot.last_effective_signal_at =
+                max_datetime(snapshot.last_effective_signal_at, Some(modified_at));
+            if matches!(snapshot.kind, ActivityKind::Idle) {
+                snapshot.kind = ActivityKind::Thinking;
+                snapshot.target = None;
+            }
+            if self.pending_calls.is_empty() && is_working_activity_kind(&snapshot.kind) {
+                snapshot.idle_candidate_at = Some(modified_at);
+            }
+        }
+    }
+
+    fn finalize(&self, now: DateTime<Utc>) -> Option<ActivitySnapshot> {
+        let mut snapshot = self.snapshot.clone()?;
+        snapshot.pending_calls = self.pending_calls.len();
+
+        let last_signal = snapshot
+            .last_effective_signal_at
+            .or(self.last_effective_signal_at)
+            .or(snapshot.last_active_at)
+            .or(snapshot.observed_at)
+            .or(self.last_event_at);
+
+        if snapshot.pending_calls > 0 {
+            if let Some(last_signal) = last_signal
+                && now.signed_duration_since(last_signal).num_seconds() < ORPHANED_PENDING_CALL_SECS
+            {
+                snapshot.idle_candidate_at = None;
+                return Some(snapshot);
+            }
+            snapshot.pending_calls = 0;
+            snapshot.idle_candidate_at = last_signal;
+        }
+
+        if !matches!(
+            snapshot.kind,
+            ActivityKind::Idle | ActivityKind::WaitingInput
+        ) {
+            let idle_candidate = snapshot
+                .idle_candidate_at
+                .or(snapshot.last_active_at)
+                .or(snapshot.observed_at)
+                .or(last_signal);
+            if let Some(idle_candidate) = idle_candidate
+                && now.signed_duration_since(idle_candidate).num_seconds() >= IDLE_DEBOUNCE_SECS
+            {
+                snapshot.kind = ActivityKind::Idle;
+                snapshot.target = None;
+            }
+        }
+
+        Some(snapshot)
     }
 }
 
@@ -766,6 +830,7 @@ pub fn read_statusline_data(git_cache: &mut GitBranchCache) -> Option<ClaudeSess
         last_activity: modified,
         source: DataSource::Statusline,
         source_file: data_path,
+        background_work: crate::workflow_state::BackgroundWorkInfo::default(),
         subagents: Vec::new(),
         is_subagent: false,
         parent_session_id: None,
@@ -817,6 +882,7 @@ pub fn merge_statusline_into_sessions(
             reasoning_effort: jsonl.reasoning_effort,
             reasoning_effort_explicit: jsonl.reasoning_effort_explicit,
             has_thinking_blocks: jsonl.has_thinking_blocks,
+            background_work: jsonl.background_work,
             speed: jsonl.speed,
             service_tier: jsonl.service_tier.clone(),
             input_cost: jsonl.input_cost * scale,
@@ -973,14 +1039,20 @@ pub fn collect_active_sessions_multi(
                 default_effort,
                 ide_workspaces,
             )? {
+                if !is_subagent_file {
+                    snapshot.background_work = crate::workflow_state::detect_background_work(path);
+                }
                 if is_subagent_file {
                     snapshot.is_subagent = true;
-                    snapshot.parent_session_id = path
-                        .parent()
-                        .and_then(|p| p.parent())
-                        .and_then(|p| p.file_name())
-                        .map(|n| n.to_string_lossy().to_string())
-                        .filter(|id| is_valid_session_id(id));
+                    snapshot.parent_session_id = subagent_parent_session_id(path);
+                    if snapshot
+                        .parent_session_id
+                        .as_ref()
+                        .is_some_and(|parent_id| parent_id == &snapshot.session_id)
+                        && let Some(agent_id) = path.file_stem().and_then(|item| item.to_str())
+                    {
+                        snapshot.session_id = agent_id.to_string();
+                    }
                     let meta_path = path.with_extension("meta.json");
                     if let Ok(meta_data) = fs::read_to_string(&meta_path)
                         && let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_data)
@@ -1009,6 +1081,24 @@ pub fn collect_active_sessions_multi(
 
     sessions.sort_by_key(|session| Reverse(session_rank_key(session)));
     Ok(sessions)
+}
+
+fn subagent_parent_session_id(path: &Path) -> Option<String> {
+    let mut dir = path.parent();
+    while let Some(current) = dir {
+        if current
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("subagents"))
+        {
+            return current
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .map(|name| name.to_string_lossy().to_string())
+                .filter(|id| is_valid_session_id(id));
+        }
+        dir = current.parent();
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1144,10 +1234,12 @@ fn parse_session_file_cached(
     let started_at = entry.accumulator.started_at;
     let last_token_event_at = entry.accumulator.last_token_event_at;
 
+    let now = Utc::now();
     entry
         .accumulator
         .activity_tracker
-        .apply_idle_debounce(Utc::now());
+        .note_live_file_activity(DateTime::<Utc>::from(modified), now);
+    entry.accumulator.activity_tracker.apply_idle_debounce(now);
 
     let snapshot = ClaudeSessionSnapshot {
         session_id,
@@ -1177,12 +1269,13 @@ fn parse_session_file_cached(
         cache_read_cost,
         total_api_duration_ms: 0,
         limits,
-        activity: entry.accumulator.activity_tracker.finalize(),
+        activity: entry.accumulator.activity_tracker.finalize(now),
         started_at,
         last_token_event_at,
         last_activity: modified,
         source: DataSource::Jsonl,
         source_file: path_buf,
+        background_work: crate::workflow_state::BackgroundWorkInfo::default(),
         subagents: Vec::new(),
         is_subagent: false,
         parent_session_id: None,
@@ -1488,11 +1581,11 @@ fn classify_tool_call(content: &Value) -> (ActivityKind, Option<String>) {
             (ActivityKind::ReadingFile, target)
         }
         "Bash" | "bash" | "command_execute" | "terminal" => {
-            let target = input
+            let command = input
                 .and_then(|v| v.get("command"))
                 .and_then(|v| v.as_str())
-                .map(|s| truncate_target(s, 50));
-            (ActivityKind::RunningCommand, target)
+                .unwrap_or("");
+            classify_shell_activity(command)
         }
         "AskUserQuestion" | "ask_user" => (ActivityKind::WaitingInput, None),
         "WebSearch" | "WebFetch" | "web_search" | "web_fetch" => (ActivityKind::Thinking, None),
@@ -1541,6 +1634,103 @@ fn truncate_target(s: &str, max_len: usize) -> String {
         }
         format!("{}...", &s[..end])
     }
+}
+
+fn summarize_command_for_presence(command: &str, max_len: usize) -> Option<String> {
+    let mut tokens = command
+        .split_whitespace()
+        .map(clean_command_token)
+        .filter(|token| !token.is_empty())
+        .skip_while(|token| is_noisy_command_prefix(token));
+
+    let first = tokens.next()?;
+    if is_noisy_command_token(&first) {
+        return None;
+    }
+
+    let second = tokens.next().filter(|token| !is_noisy_command_token(token));
+    if is_decorative_command(&first, second.as_deref()) {
+        return None;
+    }
+    let summary = match (first.as_str(), second.as_deref()) {
+        ("rg", Some("--files")) => "rg --files".to_string(),
+        ("cargo", Some(sub)) => format!("cargo {sub}"),
+        ("npm", Some("run")) => {
+            match tokens.next().filter(|token| !is_noisy_command_token(token)) {
+                Some(script) => format!("npm run {script}"),
+                None => "npm run".to_string(),
+            }
+        }
+        ("pnpm", Some(sub)) | ("bun", Some(sub)) | ("yarn", Some(sub)) => {
+            format!("{first} {sub}")
+        }
+        ("git", Some(sub)) => format!("git {sub}"),
+        ("cmd", Some("/c")) => "cmd /c".to_string(),
+        ("powershell", Some(sub)) | ("pwsh", Some(sub)) => format!("{first} {sub}"),
+        (_, Some(sub)) if !sub.starts_with('-') && sub.len() <= 18 => format!("{first} {sub}"),
+        _ => first,
+    };
+
+    let summary = truncate_target(&summary, max_len);
+    (!summary.trim().is_empty()).then_some(summary)
+}
+
+fn classify_shell_activity(command: &str) -> (ActivityKind, Option<String>) {
+    match summarize_command_for_presence(command, 50) {
+        Some(target) => (ActivityKind::RunningCommand, Some(target)),
+        None => (ActivityKind::Thinking, None),
+    }
+}
+
+fn clean_command_token(token: &str) -> String {
+    token
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_matches('`')
+        .trim_end_matches(';')
+        .to_string()
+}
+
+fn is_noisy_command_prefix(token: &str) -> bool {
+    if token == "&&" || token == ";" {
+        return true;
+    }
+
+    let Some((name, value)) = token.split_once('=') else {
+        return false;
+    };
+
+    !name.is_empty()
+        && !value.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn is_noisy_command_token(token: &str) -> bool {
+    token == "-"
+        || token.contains(":/")
+        || token.contains(":\\")
+        || token.starts_with("\\\\")
+        || token.starts_with('/')
+        || token.starts_with(".\\")
+        || token.starts_with("./")
+}
+
+fn is_decorative_command(command: &str, next: Option<&str>) -> bool {
+    let command = command.trim().to_ascii_lowercase();
+    if matches!(command.as_str(), "echo" | "printf" | "write-host") {
+        return true;
+    }
+
+    next.is_some_and(|token| {
+        let trimmed = token.trim();
+        !trimmed.is_empty()
+            && trimmed
+                .chars()
+                .all(|ch| matches!(ch, '=' | '-' | '_' | '*' | '#' | '.' | '·'))
+    })
 }
 
 fn is_valid_session_id(session_id: &str) -> bool {
@@ -1925,6 +2115,12 @@ fn session_recency(snapshot: &ClaudeSessionSnapshot, file_modified: SystemTime) 
         newest = ts;
     }
 
+    if let Some(ts) = snapshot.background_work.latest_signal_at
+        && ts > newest
+    {
+        newest = ts;
+    }
+
     if newest > SystemTime::UNIX_EPOCH {
         newest
     } else {
@@ -2073,6 +2269,28 @@ mod tests {
     }
 
     #[test]
+    fn subagent_parent_session_id_handles_direct_and_workflow_subagents() {
+        let parent = "ecff266d-ecec-4662-800d-7d4e6cb6323a";
+        let base = std::env::temp_dir()
+            .join(".claude")
+            .join("projects")
+            .join("repo")
+            .join(parent);
+        let direct = base.join("subagents").join("agent-a.jsonl");
+        let workflow = base
+            .join("subagents")
+            .join("workflows")
+            .join("wf_4913aa25-d45")
+            .join("agent-b.jsonl");
+
+        assert_eq!(subagent_parent_session_id(&direct).as_deref(), Some(parent));
+        assert_eq!(
+            subagent_parent_session_id(&workflow).as_deref(),
+            Some(parent)
+        );
+    }
+
+    #[test]
     fn git_branch_cache_ttl() {
         let mut cache = GitBranchCache::new(Duration::from_secs(30));
         assert_eq!(cache.get(Path::new("/nonexistent/path")), None);
@@ -2088,6 +2306,27 @@ mod tests {
         assert_eq!(snap.action_text(), "Editing");
         assert_eq!(snap.to_text(true), "Editing main.rs");
         assert_eq!(snap.to_text(false), "Editing");
+
+        let snap = ActivitySnapshot {
+            kind: ActivityKind::RunningCommand,
+            target: Some("cargo build".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(snap.to_text(true), "Running command cargo build");
+    }
+
+    #[test]
+    fn activity_file_target_hides_project_and_branch_context() {
+        let snap = ActivitySnapshot {
+            kind: ActivityKind::ReadingFile,
+            target: Some(
+                "channel-events.ts - PropertyAlpha-Agent (feat/marketplace-addtochat-liveview-management)"
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        assert_eq!(snap.to_text(true), "Reading channel-events.ts");
     }
 
     #[test]
@@ -2110,6 +2349,100 @@ mod tests {
         let (kind, target) = classify_tool_call(&content);
         assert_eq!(kind, ActivityKind::RunningCommand);
         assert_eq!(target, Some("cargo build".to_string()));
+    }
+
+    #[test]
+    fn classify_bash_tool_hides_noisy_env_path_target() {
+        let content = serde_json::json!({
+            "name": "Bash",
+            "input": {"command": "D=\"C:/Users/xt0n1/.claude/jobs/ecff266d/tmp\" - PropertyAlpha-Agent"}
+        });
+        let (kind, target) = classify_tool_call(&content);
+        assert_eq!(kind, ActivityKind::Thinking);
+        assert_eq!(target, None);
+
+        let snap = ActivitySnapshot {
+            kind,
+            target,
+            ..Default::default()
+        };
+        assert_eq!(snap.to_text(true), "Thinking");
+    }
+
+    #[test]
+    fn classify_bash_tool_hides_decorative_echo_banner() {
+        let content = serde_json::json!({
+            "name": "Bash",
+            "input": {"command": "echo ===== PropertyAlpha-Agent ====="}
+        });
+        let (kind, target) = classify_tool_call(&content);
+        assert_eq!(kind, ActivityKind::Thinking);
+        assert_eq!(target, None);
+
+        let snap = ActivitySnapshot {
+            kind,
+            target,
+            ..Default::default()
+        };
+        assert_eq!(snap.to_text(true), "Thinking");
+    }
+
+    #[test]
+    fn orphaned_pending_call_finalizes_as_idle() {
+        let old = Utc::now()
+            - chrono::Duration::seconds(ORPHANED_PENDING_CALL_SECS + IDLE_DEBOUNCE_SECS + 1);
+        let mut tracker = ActivityTracker::default();
+        tracker.register_call(
+            "call_1",
+            ActivityKind::RunningCommand,
+            Some("cargo test".to_string()),
+            Some(old),
+        );
+
+        let snapshot = tracker.finalize(Utc::now()).expect("activity");
+        assert_eq!(snapshot.kind, ActivityKind::Idle);
+        assert_eq!(snapshot.target, None);
+        assert_eq!(snapshot.pending_calls, 0);
+    }
+
+    #[test]
+    fn recent_live_file_activity_reactivates_idle_snapshot() {
+        let now = Utc::now();
+        let mut tracker = ActivityTracker::default();
+        tracker.mark_activity(
+            ActivityKind::RunningCommand,
+            Some("cargo test".to_string()),
+            Some(now - chrono::Duration::seconds(IDLE_DEBOUNCE_SECS + 1)),
+        );
+        tracker.apply_idle_debounce(now);
+        assert_eq!(
+            tracker.finalize(now).expect("idle").kind,
+            ActivityKind::Idle
+        );
+
+        tracker.note_live_file_activity(now, now);
+        let snapshot = tracker.finalize(now).expect("activity");
+        assert_eq!(snapshot.kind, ActivityKind::Thinking);
+        assert_eq!(snapshot.target, None);
+    }
+
+    #[test]
+    fn idle_debounce_does_not_refresh_effective_activity_to_now() {
+        let old = Utc::now() - chrono::Duration::seconds(IDLE_DEBOUNCE_SECS + 30);
+        let now = Utc::now();
+        let mut tracker = ActivityTracker::default();
+        tracker.mark_activity(
+            ActivityKind::RunningCommand,
+            Some("cargo test".to_string()),
+            Some(old),
+        );
+
+        tracker.apply_idle_debounce(now);
+        let snapshot = tracker.finalize(now).expect("activity");
+
+        assert_eq!(snapshot.kind, ActivityKind::Idle);
+        assert_eq!(snapshot.last_effective_signal_at, Some(old));
+        assert_ne!(snapshot.last_effective_signal_at, Some(now));
     }
 
     #[test]

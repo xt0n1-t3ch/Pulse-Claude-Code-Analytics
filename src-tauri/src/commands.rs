@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use cc_discord_presence::codex::config::{PresenceConfig as CodexPresenceConfig, PresenceSurface};
 use cc_discord_presence::codex::discord::DiscordPresence as CodexDiscordPresence;
+use cc_discord_presence::codex::discord::presence_lines as codex_presence_lines;
 use cc_discord_presence::codex::session::{
     self as codex_session, CodexSessionSnapshot, GitBranchCache as CodexGitBranchCache,
     SessionParseCache as CodexSessionParseCache,
@@ -15,6 +16,7 @@ use cc_discord_presence::codex::telemetry::service_tier::resolve_service_tier;
 use cc_discord_presence::config::PresenceConfig;
 use cc_discord_presence::cost;
 use cc_discord_presence::discord::DiscordPresence as ClaudeDiscordPresence;
+use cc_discord_presence::discord::presence_lines as claude_presence_lines;
 use cc_discord_presence::provider::Provider;
 use cc_discord_presence::session::{
     self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, Speed, latest_limits_source,
@@ -42,6 +44,7 @@ struct DiscordDisplayPrefs {
     show_activity: bool,
     show_tokens: bool,
     show_cost: bool,
+    show_systems: bool,
 }
 
 impl Default for DiscordDisplayPrefs {
@@ -53,6 +56,7 @@ impl Default for DiscordDisplayPrefs {
             show_activity: true,
             show_tokens: false,
             show_cost: false,
+            show_systems: true,
         }
     }
 }
@@ -149,6 +153,7 @@ pub fn start_background_poller() {
                 show_activity: cfg.privacy.show_activity,
                 show_tokens: cfg.privacy.show_tokens,
                 show_cost: cfg.privacy.show_cost,
+                show_systems: cfg.privacy.show_systems,
             };
         }
     }
@@ -207,15 +212,7 @@ pub fn start_background_poller() {
                         - chrono::Duration::seconds(ACTIVE_CUTOFF.as_secs() as i64);
                     let active: Vec<_> = all
                         .into_iter()
-                        .filter(|s| {
-                            if s.is_subagent {
-                                return false;
-                            }
-                            if let Some(ts) = s.last_token_event_at {
-                                return ts >= cutoff_chrono;
-                            }
-                            s.last_activity >= cutoff
-                        })
+                        .filter(|s| is_claude_presence_candidate(s, cutoff, cutoff_chrono))
                         .collect();
 
                     if force_refresh {
@@ -255,12 +252,7 @@ pub fn start_background_poller() {
                     });
                     let usage_error = usage_mgr.error_hint_with_countdown();
 
-                    claude_config.privacy.show_project_name = prefs.show_project;
-                    claude_config.privacy.show_git_branch = prefs.show_branch;
-                    claude_config.privacy.show_model = prefs.show_model;
-                    claude_config.privacy.show_activity = prefs.show_activity;
-                    claude_config.privacy.show_tokens = prefs.show_tokens;
-                    claude_config.privacy.show_cost = prefs.show_cost;
+                    apply_claude_display_prefs(&mut claude_config, &prefs);
                     let manual_plan = PresenceConfig::load_or_init()
                         .ok()
                         .and_then(|cfg| cfg.plan)
@@ -299,12 +291,7 @@ pub fn start_background_poller() {
                         codex_config = fresh;
                     }
 
-                    codex_config.privacy.show_project_name = prefs.show_project;
-                    codex_config.privacy.show_git_branch = prefs.show_branch;
-                    codex_config.privacy.show_model = prefs.show_model;
-                    codex_config.privacy.show_activity = prefs.show_activity;
-                    codex_config.privacy.show_tokens = prefs.show_tokens;
-                    codex_config.privacy.show_cost = prefs.show_cost;
+                    apply_codex_display_prefs(&mut codex_config, &prefs);
 
                     let sessions_roots = cc_discord_presence::codex::config::sessions_paths();
                     let active = codex_session::collect_active_sessions_multi(
@@ -374,6 +361,21 @@ pub fn start_background_poller() {
     });
 }
 
+fn is_claude_presence_candidate(
+    session: &ClaudeSessionSnapshot,
+    cutoff: SystemTime,
+    cutoff_chrono: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if session.is_subagent {
+        return false;
+    }
+
+    session
+        .last_token_event_at
+        .is_some_and(|ts| ts >= cutoff_chrono)
+        || session.last_activity >= cutoff
+}
+
 fn read_claude_sessions() -> Vec<ClaudeSessionSnapshot> {
     shared()
         .lock()
@@ -421,6 +423,16 @@ pub struct HealthResponse {
     pub uptime_seconds: u64,
     pub discord_status: String,
     pub discord_enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DiscordPresencePreview {
+    pub provider: String,
+    pub app_name: String,
+    pub details: String,
+    pub state: String,
+    pub has_session: bool,
+    pub duration_secs: u64,
 }
 
 #[derive(Serialize)]
@@ -514,6 +526,7 @@ pub struct SessionInfo {
     pub started_at: Option<String>,
     pub duration_secs: u64,
     pub has_thinking: bool,
+    pub workflow_label: Option<String>,
     pub subagent_count: usize,
     pub subagents: Vec<SubagentDetail>,
     pub tokens_per_sec: f64,
@@ -609,6 +622,15 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
             let ctx_window_tokens = if has_1m { 1_000_000 } else { 200_000 };
             let ctx_used_tokens = s.current_context_tokens.min(ctx_window_tokens);
             let ctx_window = if has_1m { "1M" } else { "200K" }.to_string();
+            let activity = s
+                .activity
+                .as_ref()
+                .map_or("Idle".into(), |a| a.action_text().to_string());
+            let activity = if !is_idle && activity == "Idle" {
+                "Thinking".to_string()
+            } else {
+                activity
+            };
             let subagent_details: Vec<SubagentDetail> = s
                 .subagents
                 .iter()
@@ -627,6 +649,13 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                         .map_or("Idle".into(), |a| a.action_text().to_string()),
                 })
                 .collect();
+            let background_agent_count = s.background_work.active_agent_count;
+            let subagent_count = subagent_details.len().max(background_agent_count);
+            let workflow_label = if s.background_work.workflow_active {
+                Some("ULTRACODE".to_string())
+            } else {
+                None
+            };
             let session_name = read_session_name(&s.session_id);
             SessionInfo {
                 provider: Provider::Claude.as_str().to_string(),
@@ -650,10 +679,7 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 context_used_tokens: ctx_used_tokens,
                 context_window_tokens: ctx_window_tokens,
                 branch: s.git_branch.clone(),
-                activity: s
-                    .activity
-                    .as_ref()
-                    .map_or("Idle".into(), |a| a.action_text().to_string()),
+                activity,
                 activity_target: s.activity.as_ref().and_then(|a| a.target.clone()),
                 effort: s.reasoning_effort.label().to_string(),
                 effort_explicit: s.reasoning_effort_explicit,
@@ -661,7 +687,8 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 started_at: s.started_at.map(|t| t.to_rfc3339()),
                 duration_secs,
                 has_thinking: s.has_thinking_blocks,
-                subagent_count: subagent_details.len(),
+                workflow_label,
+                subagent_count,
                 subagents: subagent_details,
                 tokens_per_sec: tps,
                 input_cost: ic,
@@ -740,6 +767,11 @@ fn build_codex_session_infos(
                 .activity
                 .as_ref()
                 .map_or("Idle".into(), |a| a.action_text().to_string());
+            let activity = if !is_idle && activity == "Idle" {
+                "Thinking".to_string()
+            } else {
+                activity
+            };
             let activity_target = s.activity.as_ref().and_then(|a| a.target.clone());
             SessionInfo {
                 provider: Provider::Codex.as_str().to_string(),
@@ -776,7 +808,8 @@ fn build_codex_session_infos(
                 started_at: s.started_at.map(|t| t.to_rfc3339()),
                 duration_secs,
                 has_thinking: s.reasoning_effort.is_some(),
-                subagent_count: 0,
+                workflow_label: None,
+                subagent_count: usize::from(s.is_subagent),
                 subagents: Vec::new(),
                 tokens_per_sec: 0.0,
                 input_cost: s.cost_breakdown.input_cost_usd * speed,
@@ -852,6 +885,7 @@ pub fn set_discord_display_prefs(
     show_activity: bool,
     show_tokens: bool,
     show_cost: bool,
+    show_systems: bool,
 ) {
     if let Ok(mut d) = shared().lock() {
         d.discord_prefs = DiscordDisplayPrefs {
@@ -861,31 +895,38 @@ pub fn set_discord_display_prefs(
             show_activity,
             show_tokens,
             show_cost,
+            show_systems,
         };
     }
-    match current_provider() {
-        Provider::Claude => {
-            if let Ok(mut cfg) = PresenceConfig::load_or_init() {
-                cfg.privacy.show_project_name = show_project;
-                cfg.privacy.show_git_branch = show_branch;
-                cfg.privacy.show_model = show_model;
-                cfg.privacy.show_activity = show_activity;
-                cfg.privacy.show_tokens = show_tokens;
-                cfg.privacy.show_cost = show_cost;
-                log_save_error("claude-display-prefs", cfg.save());
-            }
-        }
-        Provider::Codex => {
-            if let Ok(mut cfg) = CodexPresenceConfig::load_or_init() {
-                cfg.privacy.show_project_name = show_project;
-                cfg.privacy.show_git_branch = show_branch;
-                cfg.privacy.show_model = show_model;
-                cfg.privacy.show_activity = show_activity;
-                cfg.privacy.show_tokens = show_tokens;
-                cfg.privacy.show_cost = show_cost;
-                log_save_error("codex-display-prefs", cfg.save());
-            }
-        }
+    if let Ok(mut cfg) = PresenceConfig::load_or_init() {
+        apply_claude_display_prefs(
+            &mut cfg,
+            &DiscordDisplayPrefs {
+                show_project,
+                show_branch,
+                show_model,
+                show_activity,
+                show_tokens,
+                show_cost,
+                show_systems,
+            },
+        );
+        log_save_error("claude-display-prefs", cfg.save());
+    }
+    if let Ok(mut cfg) = CodexPresenceConfig::load_or_init() {
+        apply_codex_display_prefs(
+            &mut cfg,
+            &DiscordDisplayPrefs {
+                show_project,
+                show_branch,
+                show_model,
+                show_activity,
+                show_tokens,
+                show_cost,
+                show_systems,
+            },
+        );
+        log_save_error("codex-display-prefs", cfg.save());
     }
 }
 
@@ -970,6 +1011,144 @@ pub fn get_metrics() -> MetricsResponse {
 #[tauri::command]
 pub fn get_live_sessions() -> Vec<SessionInfo> {
     current_live_session_infos()
+}
+
+#[tauri::command]
+pub fn get_discord_preview() -> DiscordPresencePreview {
+    let data = shared()
+        .lock()
+        .ok()
+        .map(|data| data.clone())
+        .unwrap_or_default();
+    build_discord_presence_preview(&data)
+}
+
+fn build_discord_presence_preview(data: &CachedData) -> DiscordPresencePreview {
+    match data.active_provider {
+        Provider::Claude => {
+            let mut config = PresenceConfig::load_or_init().unwrap_or_default();
+            apply_claude_display_prefs(&mut config, &data.discord_prefs);
+            let sessions = match &data.sessions {
+                ActiveSessions::Claude(sessions) => sessions.as_slice(),
+                _ => &[],
+            };
+            build_claude_discord_preview(sessions, &config)
+        }
+        Provider::Codex => {
+            let mut config = CodexPresenceConfig::load_or_init().unwrap_or_default();
+            apply_codex_display_prefs(&mut config, &data.discord_prefs);
+            let sessions = match &data.sessions {
+                ActiveSessions::Codex(sessions) => sessions.as_slice(),
+                _ => &[],
+            };
+            build_codex_discord_preview(sessions, &config, data.codex_opencode_running)
+        }
+    }
+}
+
+fn apply_claude_display_prefs(config: &mut PresenceConfig, prefs: &DiscordDisplayPrefs) {
+    config.privacy.show_project_name = prefs.show_project;
+    config.privacy.show_git_branch = prefs.show_branch;
+    config.privacy.show_model = prefs.show_model;
+    config.privacy.show_activity = prefs.show_activity;
+    config.privacy.show_tokens = prefs.show_tokens;
+    config.privacy.show_cost = prefs.show_cost;
+    config.privacy.show_systems = prefs.show_systems;
+}
+
+fn apply_codex_display_prefs(config: &mut CodexPresenceConfig, prefs: &DiscordDisplayPrefs) {
+    config.privacy.show_project_name = prefs.show_project;
+    config.privacy.show_git_branch = prefs.show_branch;
+    config.privacy.show_model = prefs.show_model;
+    config.privacy.show_activity = prefs.show_activity;
+    config.privacy.show_tokens = prefs.show_tokens;
+    config.privacy.show_cost = prefs.show_cost;
+    config.privacy.show_systems = prefs.show_systems;
+}
+
+fn build_claude_discord_preview(
+    sessions: &[ClaudeSessionSnapshot],
+    config: &PresenceConfig,
+) -> DiscordPresencePreview {
+    let Some(session) = preferred_active_session(sessions) else {
+        return DiscordPresencePreview {
+            provider: Provider::Claude.as_str().to_string(),
+            app_name: "Claude Code".to_string(),
+            details: "Claude Code".to_string(),
+            state: "Waiting for session".to_string(),
+            has_session: false,
+            duration_secs: 0,
+        };
+    };
+
+    let limits = latest_limits_source(sessions).map(|source| &source.limits);
+    let (details, state, _tooltip) = claude_presence_lines(session, limits, None, config);
+
+    DiscordPresencePreview {
+        provider: Provider::Claude.as_str().to_string(),
+        app_name: "Claude Code".to_string(),
+        details,
+        state,
+        has_session: true,
+        duration_secs: claude_duration_secs(session),
+    }
+}
+
+fn build_codex_discord_preview(
+    sessions: &[CodexSessionSnapshot],
+    config: &CodexPresenceConfig,
+    opencode_running: bool,
+) -> DiscordPresencePreview {
+    let app_name = if opencode_running {
+        "Codex App"
+    } else {
+        "Codex"
+    };
+    let Some(session) = codex_session::preferred_active_session(sessions) else {
+        return DiscordPresencePreview {
+            provider: Provider::Codex.as_str().to_string(),
+            app_name: app_name.to_string(),
+            details: app_name.to_string(),
+            state: "Waiting for session".to_string(),
+            has_session: false,
+            duration_secs: 0,
+        };
+    };
+
+    let resolved_service_tier = resolve_service_tier();
+    let resolved_plan = PlanDetector::new().resolve_from_sessions(sessions, &config.openai_plan);
+    let effective_limits = codex_session::latest_limits_source(sessions);
+    let limits = effective_limits.as_ref().map(|item| &item.limits);
+    let (details, state) = codex_presence_lines(
+        session,
+        limits,
+        &resolved_plan,
+        &resolved_service_tier,
+        config,
+    );
+
+    DiscordPresencePreview {
+        provider: Provider::Codex.as_str().to_string(),
+        app_name: app_name.to_string(),
+        details,
+        state,
+        has_session: true,
+        duration_secs: codex_duration_secs(session),
+    }
+}
+
+fn claude_duration_secs(session: &ClaudeSessionSnapshot) -> u64 {
+    session
+        .started_at
+        .map(|started_at| (chrono::Utc::now() - started_at).num_seconds().max(0) as u64)
+        .unwrap_or(0)
+}
+
+fn codex_duration_secs(session: &CodexSessionSnapshot) -> u64 {
+    session
+        .started_at
+        .map(|started_at| (chrono::Utc::now() - started_at).num_seconds().max(0) as u64)
+        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -2586,14 +2765,16 @@ mod tests {
         build_claude_context_breakdown, build_claude_session_infos, build_codex_session_infos,
         codex_plan_key_from_tier, codex_total_input_tokens, plan_key_from_override,
     };
+    use cc_discord_presence::codex::config::PresenceConfig as TestCodexPresenceConfig;
     use cc_discord_presence::codex::cost::{PricingSource, TokenCostBreakdown};
     use cc_discord_presence::codex::session::CodexSessionSnapshot;
     use cc_discord_presence::codex::telemetry::limits::RateLimits;
     use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
+    use cc_discord_presence::config::PresenceConfig as TestClaudePresenceConfig;
     use cc_discord_presence::cost;
     use cc_discord_presence::session::{ClaudeSessionSnapshot, DataSource, ReasoningEffort, Speed};
     use std::path::PathBuf;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     fn sample_claude_snapshot(model_id: &str) -> ClaudeSessionSnapshot {
         ClaudeSessionSnapshot {
@@ -2630,6 +2811,7 @@ mod tests {
             last_activity: SystemTime::now(),
             source: DataSource::Jsonl,
             source_file: PathBuf::from("session.jsonl"),
+            background_work: cc_discord_presence::workflow_state::BackgroundWorkInfo::default(),
             subagents: Vec::new(),
             is_subagent: false,
             parent_session_id: None,
@@ -2643,6 +2825,121 @@ mod tests {
         let expected = cost::active_intro_pricing("claude-sonnet-5", chrono::Utc::now());
 
         assert_eq!(infos[0].intro_pricing, expected);
+    }
+
+    #[test]
+    fn display_prefs_are_saved_for_claude_and_codex_together() {
+        let temp =
+            std::env::temp_dir().join(format!("pulse-display-prefs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        let claude_home = temp.join("claude");
+        let codex_home = temp.join("codex");
+        std::fs::create_dir_all(&claude_home).expect("claude home");
+        std::fs::create_dir_all(&codex_home).expect("codex home");
+        unsafe {
+            std::env::set_var("CLAUDE_HOME", &claude_home);
+            std::env::set_var("CODEX_HOME", &codex_home);
+        }
+
+        super::set_discord_display_prefs(true, false, true, true, true, true, true);
+
+        let claude = TestClaudePresenceConfig::load_or_init().expect("claude config");
+        let codex = TestCodexPresenceConfig::load_or_init().expect("codex config");
+
+        assert!(!claude.privacy.show_git_branch);
+        assert!(!codex.privacy.show_git_branch);
+        assert!(claude.privacy.show_cost);
+        assert!(codex.privacy.show_cost);
+        assert!(claude.privacy.show_systems);
+        assert!(codex.privacy.show_systems);
+    }
+
+    #[test]
+    fn claude_session_info_surfaces_ultracode_background_work_safely() {
+        let mut snapshot = sample_claude_snapshot("claude-opus-4-8");
+        snapshot.background_work = cc_discord_presence::workflow_state::BackgroundWorkInfo {
+            workflow_active: true,
+            active_agent_count: 2,
+            latest_signal_at: Some(SystemTime::now()),
+        };
+
+        let infos = build_claude_session_infos(&[snapshot]);
+
+        assert_eq!(infos[0].workflow_label.as_deref(), Some("ULTRACODE"));
+        assert_eq!(infos[0].subagent_count, 2);
+        assert!(infos[0].subagents.is_empty());
+    }
+
+    #[test]
+    fn claude_session_info_does_not_call_plain_thinking_a_workflow() {
+        let mut snapshot = sample_claude_snapshot("claude-opus-4-8");
+        snapshot.has_thinking_blocks = true;
+        snapshot.background_work =
+            cc_discord_presence::workflow_state::BackgroundWorkInfo::default();
+
+        let infos = build_claude_session_infos(&[snapshot]);
+
+        assert_eq!(infos[0].workflow_label, None);
+    }
+
+    #[test]
+    fn discord_preview_uses_the_same_claude_presence_lines_as_publish() {
+        let mut snapshot = sample_claude_snapshot("claude-opus-4-8");
+        snapshot.project_name = "PropertyAlpha-Agent".to_string();
+        snapshot.git_branch = Some("feat/marketplace-addtochat-liveview-management".to_string());
+        snapshot.background_work = cc_discord_presence::workflow_state::BackgroundWorkInfo {
+            workflow_active: true,
+            active_agent_count: 1,
+            latest_signal_at: Some(SystemTime::now()),
+        };
+
+        let mut config = TestClaudePresenceConfig {
+            plan: Some("max_20x".to_string()),
+            ..Default::default()
+        };
+        super::apply_claude_display_prefs(
+            &mut config,
+            &super::DiscordDisplayPrefs {
+                show_project: true,
+                show_branch: false,
+                show_model: true,
+                show_activity: true,
+                show_tokens: true,
+                show_cost: true,
+                show_systems: true,
+            },
+        );
+
+        let preview = super::build_claude_discord_preview(&[snapshot], &config);
+
+        assert!(preview.has_session);
+        assert!(preview.details.contains("PropertyAlpha-Agent"));
+        assert!(!preview.details.contains("feat/marketplace"));
+        assert!(preview.state.contains("ULTRACODE"));
+        assert!(preview.state.contains("1 agent"));
+    }
+
+    #[test]
+    fn claude_presence_candidate_keeps_background_work_when_token_event_is_stale() {
+        let mut snapshot = sample_claude_snapshot("claude-opus-4-8");
+        snapshot.last_token_event_at = Some(chrono::Utc::now() - chrono::Duration::minutes(20));
+        snapshot.last_activity = SystemTime::now();
+        snapshot.background_work = cc_discord_presence::workflow_state::BackgroundWorkInfo {
+            workflow_active: true,
+            active_agent_count: 1,
+            latest_signal_at: Some(snapshot.last_activity),
+        };
+
+        let cutoff = SystemTime::now()
+            .checked_sub(Duration::from_secs(600))
+            .expect("cutoff");
+        let cutoff_chrono = chrono::Utc::now() - chrono::Duration::seconds(600);
+
+        assert!(super::is_claude_presence_candidate(
+            &snapshot,
+            cutoff,
+            cutoff_chrono
+        ));
     }
 
     #[test]
@@ -2676,6 +2973,18 @@ mod tests {
 
         assert!(standard[0].intro_pricing.is_none());
         assert!(!standard[0].has_inflated_tokenizer);
+    }
+
+    #[test]
+    fn codex_session_info_counts_subagent_source_safely() {
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.is_subagent = true;
+
+        let infos = build_codex_session_infos(&[snapshot], false, false);
+
+        assert_eq!(infos[0].subagent_count, 1);
+        assert!(infos[0].subagents.is_empty());
+        assert_eq!(infos[0].workflow_label, None);
     }
 
     #[test]
@@ -2786,6 +3095,7 @@ mod tests {
             last_token_event_at: None,
             last_activity: SystemTime::UNIX_EPOCH,
             source_file: PathBuf::from("C:/Users/xt0n1/.codex/sessions/sample.jsonl"),
+            is_subagent: false,
         }
     }
 

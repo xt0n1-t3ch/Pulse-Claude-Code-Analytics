@@ -32,6 +32,7 @@ function hist(id: string, project: string, parts: { input: number; output: numbe
     cache_write_cost: parts.cacheW,
     cache_read_cost: parts.cacheR,
     has_thinking: false,
+    workflow_label: null,
     subagent_count: 0,
     is_active: false,
   };

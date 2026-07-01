@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 /// Model pricing per million tokens.
-/// Update these when new models are released: https://www.anthropic.com/pricing
+/// Update these when new models are released:
+/// https://platform.claude.com/docs/en/about-claude/pricing
 ///
 /// Prompt caching pricing (5-minute TTL, default):
 ///   cache write = 1.25x base input price

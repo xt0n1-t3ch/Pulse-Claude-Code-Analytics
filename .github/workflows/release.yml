@@ -158,7 +158,7 @@ jobs:
           VERSION="${TAG#v}"
           python3 scripts/extract-changelog-section.py "$VERSION" CHANGELOG.md > release-body.md || : > release-body.md
           if [ ! -s release-body.md ] || [ "$(wc -c < release-body.md)" -lt 80 ]; then
-            echo "CHANGELOG.md section for $VERSION missing or too short; falling back to git-cliff."
+            echo "Curated CHANGELOG.md section for $VERSION missing or too short; falling back to git-cliff."
             git-cliff --config cliff.toml --tag "$TAG" --strip header --latest -o release-body.md || : > release-body.md
           fi
           if [ ! -s release-body.md ]; then
