@@ -94,7 +94,8 @@ const NEUTRAL_PROFILE: ProviderProfile = {
 };
 
 const STORAGE_KEY = "pulse-provider";
-const stored = localStorage.getItem(STORAGE_KEY);
+const storage = globalThis.localStorage;
+const stored = storage?.getItem(STORAGE_KEY) ?? null;
 const hasStoredProvider = stored === "codex" || stored === "claude";
 const initialProvider: Provider = stored === "codex" ? "codex" : "claude";
 
@@ -109,7 +110,7 @@ export const providerResolved: Writable<boolean> = writable(hasStoredProvider);
 let providerInitialized = false;
 provider.subscribe((p) => {
     try {
-        localStorage.setItem(STORAGE_KEY, p);
+        storage?.setItem(STORAGE_KEY, p);
         if (get(providerResolved)) {
             document.documentElement.setAttribute("data-provider", p);
         }

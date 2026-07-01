@@ -888,10 +888,26 @@ mod tests {
 
         let context = snapshot.context_window.expect("context window");
         assert_eq!(context.window_tokens, 258_400);
-        assert_eq!(context.used_tokens, 15_674);
-        assert_eq!(context.remaining_tokens, 242_726);
-        assert!((context.remaining_percent - 93.93).abs() < 0.05);
+        assert_eq!(context.used_tokens, 9_146);
+        assert_eq!(context.remaining_tokens, 249_254);
+        assert!((context.remaining_percent - 96.46).abs() < 0.05);
         assert_eq!(context.source, ContextWindowSource::Event);
+    }
+
+    #[test]
+    fn context_window_excludes_cached_input_from_active_fill_when_detailed_usage_is_available() {
+        let snapshot = parse_one(
+            r#"{"timestamp":"2026-02-23T03:40:38Z","type":"turn_context","payload":{"cwd":"C:\\repo\\app","model":"gpt-5.3-codex"}}
+{"timestamp":"2026-02-23T03:40:45Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":164000,"cached_input_tokens":12000,"output_tokens":1200,"total_tokens":165200},"model_context_window":400000}}}"#,
+        );
+
+        let context = snapshot.context_window.expect("context window");
+        assert_eq!(context.window_tokens, 400_000);
+        assert_eq!(context.used_tokens, 153_200);
+        assert!(
+            (context.remaining_percent - 61.7).abs() < 0.01,
+            "cached input should not inflate the active context meter"
+        );
     }
 
     #[test]

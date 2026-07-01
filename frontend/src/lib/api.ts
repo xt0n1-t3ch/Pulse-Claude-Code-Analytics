@@ -177,6 +177,8 @@ export interface DiscordDisplayPrefs {
     show_activity: boolean;
     show_tokens: boolean;
     show_cost: boolean;
+    show_limits: boolean;
+    show_context: boolean;
     show_systems: boolean;
 }
 
@@ -221,6 +223,8 @@ export function discordDisplayPrefsArgs(prefs: DiscordDisplayPrefs): Record<stri
         showActivity: prefs.show_activity,
         showTokens: prefs.show_tokens,
         showCost: prefs.show_cost,
+        showLimits: prefs.show_limits,
+        showContext: prefs.show_context,
         showSystems: prefs.show_systems,
     };
 }
