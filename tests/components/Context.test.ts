@@ -81,6 +81,7 @@ function makeSession(id: string, project: string): SessionInfo {
     started_at: null,
     duration_secs: 0,
     has_thinking: false,
+    workflow_label: null,
     subagent_count: 0,
     subagents: [],
     tokens_per_sec: 0,

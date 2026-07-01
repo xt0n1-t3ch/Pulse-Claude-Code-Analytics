@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicehash/tauri/refs/heads/dev/.schema/config.schema.json",
   "productName": "Pulse",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "identifier": "com.xt0n1.pulse",
   "build": {
     "frontendDist": "../frontend/dist"
@@ -25,11 +25,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi", "app", "dmg", "deb", "rpm", "appimage"],
+    "targets": [
+      "nsis",
+      "msi",
+      "app",
+      "dmg",
+      "deb",
+      "rpm",
+      "appimage"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "AI coding analytics & Discord Rich Presence.",
     "longDescription": "Pulse is a native, local-first analytics dashboard for Claude Code and Codex. Track cost per session, inspect context and model usage, catch runaway spend, and share your coding flow on Discord via Rich Presence.",
-    "copyright": "© 2026 xt0n1-t3ch · Apache-2.0 — attribution required (see NOTICE)",
+    "copyright": "\u00a9 2026 xt0n1-t3ch \u00b7 Apache-2.0 \u2014 attribution required (see NOTICE)",
     "publisher": "xt0n1-t3ch",
     "homepage": "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics",
     "icon": [
@@ -49,7 +57,10 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0"
+        ]
       }
     }
   }

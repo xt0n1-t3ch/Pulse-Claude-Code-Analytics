@@ -369,6 +369,7 @@ mod tests {
             service_tier: None,
             source: DataSource::Jsonl,
             source_file: PathBuf::from("/test.jsonl"),
+            background_work: crate::workflow_state::BackgroundWorkInfo::default(),
             subagents: Vec::new(),
             is_subagent: false,
             parent_session_id: None,

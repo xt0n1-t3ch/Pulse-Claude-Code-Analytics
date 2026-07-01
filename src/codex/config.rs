@@ -15,7 +15,7 @@ const DEFAULT_STALE_SECONDS: u64 = 90;
 const DEFAULT_POLL_SECONDS: u64 = 2;
 const DEFAULT_ACTIVE_STICKY_SECONDS: u64 = 3600;
 const MIN_ACTIVE_STICKY_SECONDS: u64 = 60;
-const CONFIG_SCHEMA_VERSION: u32 = 8;
+const CONFIG_SCHEMA_VERSION: u32 = 9;
 pub const DEFAULT_DISCORD_CLIENT_ID: &str = "1470480085453770854";
 pub const DEFAULT_DISCORD_DESKTOP_CLIENT_ID: &str = "1478395304624652345";
 pub const DEFAULT_DISCORD_PUBLIC_KEY: &str =
@@ -46,6 +46,7 @@ pub struct PrivacyConfig {
     pub show_limits: bool,
     pub show_activity: bool,
     pub show_activity_target: bool,
+    pub show_systems: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +284,7 @@ impl Default for PrivacyConfig {
             show_limits: true,
             show_activity: true,
             show_activity_target: true,
+            show_systems: true,
         }
     }
 }
@@ -377,10 +379,16 @@ impl PresenceConfig {
 
     fn normalize_and_migrate(&mut self) -> bool {
         let mut changed = false;
+        let previous_version = self.schema_version;
         let default_display = DisplayConfig::default();
 
         if self.schema_version < CONFIG_SCHEMA_VERSION {
             self.schema_version = CONFIG_SCHEMA_VERSION;
+            changed = true;
+        }
+
+        if previous_version < 9 {
+            self.privacy.show_systems = true;
             changed = true;
         }
 
@@ -934,7 +942,7 @@ mod tests {
         let changed = cfg.normalize_and_migrate();
 
         assert!(changed);
-        assert_eq!(cfg.schema_version, 8);
+        assert_eq!(cfg.schema_version, CONFIG_SCHEMA_VERSION);
         assert_eq!(
             cfg.discord_client_id.as_deref(),
             Some(DEFAULT_DISCORD_CLIENT_ID)

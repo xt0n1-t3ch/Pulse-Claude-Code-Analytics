@@ -92,5 +92,6 @@ fn snapshot(
         last_token_event_at: None,
         last_activity,
         source_file: std::env::temp_dir().join(format!("{session_id}.jsonl")),
+        is_subagent: false,
     }
 }

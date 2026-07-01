@@ -116,6 +116,16 @@ const helpers = vi.hoisted(() => {
       if (emptyArrayCmds.has(cmd)) return [];
       if (cmd === "get_db_size") return 0;
       if (cmd === "get_active_provider") return "claude";
+      if (cmd === "get_discord_preview") {
+        return {
+          provider: "claude",
+          app_name: "Claude Code",
+          details: "Claude Code",
+          state: "Waiting for session",
+          has_session: false,
+          duration_secs: 0,
+        };
+      }
       if (cmd === "get_reports_bundle") return emptyReportsBundle;
       if (cmd === "check_app_update") return currentUpdate;
       if (cmd === "open_app_release_page") return undefined;

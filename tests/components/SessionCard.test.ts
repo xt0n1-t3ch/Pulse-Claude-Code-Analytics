@@ -27,6 +27,7 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
     started_at: null,
     duration_secs: 60,
     has_thinking: false,
+    workflow_label: null,
     subagent_count: 0,
     subagents: [],
     tokens_per_sec: 0,
@@ -57,6 +58,20 @@ describe("SessionCard", () => {
       props: { session: makeSession({ fast: false }) },
     });
     expect(queryByText(/⚡ Fast/)).toBeNull();
+  });
+
+  it("renders singular and plural subagent badges cleanly", async () => {
+    const { getByText, queryByText, rerender } = render(SessionCard, {
+      props: { session: makeSession({ subagent_count: 1 }) },
+    });
+
+    expect(getByText("1 agent")).toBeTruthy();
+    expect(queryByText("1 agents")).toBeNull();
+
+    await rerender({
+      session: makeSession({ subagent_count: 2 }),
+    });
+    expect(getByText("2 agents")).toBeTruthy();
   });
 
   it("shows the inflated-tokenizer marker for opus 4.7+", () => {

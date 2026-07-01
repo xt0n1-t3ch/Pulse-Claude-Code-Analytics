@@ -10,8 +10,9 @@ Discord status but no logo, this is the fix.
 Before schema v3, the default config pointed `large_image_key` at a raw
 GitHub URL that was never actually committed to `origin/main`, so Discord
 resolved it to a 404 and showed nothing. Schema v3 changed the default to the
-asset key `"claude-code"` — which works _if_ an asset by that name is uploaded
-to the client-id's portal.
+asset key `"claude-code"`, but that portal asset was uploaded as a wide image
+and Discord letterboxed it inside the square activity art slot. Schema v4 uses
+the square `"large"` portal asset instead.
 
 ## Upload checklist
 
@@ -23,7 +24,8 @@ to the client-id's portal.
 
 | Asset key       | Source file                                               | Used for                      |
 | --------------- | --------------------------------------------------------- | ----------------------------- |
-| `claude-code`   | `assets/branding/claude-mascot.jpg` (or any 1024² logo)    | `large_image` (main artwork)  |
+| `large`         | square Claude mascot/logo uploaded in the default app       | `large_image` (main artwork)  |
+| `claude-code`   | legacy wide mascot asset                                    | kept for existing custom use   |
 | `thinking`      | 512² icon — Claude thinking                               | Small badge when reasoning    |
 | `reading`       | 512² icon — file/eye                                      | Small badge when reading      |
 | `editing`       | 512² icon — pencil                                        | Small badge when editing      |
@@ -36,9 +38,9 @@ to the client-id's portal.
 ### Codex apps
 
 Codex broadcasts from two separate Discord applications by surface, each of which
-needs its own upload. As of this release neither has assets uploaded yet, so the
-live Codex presence shows no large image until you add them (the in-app preview
-is unaffected — see below). Tracked in issue #36.
+needs its own upload. Live verification on 2026-06-30 showed both Codex app
+asset lists still empty, so Codex live presence has no reliable large image
+until those uploads exist. The in-app preview is unaffected — see below.
 
 | Application      | Client ID            | Portal                                                                                          | Asset key     | Source file                                            |
 | ---------------- | -------------------- | ----------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------ |

@@ -1,6 +1,6 @@
 # Claude Sonnet 5 — native support and introductory pricing
 
-Pulse v1.4.0 adds first-class handling for Claude Sonnet 5, including the time-boxed
+Pulse v1.4.x adds first-class handling for Claude Sonnet 5, including the time-boxed
 introductory pricing Anthropic launched it with.
 
 ## Official model specs
@@ -40,16 +40,14 @@ not new branching logic:
   the badge disappears automatically the moment the real-world date crosses the cutoff — no
   manual flag, no redeploy.
 
-## Cache pricing (derived, not separately published)
+## Cache pricing
 
-Anthropic did not publish a standalone cache-write/cache-read rate for Sonnet 5. Pulse
-applies the same universal cache-pricing multiplier already used for every other model in
-this file (5-minute cache write = 1.25x base input, cache read = 0.10x base input):
+Anthropic's pricing table publishes both the concrete Sonnet 5 cache prices and the general multipliers behind them: 5-minute cache writes are 1.25x input, 1-hour cache writes are 2x input, and cache hits are 0.10x input. Pulse uses the 5-minute cache-write rate for runtime Claude Code JSONL calculations because transcripts expose cache-creation tokens but not the cache TTL.
 
-| Period | Input | Output | Cache Write (5m) | Cache Read |
-|:---|---:|---:|---:|---:|
-| Introductory (through Aug 31, 2026) | $2.00 | $10.00 | $2.50 | $0.20 |
-| Standard (from Sep 1, 2026) | $3.00 | $15.00 | $3.75 | $0.30 |
+| Period | Input | Output | Cache Write (5m) | Cache Write (1h) | Cache Read |
+|:---|---:|---:|---:|---:|---:|
+| Introductory (through Aug 31, 2026) | $2.00 | $10.00 | $2.50 | $4.00 | $0.20 |
+| Standard (from Sep 1, 2026) | $3.00 | $15.00 | $3.75 | $6.00 | $0.30 |
 
 The standard-period figures are identical to the flat Sonnet rate Pulse already used before
 this release.
@@ -107,5 +105,5 @@ frontend performs zero date arithmetic or price hardcoding for this feature.
 ## Sources
 
 - Launch note: <https://www.anthropic.com/news/claude-sonnet-5>
-- Anthropic pricing: <https://platform.claude.com/docs/en/about-claude/pricing>
+- Anthropic pricing and cache multipliers: <https://platform.claude.com/docs/en/about-claude/pricing>
 - System card: <https://www.anthropic.com/claude-sonnet-5-system-card>

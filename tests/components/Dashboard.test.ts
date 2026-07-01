@@ -69,6 +69,7 @@ function hist(id: string, project: string, cost: number): HistoricalSession {
     cache_write_cost: cost * 0.2,
     cache_read_cost: cost * 0.1,
     has_thinking: false,
+    workflow_label: null,
     subagent_count: 0,
     is_active: false,
   };

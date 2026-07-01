@@ -86,7 +86,15 @@ impl SessionActivitySnapshot {
             && let Some(target) = &self.target
             && !target.trim().is_empty()
         {
-            return format!("{} {}", self.action_text(), target);
+            let target = match self.kind {
+                SessionActivityKind::ReadingFile | SessionActivityKind::EditingFile => {
+                    crate::activity_target::readable_file_target(target, 72)
+                }
+                _ => target.trim().to_string(),
+            };
+            if !target.is_empty() {
+                return format!("{} {}", self.action_text(), target);
+            }
         }
         self.action_text().to_string()
     }
@@ -161,6 +169,7 @@ pub struct CodexSessionSnapshot {
     pub last_token_event_at: Option<DateTime<Utc>>,
     pub last_activity: SystemTime,
     pub source_file: PathBuf,
+    pub is_subagent: bool,
 }
 
 impl CodexSessionSnapshot {
@@ -700,6 +709,7 @@ mod tests {
             last_token_event_at: None,
             last_activity: SystemTime::now(),
             source_file: PathBuf::from("policy.jsonl"),
+            is_subagent: false,
         }
     }
 
@@ -776,12 +786,13 @@ mod tests {
     }
 
     #[test]
-    fn session_meta_ignores_non_string_source_values() {
+    fn session_meta_detects_subagent_source_without_exposing_source_object() {
         let snapshot = parse_one(
             r#"{"type":"session_meta","payload":{"id":"subagent","cwd":"C:\\repo\\app","originator":"codex_vscode","source":{"subagent":{"thread_spawn":{"depth":1}}}}}"#,
         );
         assert_eq!(snapshot.originator.as_deref(), Some("codex_vscode"));
         assert_eq!(snapshot.source, None);
+        assert!(snapshot.is_subagent);
         assert!(!snapshot.is_desktop_surface());
     }
 
@@ -837,6 +848,19 @@ mod tests {
         let activity = snapshot.activity.expect("activity");
         assert_eq!(activity.kind, SessionActivityKind::RunningCommand);
         assert_eq!(activity.target.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn shell_command_echo_banner_is_thinking_not_running_noise() {
+        let snapshot = parse_one(
+            r#"{"type":"session_meta","payload":{"id":"shell-echo","cwd":"C:\\repo\\app"}}
+{"timestamp":"2026-02-23T03:40:45Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"echo ===== PropertyAlpha-Agent =====\"}","call_id":"call_shell"}}"#,
+        );
+
+        let activity = snapshot.activity.expect("activity");
+        assert_eq!(activity.kind, SessionActivityKind::Thinking);
+        assert_eq!(activity.target, None);
+        assert_eq!(activity.to_text(true), "Thinking");
     }
 
     #[test]
@@ -964,6 +988,20 @@ mod tests {
         assert_eq!(activity.kind, SessionActivityKind::EditingFile);
         assert_eq!(activity.target.as_deref(), Some("session.rs"));
         assert_eq!(activity.to_text(true), "Editing session.rs");
+    }
+
+    #[test]
+    fn activity_file_target_hides_project_and_branch_context() {
+        let activity = SessionActivitySnapshot {
+            kind: SessionActivityKind::ReadingFile,
+            target: Some(
+                "channel-events.ts - PropertyAlpha-Agent (feat/marketplace-addtochat-liveview-management)"
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        assert_eq!(activity.to_text(true), "Reading channel-events.ts");
     }
 
     #[test]
@@ -1133,6 +1171,7 @@ mod tests {
             last_token_event_at: Utc.timestamp_opt(1000, 0).single(),
             last_activity: now,
             source_file: PathBuf::from("older.jsonl"),
+            is_subagent: false,
         };
         let newer = CodexSessionSnapshot {
             session_id: "newer".to_string(),
@@ -1188,6 +1227,7 @@ mod tests {
             last_token_event_at: Utc.timestamp_opt(2000, 0).single(),
             last_activity: now,
             source_file: PathBuf::from("newer.jsonl"),
+            is_subagent: false,
         };
 
         let sessions = vec![older, newer];

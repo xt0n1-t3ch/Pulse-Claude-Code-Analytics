@@ -32,6 +32,6 @@ export function rpArtFor(provider: string, appName?: string | null): RpArt {
     large: claudeCode,
     small: null,
     largeText: "Claude Code",
-    assetKey: "claude-code",
+    assetKey: "large",
   };
 }

@@ -157,6 +157,6 @@ npm --prefix frontend run build
 | Doc | Where | Purpose |
 |:---|:---|:---|
 | [README.md](../README.md) | repo root | Install, feature overview, daemon + GUI quick start |
-| [CHANGELOG.md](../CHANGELOG.md) | repo root | Release history (config + DB schema v3) |
+| [CHANGELOG.md](../CHANGELOG.md) | repo root | Release history (Claude config schema v5, Codex config schema v9, DB schema v3) |
 | [docs/index.md](../docs/index.md) | `docs/` | Documentation hub: architecture, Discord assets, reasoning-effort variants, analyzers, cost calculation |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | repo root | Contribution + local-dev workflow |

@@ -27,6 +27,7 @@ function makeSession(id: string, project: string, cost: number): SessionInfo {
     started_at: "2026-05-28T10:00:00Z",
     duration_secs: 600,
     has_thinking: true,
+    workflow_label: null,
     subagent_count: 0,
     subagents: [],
     tokens_per_sec: 42,
@@ -65,6 +66,7 @@ function hist(id: string, project: string, cost: number): HistoricalSession {
     cache_write_cost: cost * 0.2,
     cache_read_cost: cost * 0.1,
     has_thinking: false,
+    workflow_label: null,
     subagent_count: 1,
     is_active: false,
   };

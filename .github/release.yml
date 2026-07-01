@@ -1,5 +1,5 @@
-# GitHub auto-generated release notes — categorized by label / commit prefix.
-# Used when `generate_release_notes: true` on softprops/action-gh-release.
+# Fallback category map for GitHub-generated release notes.
+# The release workflow publishes the curated CHANGELOG.md section first; generated notes stay disabled unless the workflow is changed deliberately.
 changelog:
   exclude:
     labels:

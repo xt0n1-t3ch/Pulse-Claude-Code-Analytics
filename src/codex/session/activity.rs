@@ -33,6 +33,7 @@ pub(super) struct SessionAccumulator {
     started_at: Option<DateTime<Utc>>,
     originator: Option<String>,
     source: Option<String>,
+    is_subagent: bool,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     approval_policy: Option<String>,
@@ -258,6 +259,14 @@ impl SessionAccumulator {
                 }
                 if self.source.is_none() {
                     self.source = str_at(payload, &["source"]);
+                }
+                if payload
+                    .get("source")
+                    .and_then(|source| source.get("subagent"))
+                    .and_then(|subagent| subagent.get("thread_spawn"))
+                    .is_some()
+                {
+                    self.is_subagent = true;
                 }
             }
             Some("turn_context") => {
@@ -518,6 +527,7 @@ impl SessionAccumulator {
             last_token_event_at: self.last_token_event_at,
             last_activity,
             source_file: jsonl_path.to_path_buf(),
+            is_subagent: self.is_subagent,
         })
     }
 }
@@ -543,9 +553,16 @@ fn classify_shell_command(arguments: &str) -> PendingActivity {
         };
     }
 
+    if let Some(target) = summarize_command_for_presence(&command, 72) {
+        return PendingActivity {
+            kind: SessionActivityKind::RunningCommand,
+            target: Some(target),
+        };
+    }
+
     PendingActivity {
-        kind: SessionActivityKind::RunningCommand,
-        target: Some(summarize_command_for_presence(&command, 72)),
+        kind: SessionActivityKind::Thinking,
+        target: None,
     }
 }
 
@@ -582,7 +599,10 @@ fn classify_custom_tool_call(name: &str, input: &str) -> PendingActivity {
 
 fn web_search_target(payload: &Value) -> Option<String> {
     if let Some(query) = str_at(payload, &["action", "query"]) {
-        return Some(truncate_activity_target(format!("web search: {query}"), 72));
+        return Some(crate::activity_target::truncate_activity_target(
+            format!("web search: {query}"),
+            72,
+        ));
     }
 
     if let Some(query) = payload
@@ -592,7 +612,10 @@ fn web_search_target(payload: &Value) -> Option<String> {
         .and_then(|items| items.first())
         .and_then(Value::as_str)
     {
-        return Some(truncate_activity_target(format!("web search: {query}"), 72));
+        return Some(crate::activity_target::truncate_activity_target(
+            format!("web search: {query}"),
+            72,
+        ));
     }
 
     Some("web search".to_string())
@@ -610,18 +633,21 @@ fn shell_command_text(arguments: &str) -> String {
     arguments.to_string()
 }
 
-fn summarize_command_for_presence(command: &str, max_len: usize) -> String {
+fn summarize_command_for_presence(command: &str, max_len: usize) -> Option<String> {
     let tokens: Vec<String> = command
         .split_whitespace()
         .map(clean_shell_token)
         .filter(|token| !token.is_empty())
         .collect();
     if tokens.is_empty() {
-        return truncate_activity_target(command.trim().to_string(), max_len);
+        return None;
     }
 
     let first = tokens[0].clone();
     let second = tokens.get(1).cloned();
+    if is_decorative_command(&first, second.as_deref()) || is_noisy_command_token(&first) {
+        return None;
+    }
     let summary = match (first.as_str(), second.as_deref()) {
         ("rg", Some("--files")) => "rg --files".to_string(),
         ("cargo", Some(sub)) => format!("cargo {sub}"),
@@ -636,7 +662,9 @@ fn summarize_command_for_presence(command: &str, max_len: usize) -> String {
         _ => first,
     };
 
-    truncate_activity_target(summary, max_len)
+    Some(crate::activity_target::truncate_activity_target(
+        summary, max_len,
+    ))
 }
 
 fn clean_shell_token(token: &str) -> String {
@@ -646,6 +674,31 @@ fn clean_shell_token(token: &str) -> String {
         .trim_matches('\'')
         .trim_matches('`')
         .to_string()
+}
+
+fn is_decorative_command(command: &str, next: Option<&str>) -> bool {
+    let command = command.trim().to_ascii_lowercase();
+    if matches!(command.as_str(), "echo" | "printf" | "write-host") {
+        return true;
+    }
+
+    next.is_some_and(|token| {
+        let trimmed = token.trim();
+        !trimmed.is_empty()
+            && trimmed
+                .chars()
+                .all(|ch| matches!(ch, '=' | '-' | '_' | '*' | '#' | '.' | '·'))
+    })
+}
+
+fn is_noisy_command_token(token: &str) -> bool {
+    token == "-"
+        || token.contains(":/")
+        || token.contains(":\\")
+        || token.starts_with("\\\\")
+        || token.starts_with('/')
+        || token.starts_with(".\\")
+        || token.starts_with("./")
 }
 
 fn extract_view_image_target(arguments: &str) -> Option<String> {
@@ -839,32 +892,6 @@ fn extract_patch_target(input: &str) -> Option<String> {
     None
 }
 
-fn truncate_activity_target(input: String, max_len: usize) -> String {
-    if input.len() <= max_len {
-        return input;
-    }
-    if max_len <= 3 {
-        return input[..max_len].to_string();
-    }
-    format!("{}...", &input[..max_len - 3])
-}
-
 fn sanitize_file_target(raw: &str, max_len: usize) -> String {
-    let cleaned = raw
-        .trim()
-        .trim_matches('"')
-        .trim_matches('\'')
-        .trim_matches('`');
-    if cleaned.is_empty() {
-        return String::new();
-    }
-
-    let path = Path::new(cleaned);
-    if let Some(file_name) = path.file_name().and_then(|item| item.to_str())
-        && !file_name.trim().is_empty()
-    {
-        return truncate_activity_target(file_name.trim().to_string(), max_len);
-    }
-
-    truncate_activity_target(cleaned.to_string(), max_len)
+    crate::activity_target::readable_file_target(raw, max_len)
 }

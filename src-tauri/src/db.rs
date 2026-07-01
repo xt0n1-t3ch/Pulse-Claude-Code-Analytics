@@ -1148,6 +1148,7 @@ mod tests {
             started_at: None,
             duration_secs: 0,
             has_thinking: false,
+            workflow_label: None,
             subagent_count: 0,
             subagents: Vec::new(),
             tokens_per_sec: 0.0,

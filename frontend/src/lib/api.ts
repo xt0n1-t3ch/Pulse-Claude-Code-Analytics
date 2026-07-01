@@ -77,6 +77,7 @@ export interface SessionInfo {
     started_at: string | null;
     duration_secs: number;
     has_thinking: boolean;
+    workflow_label: string | null;
     subagent_count: number;
     subagents: SubagentDetail[];
     tokens_per_sec: number;
@@ -176,6 +177,16 @@ export interface DiscordDisplayPrefs {
     show_activity: boolean;
     show_tokens: boolean;
     show_cost: boolean;
+    show_systems: boolean;
+}
+
+export interface DiscordPresencePreview {
+    provider: string;
+    app_name: string;
+    details: string;
+    state: string;
+    has_session: boolean;
+    duration_secs: number;
 }
 
 export function getHealth(): Promise<HealthResponse> {
@@ -190,6 +201,10 @@ export function getLiveSessions(): Promise<SessionInfo[]> {
     return invoke("get_live_sessions");
 }
 
+export function getDiscordPreview(): Promise<DiscordPresencePreview> {
+    return invoke("get_discord_preview");
+}
+
 export function getRateLimits(): Promise<RateLimitInfo | null> {
     return invoke("get_rate_limits");
 }
@@ -198,12 +213,24 @@ export function getDiscordUser(): Promise<DiscordUserInfo | null> {
     return invoke("get_discord_user");
 }
 
+export function discordDisplayPrefsArgs(prefs: DiscordDisplayPrefs): Record<string, boolean> {
+    return {
+        showProject: prefs.show_project,
+        showBranch: prefs.show_branch,
+        showModel: prefs.show_model,
+        showActivity: prefs.show_activity,
+        showTokens: prefs.show_tokens,
+        showCost: prefs.show_cost,
+        showSystems: prefs.show_systems,
+    };
+}
+
 export function setDiscordEnabled(enabled: boolean): Promise<void> {
     return invoke("set_discord_enabled", { enabled });
 }
 
 export function setDiscordDisplayPrefs(prefs: DiscordDisplayPrefs): Promise<void> {
-    return invoke("set_discord_display_prefs", { ...prefs });
+    return invoke("set_discord_display_prefs", discordDisplayPrefsArgs(prefs));
 }
 
 export function getPlanInfo(): Promise<PlanInfo> {

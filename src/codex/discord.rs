@@ -532,6 +532,9 @@ pub fn presence_lines(
     if config.privacy.show_cost && session.total_cost_usd > 0.0 {
         state_parts.push(format_cost(session.total_cost_usd));
     }
+    if config.privacy.show_systems {
+        state_parts.extend(system_state_parts(session));
+    }
     if let Some(usage) = usage_state_part(session, config.privacy.show_tokens) {
         state_parts.push(usage);
     }
@@ -548,6 +551,19 @@ pub fn presence_lines(
     };
     let state = compact_join_prioritized(&state_parts, 128, fallback, " • ");
     (truncate_for_limit(&details, 128), state)
+}
+
+fn system_state_parts(session: &CodexSessionSnapshot) -> Vec<String> {
+    let mut parts = Vec::new();
+    if let Some(activity) = session.activity.as_ref()
+        && activity.pending_calls > 0
+    {
+        parts.push("Tool active".to_string());
+    }
+    if session.is_subagent {
+        parts.push("1 agent".to_string());
+    }
+    parts
 }
 
 fn token_state_part(session: &CodexSessionSnapshot) -> Option<String> {
@@ -837,6 +853,7 @@ mod tests {
             activity: None,
             last_activity: SystemTime::now(),
             source_file: PathBuf::from("session.jsonl"),
+            is_subagent: false,
         }
     }
 
@@ -968,6 +985,79 @@ mod tests {
             details,
             "Running command rg --files - project-alpha (feature/main)"
         );
+    }
+
+    #[test]
+    fn branch_toggle_and_systems_toggle_control_codex_presence_lines() {
+        let mut session = sample_session();
+        session.activity = Some(crate::codex::session::SessionActivitySnapshot {
+            kind: crate::codex::session::SessionActivityKind::ReadingFile,
+            target: Some("channel-events.ts - project-alpha (feature/main)".to_string()),
+            observed_at: None,
+            last_active_at: None,
+            last_effective_signal_at: None,
+            idle_candidate_at: None,
+            pending_calls: 1,
+        });
+        session.is_subagent = true;
+        let plan = resolved_plan_pro();
+        let service_tier = resolved_service_tier(false);
+        let mut config = PresenceConfig::default();
+        config.privacy.show_git_branch = false;
+
+        let (details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert!(details.starts_with("Reading channel-events.ts"));
+        assert!(details.contains("project-alpha"));
+        assert!(!details.contains("feature/main"));
+        assert!(state.contains("Tool active"));
+        assert!(state.contains("1 agent"));
+
+        config.privacy.show_systems = false;
+        let (_details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+        assert!(!state.contains("Tool active"));
+        assert!(!state.contains("workflow active"));
+        assert!(!state.contains("agent"));
+    }
+
+    #[test]
+    fn thinking_activity_does_not_render_as_workflow_system_status() {
+        let mut session = sample_session();
+        session.activity = Some(crate::codex::session::SessionActivitySnapshot {
+            kind: crate::codex::session::SessionActivityKind::Thinking,
+            target: None,
+            observed_at: None,
+            last_active_at: None,
+            last_effective_signal_at: None,
+            idle_candidate_at: None,
+            pending_calls: 0,
+        });
+        let plan = resolved_plan_pro();
+        let service_tier = resolved_service_tier(false);
+        let config = PresenceConfig::default();
+
+        let (_details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert!(!state.contains("workflow active"));
+        assert!(!state.contains("Tool active"));
     }
 
     #[test]

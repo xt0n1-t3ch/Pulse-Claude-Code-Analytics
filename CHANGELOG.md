@@ -2,12 +2,42 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.4.2] — 2026-07-01
+
+v1.4.2 is the release-hygiene patch for the v1.4.1 lane. It keeps the published v1.4.1 tag immutable, then ships the final Discord Rich Presence contract fixes, Sonnet 5 copy corrections, docs cleanup, and dependency sweep as a new patch release. No public API was removed.
+
+### Fixed
+
+- Discord display preferences now cross the Tauri IPC boundary with the correct camelCase argument contract. Turning off Git branch persists to the Claude and Codex config files and removes the branch from both the real Discord broadcaster and the Pulse Live Preview. (#46)
+- Pulse Live Preview now renders the backend Rich Presence payload instead of reconstructing Discord details/state in Svelte, so preview and live Discord use the same source of truth. (#46)
+- Plain Claude thinking blocks no longer render as a fake workflow systems label. `ULTRACODE` is shown only for a live workflow record, and stale workflow records expire instead of keeping Discord stuck after the workflow ends. (#46)
+- Codex systems copy uses `Tool active` for pending tool calls and avoids workflow wording for normal thinking activity. (#46)
+
+### Changed
+
+- README and docs now introduce Sonnet 5 with Anthropic's published introductory cache prices: 5-minute writes at $2.50 / MTok, 1-hour writes at $4.00 / MTok, and cache reads at $0.20 / MTok during the introductory window. (#46)
+- The release notes template remains CHANGELOG-driven, so GitHub Releases use the curated section for the tag instead of stale generated wording. (#46)
+- Local runtime proof artifacts under `target/evidence` were treated as scratch output and removed from the workspace cleanup path. (#46)
+
+### Validated
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --jobs 1 -- -D warnings`
+- `cargo test --workspace --jobs 1`
+- `npm --prefix frontend run check`
+- `npm --prefix frontend run test`
+- `npm --prefix frontend run build`
+- `cd src-tauri && cargo tauri build`
+
 ## [1.4.1] — 2026-06-30
 
 v1.4.1 fixes a real, live-confirmed data-staleness bug in every "how full is my context right now" UI surface, and adds explicit aggregation-scope labels to the Dashboard and Costs cost totals. No public API was removed.
 
 ### Fixed
 
+- Claude Discord Rich Presence uses the square `large` Developer Portal asset again instead of the letterboxed `claude-code` upload, so the activity card art fills the square slot instead of rendering as a tiny wide mascot inside black padding.
+- Discord field toggles now apply through one shared contract for Claude and Codex. Turning off Git branch removes the branch from both the live broadcaster and the Pulse preview; the new Systems toggle exposes only safe generic signals such as `ULTRACODE`, `Tool active`, or `1 agent`.
+- Claude and Codex activity labels suppress decorative/noisy shell commands such as `echo =====` banners and temp-path launchers. Live Claude transcript writes also reactivate stale `Idle` activity, so active sessions update back to `Thinking` instead of staying stuck.
 - The Context Window header card, the "Per-session utilization" panel, and the Sessions/Dashboard "ctx-1m" badge all read a field (`max_turn_api_input`) that is a monotonically-increasing, never-resetting all-time peak across a session's entire lifetime -- including across compactions. A session that hit a high-water mark before an auto-compaction kept showing that historical peak, and the resulting false "Context is 100% full -- CRITICAL" recommendation, indefinitely after the compaction had actually emptied the context back out. Confirmed live: `get_context_breakdown` returned `used_tokens: 999486` for a real, currently-running session whose own JSONL transcript recorded a `compact_boundary` event with `compactMetadata.postTokens: 25500` 2.5 hours earlier. (#44)
 - `src/session.rs` now detects `{"type":"system","subtype":"compact_boundary"}` events (which Claude Code writes on every compaction, with the authoritative post-compaction size in `compactMetadata.postTokens`) and tracks a new field, `current_context_tokens`, separately from `max_turn_api_input`. The new field resets to the real post-compaction size at each boundary and otherwise tracks the most recent turn's total -- the field every "current state" UI surface now reads. `max_turn_api_input` is untouched and keeps its correct, separate role: detecting whether a session has ever required the 1M context tier (a lifetime question that should never decrease). See [docs/context-tracking.md](docs/context-tracking.md). (#44)
 
@@ -25,7 +55,7 @@ v1.4.0 adds native Claude Sonnet 5 support, including a generic, date-driven int
 - A reusable introductory-pricing mechanism in `src/cost.rs`: clock-injected `cost::model_pricing_at(model_id, now)` (the real source of truth; `cost::model_pricing(model_id)` stays the existing real-clock entry point) and `cost::active_intro_pricing(model_id, now)`, which returns the active promo only while genuinely inside its window — `None` both for models with no promo and once a promo's window has closed. Adding the next time-boxed launch is a registry addition, not new branching logic. (#43)
 - Sessions and Dashboard live-session cards show a new "Intro Pricing" badge sourced entirely from the backend (`SessionInfo.intro_pricing`) — exact discounted rate, human end date, and the rate it reverts to, with zero date math or hardcoded pricing in the frontend. (#43)
 - `cost::has_inflated_tokenizer()` now also covers Sonnet 5 (Anthropic-confirmed new tokenizer, ~1.0-1.35x more tokens than Sonnet 4.6 for the same input, permanent and independent of the promo window) — the existing Sessions/Dashboard `⚠` marker now triggers for it too. (#43)
-- [docs/sonnet-5.md](docs/sonnet-5.md): official specs, the introductory-pricing mechanism, the derived (not separately published) cache rate, and the 1M-context bug fix below.
+- [docs/sonnet-5.md](docs/sonnet-5.md): official specs, the introductory-pricing mechanism, Anthropic's published cache multipliers, and the 1M-context bug fix below.
 
 ### Fixed
 
@@ -33,7 +63,7 @@ v1.4.0 adds native Claude Sonnet 5 support, including a generic, date-driven int
 
 ### Notes
 
-- The cache write/read rate for Sonnet 5's introductory window is not separately published by Anthropic; Pulse derives it from the same 1.25x/0.10x-of-input formula already applied to every other model tier in `src/cost.rs`. See [docs/sonnet-5.md](docs/sonnet-5.md) for the full reasoning.
+- Anthropic publishes prompt-caching rates as multipliers of the input price: 5-minute writes at 1.25x, 1-hour writes at 2x, and cache hits at 0.10x. Pulse applies those official multipliers to Sonnet 5's introductory input rate and uses the 5-minute write rate for Claude Code JSONL because transcripts do not expose cache TTL. See [docs/sonnet-5.md](docs/sonnet-5.md).
 - This environment's `pulse` crate build (Tauri's full dependency tree) needs `cargo --jobs 2` under tight available memory, or the build can hit `STATUS_COMMIT_LIMIT_EXCEEDED` and cascade into unrelated-looking errors in transitive dependencies (`icu_properties`, `idna`). Documented in [tests/index.md](tests/index.md) — environment characteristic, not a code defect.
 
 ## [1.3.0] — 2026-06-16
@@ -109,7 +139,7 @@ v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Win
 
 - Claude Opus 4.8 support: pricing, 1M-context GA, and inflated-tokenizer detection.
 - Fast mode: per-turn `usage.speed` detection, 2x speed-aware pricing, and a fast marker in Sessions, Discord presence, and the HTML report.
-- OpenAI Codex GPT-5.5 pricing ($5 / $30 per Mtok) and Codex Fast mode (`/fast`) cost: GPT-5.5 bills at 2.5x and GPT-5.4 at 2x the standard rate.
+- OpenAI Codex GPT-5.5 pricing ($5 / $30 per MTok) and Codex Fast mode (`/fast`) cost: GPT-5.5 bills at 2.5x and GPT-5.4 at 2x the standard rate.
 - Per-session Context Window: a session selector, per-session token usage, and tiered compaction hints.
 - Single-scan Reports: `get_reports_bundle` loads every analyzer from one JSONL scan.
 - Centralized test suite: Vitest unit, integration, and component plus Rust integration; see [tests/index.md](../tests/index.md).
@@ -144,6 +174,10 @@ v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Win
 - **Local-first** — SQLite at `~/.claude/pulse-analytics.db`, zero telemetry.
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
+[1.4.2]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.2
+[1.4.1]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.1
+[1.4.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.0
+[1.3.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.3.0
 [1.2.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.2.0
 [1.1.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.1.0
 [1.0.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.0.0
