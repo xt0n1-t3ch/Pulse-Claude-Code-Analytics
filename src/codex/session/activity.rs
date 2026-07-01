@@ -15,10 +15,10 @@ use crate::codex::telemetry::limits::{
 
 use super::is_working_activity_kind;
 use super::parser::{
-    build_context_window_snapshot, compute_session_delta, last_cached_input_tokens_from_info,
-    last_input_tokens_from_info, last_output_tokens_from_info, last_tokens_from_info, max_datetime,
-    model_context_window_from_info, parse_utc_timestamp, str_at,
-    total_cached_input_tokens_from_info, total_input_tokens_from_info,
+    active_context_tokens_from_info, build_context_window_snapshot, compute_session_delta,
+    last_cached_input_tokens_from_info, last_input_tokens_from_info, last_output_tokens_from_info,
+    last_tokens_from_info, max_datetime, model_context_window_from_info, parse_utc_timestamp,
+    str_at, total_cached_input_tokens_from_info, total_input_tokens_from_info,
     total_output_tokens_from_info, total_tokens_from_info, turn_context_reasoning_effort,
 };
 use super::{
@@ -47,6 +47,7 @@ pub(super) struct SessionAccumulator {
     last_input_tokens: Option<u64>,
     last_cached_input_tokens: Option<u64>,
     last_output_tokens: Option<u64>,
+    active_context_tokens: Option<u64>,
     model_context_window: Option<u64>,
     limits: RateLimits,
     rate_limit_envelopes: HashMap<String, RateLimitEnvelope>,
@@ -330,6 +331,9 @@ impl SessionAccumulator {
                         let last_output = self.last_output_tokens.unwrap_or(0);
                         self.last_turn_tokens = Some(last_input + last_output);
                     }
+                    if let Some(active_context_tokens) = active_context_tokens_from_info(payload) {
+                        self.active_context_tokens = Some(active_context_tokens);
+                    }
                     if let Some(context_window) = model_context_window_from_info(payload) {
                         self.model_context_window = Some(context_window);
                     }
@@ -492,7 +496,7 @@ impl SessionAccumulator {
         let context_window = build_context_window_snapshot(
             self.model.as_deref(),
             self.model_context_window,
-            self.last_turn_tokens,
+            self.active_context_tokens.or(self.last_turn_tokens),
             self.session_total_tokens,
         );
 
