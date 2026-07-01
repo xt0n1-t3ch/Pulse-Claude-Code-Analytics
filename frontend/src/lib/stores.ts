@@ -20,7 +20,9 @@ import {
 } from "./api";
 
 function persisted<T>(key: string, initial: T): Writable<T> {
-  const stored = localStorage.getItem(key);
+  const storage = globalThis.localStorage;
+  if (!storage) return writable<T>(initial);
+  const stored = storage.getItem(key);
   const parsed = stored !== null ? (JSON.parse(stored) as T) : initial;
   const value =
     typeof initial === "object" &&
@@ -32,7 +34,7 @@ function persisted<T>(key: string, initial: T): Writable<T> {
       ? ({ ...initial, ...parsed } as T)
       : parsed;
   const store = writable<T>(value);
-  store.subscribe((v) => localStorage.setItem(key, JSON.stringify(v)));
+  store.subscribe((v) => storage.setItem(key, JSON.stringify(v)));
   return store;
 }
 
