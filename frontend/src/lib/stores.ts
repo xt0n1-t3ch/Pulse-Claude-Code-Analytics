@@ -54,6 +54,8 @@ export interface DiscordPreviewSettings {
   showActivity: boolean;
   showTokens: boolean;
   showCost: boolean;
+  showLimits: boolean;
+  showContext: boolean;
   showSystems: boolean;
 }
 
@@ -64,6 +66,8 @@ export const discordPreview = persisted<DiscordPreviewSettings>("pulse-discord-p
   showActivity: true,
   showTokens: false,
   showCost: false,
+  showLimits: true,
+  showContext: true,
   showSystems: true,
 });
 
@@ -79,6 +83,8 @@ discordPreview.subscribe((s) => {
     show_activity: s.showActivity,
     show_tokens: s.showTokens,
     show_cost: s.showCost,
+    show_limits: s.showLimits,
+    show_context: s.showContext,
     show_systems: s.showSystems,
   })
     .then(refreshDiscordPresencePreview)

@@ -32,6 +32,8 @@ describe("tauri IPC mock through the api layer", () => {
       show_activity: true,
       show_tokens: true,
       show_cost: true,
+      show_limits: false,
+      show_context: false,
       show_systems: true,
     })).toEqual({
       showProject: true,
@@ -40,6 +42,8 @@ describe("tauri IPC mock through the api layer", () => {
       showActivity: true,
       showTokens: true,
       showCost: true,
+      showLimits: false,
+      showContext: false,
       showSystems: true,
     });
   });

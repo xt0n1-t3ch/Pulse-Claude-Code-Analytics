@@ -535,7 +535,11 @@ pub fn presence_lines(
     if config.privacy.show_systems {
         state_parts.extend(system_state_parts(session));
     }
-    if let Some(usage) = usage_state_part(session, config.privacy.show_tokens) {
+    if let Some(usage) = usage_state_part(
+        session,
+        config.privacy.show_tokens,
+        config.privacy.show_context,
+    ) {
         state_parts.push(usage);
     }
     if config.privacy.show_limits
@@ -593,12 +597,16 @@ fn context_state_part(session: &CodexSessionSnapshot) -> Option<String> {
     ))
 }
 
-fn usage_state_part(session: &CodexSessionSnapshot, show_tokens: bool) -> Option<String> {
+fn usage_state_part(
+    session: &CodexSessionSnapshot,
+    show_tokens: bool,
+    show_context: bool,
+) -> Option<String> {
     let mut parts = Vec::new();
     if show_tokens && let Some(tokens) = token_state_part(session) {
         parts.push(tokens);
     }
-    if let Some(context) = context_state_part(session) {
+    if show_context && let Some(context) = context_state_part(session) {
         parts.push(context);
     }
     if parts.is_empty() {
@@ -937,6 +945,26 @@ mod tests {
         assert!(state.contains("Ctx 6% used"));
         assert!(state.contains("5h 64%"));
         assert!(state.contains("7d 18%"));
+    }
+
+    #[test]
+    fn context_toggle_hides_context_usage_without_hiding_tokens() {
+        let session = sample_session();
+        let mut config = PresenceConfig::default();
+        config.privacy.show_context = false;
+        let plan = resolved_plan_pro();
+        let service_tier = resolved_service_tier(false);
+
+        let (_details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert!(state.contains("30.0K tok"));
+        assert!(!state.contains("Ctx"));
     }
 
     #[test]
