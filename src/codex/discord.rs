@@ -382,7 +382,7 @@ fn display_branding<'a>(
         PresenceSurface::Default => SurfaceDisplay {
             large_image_key: &config.display.large_image_key,
             large_text: &config.display.large_text,
-            idle_details: "Codex CLI / Codex VS Code Extension",
+            idle_details: "Codex CLI",
         },
         PresenceSurface::Desktop => SurfaceDisplay {
             large_image_key: &config.display.desktop_large_image_key,
@@ -1239,6 +1239,15 @@ mod tests {
         assert_eq!(branding.large_image_key, "codex-app");
         assert_eq!(branding.large_text, "Codex App");
         assert_eq!(branding.idle_details, "Codex App");
+    }
+
+    #[test]
+    fn default_idle_branding_is_explicit_codex_cli() {
+        let config = PresenceConfig::default();
+        let branding = display_branding(PresenceSurface::Default, &config);
+
+        assert_eq!(branding.idle_details, "Codex CLI");
+        assert!(!branding.idle_details.contains("VS Code"));
     }
 
     #[test]
