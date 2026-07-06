@@ -184,9 +184,7 @@ impl PlanDetector {
                 raw_plan_type: signal.raw_plan_type,
             };
             self.last_telemetry = Some(resolved.clone());
-            if let Err(err) = save_plan_cache(&resolved) {
-                tracing::warn!(error = %err, "failed to save Codex plan cache");
-            }
+            let _ = save_plan_cache(&resolved);
             return resolved;
         }
 

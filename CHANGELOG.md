@@ -2,6 +2,37 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.5.0] — 2026-07-05
+
+v1.5.0 brings the Codex Discord Rich Presence overhaul into Pulse. Codex App, Codex CLI, VS Code Extension, and OpenCode-hosted Codex sessions now share one cost/cache/context contract and keep the correct Discord identity while active or idle. No public API was removed.
+
+### Added
+
+- Codex GPT-5.4 and GPT-5.5 context metadata in Pulse: 400K visible OAuth cap, API-only 1,050,000-token metadata, 272K input threshold, 128K output reserve, and Fast cost multipliers of 2x / 2.5x.
+- Codex Rich Presence preview asset beside the Claude preview in the README, using the same polished Discord card language.
+- Desktop Codex App process detection for Pulse background polling so the live preview can distinguish a real desktop Codex surface from generic CLI idle.
+
+### Changed
+
+- Pulse now consumes the synced Codex runtime contract for model pricing, context windows, cache savings, surface branding, and idle display instead of reconstructing fallback values in the GUI layer.
+- Codex Live Preview keeps the official `Codex App` identity and `Idling...` state when the desktop app is the last or current surface.
+- Report generation and Codex cost summaries now share the same cache/context accounting used by the standalone Codex runtime.
+
+### Fixed
+
+- Codex App activity no longer collapses to the generic `Codex CLI / Codex VS Code Extension` Discord card immediately after a short idle gap.
+- OAuth Codex context display no longer advertises the API-only 1M context path to typical ChatGPT/Codex users; Pulse caps the visible runtime at 400K while retaining API metadata separately.
+
+### Validated
+
+- `cargo fmt --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo build --release`
+- `cargo build -p pulse --release`
+- `npm --prefix frontend run check`
+- `npm --prefix frontend run build`
+
 ## [1.4.2] — 2026-07-01
 
 v1.4.2 is the release-hygiene patch for the v1.4.1 lane. It keeps the published v1.4.1 tag immutable, then ships the final Discord Rich Presence contract fixes, Sonnet 5 copy corrections, docs cleanup, and dependency sweep as a new patch release. No public API was removed.
@@ -174,6 +205,7 @@ v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Win
 - **Local-first** — SQLite at `~/.claude/pulse-analytics.db`, zero telemetry.
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
+[1.5.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.0
 [1.4.2]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.2
 [1.4.1]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.1
 [1.4.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.0

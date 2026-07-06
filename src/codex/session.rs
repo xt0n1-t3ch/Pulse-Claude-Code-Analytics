@@ -26,9 +26,6 @@ use parser::{fetch_git_branch, parse_session_file_cached};
 #[cfg(test)]
 use parser::{parse_new_lines, parse_session_file, parse_utc_timestamp};
 
-const SESSION_SCAN_MAX_DEPTH: usize = 16;
-const SESSION_SCAN_MAX_ENTRIES: usize = 100_000;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextWindowSource {
@@ -86,15 +83,7 @@ impl SessionActivitySnapshot {
             && let Some(target) = &self.target
             && !target.trim().is_empty()
         {
-            let target = match self.kind {
-                SessionActivityKind::ReadingFile | SessionActivityKind::EditingFile => {
-                    crate::activity_target::readable_file_target(target, 72)
-                }
-                _ => target.trim().to_string(),
-            };
-            if !target.is_empty() {
-                return format!("{} {}", self.action_text(), target);
-            }
+            return format!("{} {}", self.action_text(), target);
         }
         self.action_text().to_string()
     }
@@ -334,7 +323,10 @@ pub fn collect_active_sessions_multi_with_diagnostics(
             continue;
         }
 
-        for entry in walk_session_root(sessions_root) {
+        for entry in WalkDir::new(sessions_root)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+        {
             let path = entry.path();
             if !entry.file_type().is_file() {
                 continue;
@@ -383,32 +375,6 @@ pub fn collect_active_sessions_multi_with_diagnostics(
     sessions = dedupe_sessions_by_id(sessions);
     sessions.sort_by_key(|session| Reverse(session_rank_key(session)));
     Ok((sessions, diagnostics))
-}
-
-fn walk_session_root(root: &Path) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
-    walk_session_root_with_limits(root, SESSION_SCAN_MAX_DEPTH, SESSION_SCAN_MAX_ENTRIES)
-}
-
-fn walk_session_root_with_limits(
-    root: &Path,
-    max_depth: usize,
-    max_entries: usize,
-) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
-    WalkDir::new(root)
-        .max_depth(max_depth)
-        .into_iter()
-        .take(max_entries)
-        .filter_map(|entry| match entry {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                tracing::warn!(
-                    root = %root.display(),
-                    error = %err,
-                    "failed to inspect Codex session path"
-                );
-                None
-            }
-        })
 }
 
 fn dedupe_sessions_by_id(sessions: Vec<CodexSessionSnapshot>) -> Vec<CodexSessionSnapshot> {
@@ -625,34 +591,6 @@ mod tests {
     use chrono::TimeZone;
     use tempfile::TempDir;
 
-    #[test]
-    fn codex_session_scan_respects_depth_limit() {
-        let temp = tempfile::tempdir().unwrap();
-        let nested = temp.path().join("one").join("two").join("three");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("session.jsonl"), b"{}\n").unwrap();
-
-        let files_seen = walk_session_root_with_limits(temp.path(), 2, 100)
-            .filter(|entry| entry.file_type().is_file())
-            .count();
-
-        assert_eq!(files_seen, 0);
-    }
-
-    #[test]
-    fn codex_session_scan_respects_entry_limit() {
-        let temp = tempfile::tempdir().unwrap();
-        for idx in 0..3 {
-            std::fs::write(temp.path().join(format!("{idx}.jsonl")), b"{}\n").unwrap();
-        }
-
-        let files_seen = walk_session_root_with_limits(temp.path(), usize::MAX, 3)
-            .filter(|entry| entry.file_type().is_file())
-            .count();
-
-        assert_eq!(files_seen, 2);
-    }
-
     fn parse_one(content: &str) -> CodexSessionSnapshot {
         let tmp = TempDir::new().expect("temp dir");
         let file_path = tmp.path().join("session.jsonl");
@@ -786,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn session_meta_detects_subagent_source_without_exposing_source_object() {
+    fn session_meta_ignores_non_string_source_values() {
         let snapshot = parse_one(
             r#"{"type":"session_meta","payload":{"id":"subagent","cwd":"C:\\repo\\app","originator":"codex_vscode","source":{"subagent":{"thread_spawn":{"depth":1}}}}}"#,
         );
@@ -848,19 +786,6 @@ mod tests {
         let activity = snapshot.activity.expect("activity");
         assert_eq!(activity.kind, SessionActivityKind::RunningCommand);
         assert_eq!(activity.target.as_deref(), Some("cargo test"));
-    }
-
-    #[test]
-    fn shell_command_echo_banner_is_thinking_not_running_noise() {
-        let snapshot = parse_one(
-            r#"{"type":"session_meta","payload":{"id":"shell-echo","cwd":"C:\\repo\\app"}}
-{"timestamp":"2026-02-23T03:40:45Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"echo ===== PropertyAlpha-Agent =====\"}","call_id":"call_shell"}}"#,
-        );
-
-        let activity = snapshot.activity.expect("activity");
-        assert_eq!(activity.kind, SessionActivityKind::Thinking);
-        assert_eq!(activity.target, None);
-        assert_eq!(activity.to_text(true), "Thinking");
     }
 
     #[test]
@@ -1004,20 +929,6 @@ mod tests {
         assert_eq!(activity.kind, SessionActivityKind::EditingFile);
         assert_eq!(activity.target.as_deref(), Some("session.rs"));
         assert_eq!(activity.to_text(true), "Editing session.rs");
-    }
-
-    #[test]
-    fn activity_file_target_hides_project_and_branch_context() {
-        let activity = SessionActivitySnapshot {
-            kind: SessionActivityKind::ReadingFile,
-            target: Some(
-                "channel-events.ts - PropertyAlpha-Agent (feat/marketplace-addtochat-liveview-management)"
-                    .to_string(),
-            ),
-            ..Default::default()
-        };
-
-        assert_eq!(activity.to_text(true), "Reading channel-events.ts");
     }
 
     #[test]

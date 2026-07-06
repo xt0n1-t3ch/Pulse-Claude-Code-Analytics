@@ -24,16 +24,16 @@ The open-source **Claude Code &amp; OpenAI Codex analytics dashboard** + **Disco
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.4.2</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.5.0</h2>
 
 - **Claude Sonnet 5, priced correctly** — Pulse now treats `claude-sonnet-5` as a native 1M-context model with Anthropic's introductory $2 input / $10 output per MTok window through August 31, 2026, then automatically reverts to standard $3 / $15 pricing on September 1, 2026.
 - **Published cache pricing** — Sonnet 5 cache rates are sourced from Anthropic's visible pricing table: 5-minute writes at $2.50 / MTok, 1-hour writes at $4.00 / MTok, and cache reads at $0.20 / MTok during the introductory window.
 - **Discord controls that match Discord** — the Live Preview and live broadcaster now share one backend payload. Turning off Git branch removes it from the real Discord card, not just the preview.
 - **Cleaner Rich Presence activity** — noisy shell banners, temp launcher paths, stale `Idle` states, and plain-thinking pseudo-workflow labels are suppressed. Active work reads like `Reading channel-events.ts`; systems context stays short and safe.
 - **Safe Systems signal** — the optional Systems toggle can show `ULTRACODE`, `Tool active`, or `1 agent` without exposing subagent names, private paths, prompts, or branch names.
-- **Release hygiene** — v1.4.2 is the immutable-release-safe follow-up to v1.4.1: docs, release notes, pricing copy, dependency bumps, tests, and local runtime proof now agree.
+- **Codex presence parity** — v1.5.0 brings sticky Codex App idle branding, GPT-5.4/GPT-5.5 context economics, cache savings, and a polished Codex Rich Presence preview beside Claude.
 
-**[Download v1.4.2](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.5.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
@@ -72,9 +72,18 @@ Written in **Rust** + **Tauri 2** + **Svelte 5**. ≈ 12 MB on Windows, ≈ 18 M
 
 <br><br>
 
-<img src="assets/screenshots/discord-rich-presence.png" alt="Pulse Discord Rich Presence on a profile — Claude Code activity with model, reasoning effort, tokens, cost, plan usage" width="420">
-
-<sub><b>Discord Rich Presence</b> — live model · reasoning effort · project · branch · tokens · cost · 5 h / 7 d / Extra Usage, right on your profile.</sub>
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/discord-rich-presence.png" alt="Pulse Discord Rich Presence on a profile — Claude Code activity with model, reasoning effort, tokens, cost, plan usage" width="420"><br>
+      <sub><b>Claude Code Rich Presence</b><br>Live model · reasoning effort · project · branch · tokens · cost · 5 h / 7 d / Extra Usage.</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/codex-discord-rich-presence.png" alt="Pulse Discord Rich Presence on a profile — Codex App activity with GPT model, cost, tokens, context, and quota windows" width="420"><br>
+      <sub><b>Codex App Rich Presence</b><br>Sticky Codex App branding · GPT-5 family · cache · cost · context · quota windows.</sub>
+    </td>
+  </tr>
+</table>
 
 </div>
 

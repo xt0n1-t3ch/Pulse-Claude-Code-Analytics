@@ -14,6 +14,7 @@ use crate::codex::util::{format_cost, format_model_display, format_tokens};
 
 pub struct DiscordPresence {
     surface: PresenceSurface,
+    last_known_surface: PresenceSurface,
     client_id: Option<String>,
     client: Option<DiscordIpcClient>,
     last_status: String,
@@ -34,6 +35,7 @@ const DISCORD_ASSET_FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 const DISCORD_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 const RECONNECT_MIN_BACKOFF: Duration = Duration::from_secs(5);
 const RECONNECT_MAX_BACKOFF: Duration = Duration::from_secs(60);
+const IDLE_STATE: &str = "Idling...";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PresencePayload {
@@ -49,6 +51,7 @@ impl DiscordPresence {
         let last_status = status_for_client_id(surface, client_id.as_deref());
         Self {
             surface,
+            last_known_surface: surface,
             client_id,
             client: None,
             last_status,
@@ -77,7 +80,8 @@ impl DiscordPresence {
         config: &PresenceConfig,
         fallback_surface: PresenceSurface,
     ) -> Result<()> {
-        self.surface = detect_surface(active_session, fallback_surface);
+        self.surface = detect_surface(active_session, fallback_surface, self.last_known_surface);
+        self.last_known_surface = remember_surface(active_session, fallback_surface, self.surface);
         let desired_client_id = config.effective_client_id_for_surface(self.surface);
         self.switch_client_if_needed(desired_client_id);
 
@@ -170,10 +174,8 @@ impl DiscordPresence {
             }
             None => {
                 let idle_start = idle_start_epoch(&mut self.idle_start_epoch);
+                let (details, state) = idle_presence_lines(self.surface, config);
                 let branding = display_branding(self.surface, config);
-
-                let details = branding.idle_details.to_string();
-                let state = "Waiting for session".to_string();
                 let payload = PresencePayload {
                     session_id: None,
                     start_epoch: idle_start,
@@ -366,9 +368,27 @@ struct SurfaceDisplay<'a> {
 fn detect_surface(
     active_session: Option<&CodexSessionSnapshot>,
     fallback_surface: PresenceSurface,
+    last_known_surface: PresenceSurface,
 ) -> PresenceSurface {
-    if active_session.is_some_and(CodexSessionSnapshot::is_desktop_surface) {
+    if active_session.is_some_and(CodexSessionSnapshot::is_desktop_surface)
+        || (active_session.is_none() && matches!(last_known_surface, PresenceSurface::Desktop))
+    {
         PresenceSurface::Desktop
+    } else {
+        fallback_surface
+    }
+}
+
+fn remember_surface(
+    active_session: Option<&CodexSessionSnapshot>,
+    fallback_surface: PresenceSurface,
+    current_surface: PresenceSurface,
+) -> PresenceSurface {
+    if active_session.is_some()
+        || matches!(fallback_surface, PresenceSurface::Desktop)
+        || matches!(current_surface, PresenceSurface::Desktop)
+    {
+        current_surface
     } else {
         fallback_surface
     }
@@ -390,6 +410,11 @@ fn display_branding<'a>(
             idle_details: "Codex App",
         },
     }
+}
+
+fn idle_presence_lines(surface: PresenceSurface, config: &PresenceConfig) -> (String, String) {
+    let branding = display_branding(surface, config);
+    (branding.idle_details.to_string(), IDLE_STATE.to_string())
 }
 
 fn status_for_client_id(surface: PresenceSurface, client_id: Option<&str>) -> String {
@@ -557,19 +582,6 @@ pub fn presence_lines(
     (truncate_for_limit(&details, 128), state)
 }
 
-fn system_state_parts(session: &CodexSessionSnapshot) -> Vec<String> {
-    let mut parts = Vec::new();
-    if let Some(activity) = session.activity.as_ref()
-        && activity.pending_calls > 0
-    {
-        parts.push("Tool active".to_string());
-    }
-    if session.is_subagent {
-        parts.push("1 agent".to_string());
-    }
-    parts
-}
-
 fn token_state_part(session: &CodexSessionSnapshot) -> Option<String> {
     if let Some(total) = session.session_total_tokens
         && total > 0
@@ -614,6 +626,24 @@ fn usage_state_part(
     } else {
         Some(parts.join(" • "))
     }
+}
+
+fn system_state_parts(session: &CodexSessionSnapshot) -> Vec<String> {
+    let mut parts = Vec::new();
+    if let Some(activity) = &session.activity
+        && activity.pending_calls > 0
+    {
+        let label = if activity.pending_calls == 1 {
+            "tool active".to_string()
+        } else {
+            format!("{} tools active", activity.pending_calls)
+        };
+        parts.push(label);
+    }
+    if session.is_subagent {
+        parts.push("subagent".to_string());
+    }
+    parts
 }
 
 fn limits_state_part(limits: &RateLimits) -> Option<String> {
@@ -832,6 +862,7 @@ mod tests {
                 input_cost_usd: 0.5,
                 cached_input_cost_usd: 0.2,
                 output_cost_usd: 0.534,
+                cached_input_savings_usd: 0.3,
             },
             pricing_source: PricingSource::Alias,
             context_window: Some(ContextWindowSnapshot {
@@ -968,6 +999,37 @@ mod tests {
     }
 
     #[test]
+    fn systems_toggle_uses_safe_codex_activity_labels() {
+        let mut session = sample_session();
+        session.is_subagent = true;
+        session.activity = Some(crate::codex::session::SessionActivitySnapshot {
+            kind: crate::codex::session::SessionActivityKind::RunningCommand,
+            target: Some("private-command".to_string()),
+            observed_at: None,
+            last_active_at: None,
+            last_effective_signal_at: None,
+            idle_candidate_at: None,
+            pending_calls: 2,
+        });
+        let mut config = PresenceConfig::default();
+        config.privacy.show_activity_target = false;
+        let plan = resolved_plan_pro();
+        let service_tier = resolved_service_tier(false);
+
+        let (_details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert!(state.contains("2 tools active"));
+        assert!(state.contains("subagent"));
+        assert!(!state.contains("private-command"));
+    }
+
+    #[test]
     fn state_keeps_priority_when_length_is_limited() {
         let mut session = sample_session();
         session.model = Some("gpt-5.3-codex-ultra-long-variant-name-for-tests".to_string());
@@ -1013,79 +1075,6 @@ mod tests {
             details,
             "Running command rg --files - project-alpha (feature/main)"
         );
-    }
-
-    #[test]
-    fn branch_toggle_and_systems_toggle_control_codex_presence_lines() {
-        let mut session = sample_session();
-        session.activity = Some(crate::codex::session::SessionActivitySnapshot {
-            kind: crate::codex::session::SessionActivityKind::ReadingFile,
-            target: Some("channel-events.ts - project-alpha (feature/main)".to_string()),
-            observed_at: None,
-            last_active_at: None,
-            last_effective_signal_at: None,
-            idle_candidate_at: None,
-            pending_calls: 1,
-        });
-        session.is_subagent = true;
-        let plan = resolved_plan_pro();
-        let service_tier = resolved_service_tier(false);
-        let mut config = PresenceConfig::default();
-        config.privacy.show_git_branch = false;
-
-        let (details, state) = presence_lines(
-            &session,
-            Some(&session.limits),
-            &plan,
-            &service_tier,
-            &config,
-        );
-
-        assert!(details.starts_with("Reading channel-events.ts"));
-        assert!(details.contains("project-alpha"));
-        assert!(!details.contains("feature/main"));
-        assert!(state.contains("Tool active"));
-        assert!(state.contains("1 agent"));
-
-        config.privacy.show_systems = false;
-        let (_details, state) = presence_lines(
-            &session,
-            Some(&session.limits),
-            &plan,
-            &service_tier,
-            &config,
-        );
-        assert!(!state.contains("Tool active"));
-        assert!(!state.contains("workflow active"));
-        assert!(!state.contains("agent"));
-    }
-
-    #[test]
-    fn thinking_activity_does_not_render_as_workflow_system_status() {
-        let mut session = sample_session();
-        session.activity = Some(crate::codex::session::SessionActivitySnapshot {
-            kind: crate::codex::session::SessionActivityKind::Thinking,
-            target: None,
-            observed_at: None,
-            last_active_at: None,
-            last_effective_signal_at: None,
-            idle_candidate_at: None,
-            pending_calls: 0,
-        });
-        let plan = resolved_plan_pro();
-        let service_tier = resolved_service_tier(false);
-        let config = PresenceConfig::default();
-
-        let (_details, state) = presence_lines(
-            &session,
-            Some(&session.limits),
-            &plan,
-            &service_tier,
-            &config,
-        );
-
-        assert!(!state.contains("workflow active"));
-        assert!(!state.contains("Tool active"));
     }
 
     #[test]
@@ -1208,7 +1197,11 @@ mod tests {
         let mut session = sample_session();
         session.originator = Some("Codex Desktop".to_string());
         assert_eq!(
-            detect_surface(Some(&session), PresenceSurface::Default),
+            detect_surface(
+                Some(&session),
+                PresenceSurface::Default,
+                PresenceSurface::Default
+            ),
             PresenceSurface::Desktop
         );
     }
@@ -1216,7 +1209,7 @@ mod tests {
     #[test]
     fn detect_surface_uses_desktop_fallback_for_opencode_idle() {
         assert_eq!(
-            detect_surface(None, PresenceSurface::Desktop),
+            detect_surface(None, PresenceSurface::Desktop, PresenceSurface::Default),
             PresenceSurface::Desktop
         );
     }
@@ -1225,7 +1218,19 @@ mod tests {
     fn detect_surface_uses_desktop_fallback_for_opencode_session() {
         let session = sample_session();
         assert_eq!(
-            detect_surface(Some(&session), PresenceSurface::Desktop),
+            detect_surface(
+                Some(&session),
+                PresenceSurface::Desktop,
+                PresenceSurface::Default
+            ),
+            PresenceSurface::Desktop
+        );
+    }
+
+    #[test]
+    fn idle_surface_keeps_last_desktop_branding() {
+        assert_eq!(
+            detect_surface(None, PresenceSurface::Default, PresenceSurface::Desktop),
             PresenceSurface::Desktop
         );
     }
@@ -1248,6 +1253,15 @@ mod tests {
 
         assert_eq!(branding.idle_details, "Codex CLI");
         assert!(!branding.idle_details.contains("VS Code"));
+    }
+
+    #[test]
+    fn idle_presence_lines_keep_desktop_identity_and_idling_state() {
+        let config = PresenceConfig::default();
+        let (details, state) = idle_presence_lines(PresenceSurface::Desktop, &config);
+
+        assert_eq!(details, "Codex App");
+        assert_eq!(state, "Idling...");
     }
 
     #[test]

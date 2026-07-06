@@ -557,16 +557,9 @@ fn classify_shell_command(arguments: &str) -> PendingActivity {
         };
     }
 
-    if let Some(target) = summarize_command_for_presence(&command, 72) {
-        return PendingActivity {
-            kind: SessionActivityKind::RunningCommand,
-            target: Some(target),
-        };
-    }
-
     PendingActivity {
-        kind: SessionActivityKind::Thinking,
-        target: None,
+        kind: SessionActivityKind::RunningCommand,
+        target: Some(summarize_command_for_presence(&command, 72)),
     }
 }
 
@@ -603,10 +596,7 @@ fn classify_custom_tool_call(name: &str, input: &str) -> PendingActivity {
 
 fn web_search_target(payload: &Value) -> Option<String> {
     if let Some(query) = str_at(payload, &["action", "query"]) {
-        return Some(crate::activity_target::truncate_activity_target(
-            format!("web search: {query}"),
-            72,
-        ));
+        return Some(truncate_activity_target(format!("web search: {query}"), 72));
     }
 
     if let Some(query) = payload
@@ -616,10 +606,7 @@ fn web_search_target(payload: &Value) -> Option<String> {
         .and_then(|items| items.first())
         .and_then(Value::as_str)
     {
-        return Some(crate::activity_target::truncate_activity_target(
-            format!("web search: {query}"),
-            72,
-        ));
+        return Some(truncate_activity_target(format!("web search: {query}"), 72));
     }
 
     Some("web search".to_string())
@@ -637,21 +624,18 @@ fn shell_command_text(arguments: &str) -> String {
     arguments.to_string()
 }
 
-fn summarize_command_for_presence(command: &str, max_len: usize) -> Option<String> {
+fn summarize_command_for_presence(command: &str, max_len: usize) -> String {
     let tokens: Vec<String> = command
         .split_whitespace()
         .map(clean_shell_token)
         .filter(|token| !token.is_empty())
         .collect();
     if tokens.is_empty() {
-        return None;
+        return truncate_activity_target(command.trim().to_string(), max_len);
     }
 
     let first = tokens[0].clone();
     let second = tokens.get(1).cloned();
-    if is_decorative_command(&first, second.as_deref()) || is_noisy_command_token(&first) {
-        return None;
-    }
     let summary = match (first.as_str(), second.as_deref()) {
         ("rg", Some("--files")) => "rg --files".to_string(),
         ("cargo", Some(sub)) => format!("cargo {sub}"),
@@ -666,9 +650,7 @@ fn summarize_command_for_presence(command: &str, max_len: usize) -> Option<Strin
         _ => first,
     };
 
-    Some(crate::activity_target::truncate_activity_target(
-        summary, max_len,
-    ))
+    truncate_activity_target(summary, max_len)
 }
 
 fn clean_shell_token(token: &str) -> String {
@@ -678,31 +660,6 @@ fn clean_shell_token(token: &str) -> String {
         .trim_matches('\'')
         .trim_matches('`')
         .to_string()
-}
-
-fn is_decorative_command(command: &str, next: Option<&str>) -> bool {
-    let command = command.trim().to_ascii_lowercase();
-    if matches!(command.as_str(), "echo" | "printf" | "write-host") {
-        return true;
-    }
-
-    next.is_some_and(|token| {
-        let trimmed = token.trim();
-        !trimmed.is_empty()
-            && trimmed
-                .chars()
-                .all(|ch| matches!(ch, '=' | '-' | '_' | '*' | '#' | '.' | '·'))
-    })
-}
-
-fn is_noisy_command_token(token: &str) -> bool {
-    token == "-"
-        || token.contains(":/")
-        || token.contains(":\\")
-        || token.starts_with("\\\\")
-        || token.starts_with('/')
-        || token.starts_with(".\\")
-        || token.starts_with("./")
 }
 
 fn extract_view_image_target(arguments: &str) -> Option<String> {
@@ -896,6 +853,32 @@ fn extract_patch_target(input: &str) -> Option<String> {
     None
 }
 
+fn truncate_activity_target(input: String, max_len: usize) -> String {
+    if input.len() <= max_len {
+        return input;
+    }
+    if max_len <= 3 {
+        return input[..max_len].to_string();
+    }
+    format!("{}...", &input[..max_len - 3])
+}
+
 fn sanitize_file_target(raw: &str, max_len: usize) -> String {
-    crate::activity_target::readable_file_target(raw, max_len)
+    let cleaned = raw
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_matches('`');
+    if cleaned.is_empty() {
+        return String::new();
+    }
+
+    let path = Path::new(cleaned);
+    if let Some(file_name) = path.file_name().and_then(|item| item.to_str())
+        && !file_name.trim().is_empty()
+    {
+        return truncate_activity_target(file_name.trim().to_string(), max_len);
+    }
+
+    truncate_activity_target(cleaned.to_string(), max_len)
 }

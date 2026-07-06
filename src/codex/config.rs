@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -381,8 +381,8 @@ impl PresenceConfig {
 
     fn normalize_and_migrate(&mut self) -> bool {
         let mut changed = false;
-        let previous_version = self.schema_version;
         let default_display = DisplayConfig::default();
+        let previous_version = self.schema_version;
 
         if self.schema_version < CONFIG_SCHEMA_VERSION {
             self.schema_version = CONFIG_SCHEMA_VERSION;
@@ -514,10 +514,8 @@ pub fn sessions_paths() -> Vec<PathBuf> {
 
     #[cfg(windows)]
     {
-        if include_wsl_session_roots() {
-            for candidate in windows_wsl_sessions_candidates() {
-                push_unique_path(&mut ordered, &mut seen, candidate);
-            }
+        for candidate in windows_wsl_sessions_candidates() {
+            push_unique_path(&mut ordered, &mut seen, candidate);
         }
     }
 
@@ -551,24 +549,6 @@ pub fn global_state_paths() -> Vec<PathBuf> {
                 &mut seen,
                 home.join(".codex-global-state.json"),
             );
-        }
-    }
-
-    ordered
-}
-
-/// Paths to the Codex CLI/App `config.toml`, where the active `service_tier`
-/// (Fast mode) is persisted by current Codex versions. The legacy
-/// `default-service-tier` key in `.codex-global-state.json` is retained as a
-/// fallback for older App installs (see `service_tier::resolve_service_tier`).
-pub fn config_toml_paths() -> Vec<PathBuf> {
-    let mut ordered: Vec<PathBuf> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-
-    push_unique_path(&mut ordered, &mut seen, codex_home().join("config.toml"));
-    for sessions_root in sessions_paths() {
-        if let Some(home) = sessions_root.parent() {
-            push_unique_path(&mut ordered, &mut seen, home.join("config.toml"));
         }
     }
 
@@ -787,19 +767,6 @@ fn wsl_windows_sessions_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-#[cfg(windows)]
-fn parse_bool_flag(value: Option<&str>) -> bool {
-    value
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
-}
-
-#[cfg(windows)]
-fn include_wsl_session_roots() -> bool {
-    parse_bool_flag(env::var("CC_PRESENCE_INCLUDE_WSL").ok().as_deref())
-}
-
 #[cfg(all(unix, not(windows)))]
 fn running_in_wsl() -> bool {
     if env::var_os("WSL_DISTRO_NAME").is_some() {
@@ -836,7 +803,7 @@ fn windows_wsl_sessions_candidates() -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn windows_wsl_distro_names() -> Vec<String> {
-    let output = crate::util::silent_command("wsl.exe")
+    let output = Command::new("wsl.exe")
         .args(["-l", "-q"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -858,7 +825,7 @@ fn windows_wsl_distro_names() -> Vec<String> {
 
 #[cfg(windows)]
 fn wsl_home_for_distro(distro: &str) -> Option<String> {
-    let output = crate::util::silent_command("wsl.exe")
+    let output = Command::new("wsl.exe")
         .args(["-d", distro, "--", "sh", "-lc", "printf %s \"$HOME\""])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -944,7 +911,7 @@ mod tests {
         let changed = cfg.normalize_and_migrate();
 
         assert!(changed);
-        assert_eq!(cfg.schema_version, CONFIG_SCHEMA_VERSION);
+        assert_eq!(cfg.schema_version, 9);
         assert_eq!(
             cfg.discord_client_id.as_deref(),
             Some(DEFAULT_DISCORD_CLIENT_ID)
@@ -1072,18 +1039,5 @@ mod tests {
         apply_plan_preset(&mut plan, 0);
         assert_eq!(plan.mode, OpenAiPlanMode::Auto);
         assert_eq!(plan.tier, OpenAiPlanTier::Plus);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn wsl_roots_are_explicit_opt_in() {
-        assert!(!parse_bool_flag(None));
-        assert!(!parse_bool_flag(Some("")));
-        assert!(!parse_bool_flag(Some("0")));
-        assert!(!parse_bool_flag(Some("false")));
-        assert!(parse_bool_flag(Some("1")));
-        assert!(parse_bool_flag(Some("true")));
-        assert!(parse_bool_flag(Some("YES")));
-        assert!(parse_bool_flag(Some("on")));
     }
 }
