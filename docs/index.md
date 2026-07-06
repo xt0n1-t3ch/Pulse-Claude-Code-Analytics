@@ -20,6 +20,13 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
+## v1.5.1 docs refresh
+
+- Kept the mirrored Codex runtime aligned with standalone Codex Discord Rich Presence v1.7.1 WSL behavior: Windows WSL transcript roots are opt-in and use hidden subprocess launchers when enabled.
+- Added sync-script safeguards so future Codex mirror pulls keep `wsl.exe` behind `CC_PRESENCE_INCLUDE_WSL=1` / `CODEX_PRESENCE_INCLUDE_WSL=1` instead of reintroducing visible console windows.
+- Added an upstream contract test covering hidden WSL launchers and native-default session discovery.
+- Kept the release as a patch bump: v1.5.1 ships a Windows runtime safety fix and Codex mirror freshness update without changing the public app contract.
+
 ## v1.4.2 docs refresh
 
 - Finished the Discord Rich Presence settings contract: the Live Preview and broadcaster now read the same backend payload, and the Git branch toggle persists through the Tauri IPC argument names the backend actually receives.
@@ -67,7 +74,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.4.2**
+- App release: **v1.5.1**
 - Schema: **Claude config v5 / Codex config v9** (DB remains v3)
-- Last docs refresh: 2026-07-01 (Discord Rich Presence contract cleanup + Sonnet 5 published cache-pricing copy)
+- Last docs refresh: 2026-07-06 (Codex WSL opt-in safety + upstream sync contract)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

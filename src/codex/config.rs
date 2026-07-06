@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -514,8 +514,10 @@ pub fn sessions_paths() -> Vec<PathBuf> {
 
     #[cfg(windows)]
     {
-        for candidate in windows_wsl_sessions_candidates() {
-            push_unique_path(&mut ordered, &mut seen, candidate);
+        if include_wsl_session_roots() {
+            for candidate in windows_wsl_sessions_candidates() {
+                push_unique_path(&mut ordered, &mut seen, candidate);
+            }
         }
     }
 
@@ -778,6 +780,20 @@ fn running_in_wsl() -> bool {
 }
 
 #[cfg(windows)]
+fn include_wsl_session_roots() -> bool {
+    parse_bool_flag(env::var("CODEX_PRESENCE_INCLUDE_WSL").ok().as_deref())
+        || parse_bool_flag(env::var("CC_PRESENCE_INCLUDE_WSL").ok().as_deref())
+}
+
+#[cfg(windows)]
+fn parse_bool_flag(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+#[cfg(windows)]
 fn windows_wsl_sessions_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     let distros = windows_wsl_distro_names();
@@ -803,7 +819,7 @@ fn windows_wsl_sessions_candidates() -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn windows_wsl_distro_names() -> Vec<String> {
-    let output = Command::new("wsl.exe")
+    let output = crate::util::silent_command("wsl.exe")
         .args(["-l", "-q"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -825,7 +841,7 @@ fn windows_wsl_distro_names() -> Vec<String> {
 
 #[cfg(windows)]
 fn wsl_home_for_distro(distro: &str) -> Option<String> {
-    let output = Command::new("wsl.exe")
+    let output = crate::util::silent_command("wsl.exe")
         .args(["-d", distro, "--", "sh", "-lc", "printf %s \"$HOME\""])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

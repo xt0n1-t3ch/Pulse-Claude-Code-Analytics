@@ -53,6 +53,44 @@ fn codex_process_probe_remains_pulse_compatibility_glue() {
     let _ = cc_discord_presence::codex::process::is_opencode_running();
 }
 
+#[test]
+fn codex_wsl_probe_commands_use_hidden_windows_launcher() {
+    let source = include_str!("../src/codex/config.rs");
+    let direct_spawn = ["Command::new(", "\"wsl.exe\"", ")"].concat();
+    let hidden_spawn = ["crate::util::silent_command(", "\"wsl.exe\"", ")"].concat();
+
+    assert!(
+        !source.contains(&direct_spawn),
+        "Pulse must not reintroduce visible WSL subprocess launches from the mirrored Codex runtime"
+    );
+    assert_eq!(
+        source.matches(&hidden_spawn).count(),
+        2,
+        "the mirrored Codex WSL probes must use Pulse's hidden command helper"
+    );
+    assert!(
+        source.contains("if include_wsl_session_roots()"),
+        "Pulse must not invoke mirrored Codex WSL discovery unless WSL scanning is explicitly enabled"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn codex_session_paths_do_not_include_wsl_roots_without_opt_in() {
+    let paths = cc_discord_presence::codex::config::sessions_paths();
+
+    assert!(
+        paths.iter().all(|path| {
+            let normalized = path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_ascii_lowercase();
+            !normalized.contains("wsl.localhost") && !normalized.contains("//wsl$")
+        }),
+        "Codex WSL roots must stay absent unless CODEX_PRESENCE_INCLUDE_WSL or CC_PRESENCE_INCLUDE_WSL is enabled: {paths:?}"
+    );
+}
+
 fn snapshot(
     session_id: &str,
     last_activity: SystemTime,
