@@ -1,6 +1,6 @@
 [package]
 name = "pulse"
-version = "1.4.2"
+version = "1.5.0"
 edition = "2024"
 description = "Pulse — Codex & Claude analytics"
 license = "Apache-2.0"

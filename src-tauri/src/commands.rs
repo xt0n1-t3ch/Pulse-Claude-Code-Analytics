@@ -79,6 +79,7 @@ struct CachedData {
     discord_enabled: bool,
     discord_prefs: DiscordDisplayPrefs,
     codex_opencode_running: bool,
+    codex_desktop_surface_running: bool,
     /// One-shot flag: when set by `refresh_usage` command, the background
     /// poller invalidates its usage cache on the next tick and forces a
     /// fresh API call. The flag is cleared after handling.
@@ -309,7 +310,9 @@ pub fn start_background_poller() {
                     let resolved_service_tier = resolve_service_tier();
                     let opencode_running =
                         cc_discord_presence::codex::process::is_opencode_running();
-                    let surface_override = if opencode_running {
+                    let codex_desktop_running =
+                        cc_discord_presence::codex::process::is_desktop_surface_running();
+                    let surface_override = if codex_desktop_running {
                         PresenceSurface::Desktop
                     } else {
                         PresenceSurface::Default
@@ -345,6 +348,7 @@ pub fn start_background_poller() {
                     if let Ok(mut d) = data.lock() {
                         d.sessions = ActiveSessions::Codex(active);
                         d.codex_opencode_running = opencode_running;
+                        d.codex_desktop_surface_running = codex_desktop_running;
                         d.claude_usage = None;
                         d.claude_usage_error = None;
                     }
@@ -396,11 +400,11 @@ fn read_codex_sessions() -> Vec<CodexSessionSnapshot> {
         })
 }
 
-fn read_codex_opencode_running() -> bool {
+fn read_codex_desktop_surface_running() -> bool {
     shared()
         .lock()
         .ok()
-        .is_some_and(|d| d.codex_opencode_running)
+        .is_some_and(|d| d.codex_desktop_surface_running)
 }
 
 fn current_live_session_infos() -> Vec<SessionInfo> {
@@ -411,7 +415,7 @@ fn current_live_session_infos() -> Vec<SessionInfo> {
             build_codex_session_infos(
                 &read_codex_sessions(),
                 fast_mode,
-                read_codex_opencode_running(),
+                read_codex_desktop_surface_running(),
             )
         }
     }
@@ -708,7 +712,7 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
 fn build_codex_session_infos(
     snapshots: &[CodexSessionSnapshot],
     fast_mode: bool,
-    opencode_running: bool,
+    desktop_surface_running: bool,
 ) -> Vec<SessionInfo> {
     let now = SystemTime::now();
     let idle = now
@@ -742,13 +746,7 @@ fn build_codex_session_infos(
                 .or_else(|| {
                     cc_discord_presence::codex::cost::default_model_context_window(&model_key)
                 })
-                .unwrap_or_else(|| {
-                    if model_key.starts_with("gpt-5.4") {
-                        1_050_000
-                    } else {
-                        400_000
-                    }
-                });
+                .unwrap_or(cc_discord_presence::codex::cost::CODEX_OAUTH_CONTEXT_WINDOW);
             let context_window_label = if context_window >= 1_000_000 {
                 "1M".to_string()
             } else if context_window >= 400_000 {
@@ -775,7 +773,7 @@ fn build_codex_session_infos(
             let activity_target = s.activity.as_ref().and_then(|a| a.target.clone());
             SessionInfo {
                 provider: Provider::Codex.as_str().to_string(),
-                app_name: if opencode_running || s.is_desktop_surface() {
+                app_name: if desktop_surface_running || s.is_desktop_surface() {
                     Some("Codex App".to_string())
                 } else {
                     None
@@ -1041,7 +1039,7 @@ fn build_discord_presence_preview(data: &CachedData) -> DiscordPresencePreview {
                 ActiveSessions::Codex(sessions) => sessions.as_slice(),
                 _ => &[],
             };
-            build_codex_discord_preview(sessions, &config, data.codex_opencode_running)
+            build_codex_discord_preview(sessions, &config, data.codex_desktop_surface_running)
         }
     }
 }
@@ -1097,9 +1095,9 @@ fn build_claude_discord_preview(
 fn build_codex_discord_preview(
     sessions: &[CodexSessionSnapshot],
     config: &CodexPresenceConfig,
-    opencode_running: bool,
+    desktop_surface_running: bool,
 ) -> DiscordPresencePreview {
-    let app_name = if opencode_running {
+    let app_name = if desktop_surface_running {
         "Codex App"
     } else {
         "Codex"
@@ -1109,7 +1107,7 @@ fn build_codex_discord_preview(
             provider: Provider::Codex.as_str().to_string(),
             app_name: app_name.to_string(),
             details: app_name.to_string(),
-            state: "Waiting for session".to_string(),
+            state: "Idling...".to_string(),
             has_session: false,
             duration_secs: 0,
         };
@@ -2762,8 +2760,9 @@ pub fn build_reports_bundle_from_roots(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_claude_context_breakdown, build_claude_session_infos, build_codex_session_infos,
-        codex_plan_key_from_tier, codex_total_input_tokens, plan_key_from_override,
+        build_claude_context_breakdown, build_claude_session_infos, build_codex_discord_preview,
+        build_codex_session_infos, codex_plan_key_from_tier, codex_total_input_tokens,
+        plan_key_from_override,
     };
     use cc_discord_presence::codex::config::PresenceConfig as TestCodexPresenceConfig;
     use cc_discord_presence::codex::cost::{PricingSource, TokenCostBreakdown};
@@ -3085,6 +3084,7 @@ mod tests {
                 input_cost_usd: 0.0,
                 cached_input_cost_usd: 0.0,
                 output_cost_usd: 0.0,
+                cached_input_savings_usd: 0.0,
             },
             pricing_source: PricingSource::Fallback,
             context_window: None,
@@ -3103,6 +3103,25 @@ mod tests {
     fn codex_total_input_tokens_uses_telemetry_total_without_double_counting_cache() {
         let snapshot = sample_codex_snapshot();
         assert_eq!(codex_total_input_tokens(&snapshot), 54_626_018);
+    }
+
+    #[test]
+    fn codex_session_info_keeps_oauth_context_at_400k_for_gpt_5_4() {
+        let infos = build_codex_session_infos(&[sample_codex_snapshot()], false, false);
+
+        assert_eq!(infos[0].context_window, "400K");
+        assert_eq!(infos[0].context_window_tokens, 400_000);
+    }
+
+    #[test]
+    fn codex_discord_preview_idles_as_codex_app_when_desktop_is_running() {
+        let config = TestCodexPresenceConfig::default();
+        let preview = build_codex_discord_preview(&[], &config, true);
+
+        assert_eq!(preview.app_name, "Codex App");
+        assert_eq!(preview.details, "Codex App");
+        assert_eq!(preview.state, "Idling...");
+        assert!(!preview.has_session);
     }
 
     #[test]
@@ -3144,6 +3163,7 @@ mod tests {
             input_cost_usd: 1.0,
             cached_input_cost_usd: 0.5,
             output_cost_usd: 2.5,
+            cached_input_savings_usd: 4.5,
         };
 
         let standard = build_codex_session_infos(&[snapshot.clone()], false, false);

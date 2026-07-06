@@ -3,13 +3,43 @@ use std::process::Stdio;
 
 #[cfg(any(windows, test))]
 const OPENCODE_PROCESS_NAMES: [&str; 3] = ["OpenCode.exe", "opencode.exe", "opencode-cli.exe"];
+#[cfg(any(windows, test))]
+const CODEX_APP_PROCESS_NAME: &str = "Codex.exe";
 
 pub fn is_opencode_running() -> bool {
     is_opencode_running_impl()
 }
 
+pub fn is_codex_app_running() -> bool {
+    is_codex_app_running_impl()
+}
+
+pub fn is_desktop_surface_running() -> bool {
+    is_opencode_running() || is_codex_app_running()
+}
+
 #[cfg(windows)]
 fn is_opencode_running_impl() -> bool {
+    read_tasklist().is_some_and(|text| tasklist_has_opencode(&text))
+}
+
+#[cfg(not(windows))]
+fn is_opencode_running_impl() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn is_codex_app_running_impl() -> bool {
+    read_tasklist().is_some_and(|text| tasklist_has_codex_app(&text))
+}
+
+#[cfg(not(windows))]
+fn is_codex_app_running_impl() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn read_tasklist() -> Option<String> {
     let output = crate::util::silent_command("tasklist")
         .arg("/FO")
         .arg("CSV")
@@ -19,19 +49,13 @@ fn is_opencode_running_impl() -> bool {
         .output();
 
     let Ok(output) = output else {
-        return false;
+        return None;
     };
     if !output.status.success() {
-        return false;
+        return None;
     }
 
-    let text = String::from_utf8_lossy(&output.stdout);
-    tasklist_has_opencode(&text)
-}
-
-#[cfg(not(windows))]
-fn is_opencode_running_impl() -> bool {
-    false
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 #[cfg(any(windows, test))]
@@ -43,6 +67,16 @@ pub(crate) fn tasklist_has_opencode(output: &str) -> bool {
         OPENCODE_PROCESS_NAMES
             .iter()
             .any(|expected| name.eq_ignore_ascii_case(expected))
+    })
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn tasklist_has_codex_app(output: &str) -> bool {
+    output.lines().any(|line| {
+        let Some(name) = tasklist_image_name(line) else {
+            return false;
+        };
+        name == CODEX_APP_PROCESS_NAME
     })
 }
 
@@ -120,5 +154,16 @@ opencode.exe                  7777 Console                    1     12,000 K
 "#;
 
         assert!(tasklist_has_opencode(output));
+    }
+
+    #[test]
+    fn tasklist_parser_detects_official_codex_app() {
+        let output = r#"
+"Image Name","PID","Session Name","Session#","Mem Usage"
+"Codex.exe","1234","Console","1","148,000 K"
+"codex.exe","2345","Console","1","30,000 K"
+"#;
+
+        assert!(tasklist_has_codex_app(output));
     }
 }

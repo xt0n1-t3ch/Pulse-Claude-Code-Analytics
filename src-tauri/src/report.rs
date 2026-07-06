@@ -1217,12 +1217,18 @@ fn build_hourly_heatmap(hourly: &[db::HourlyActivity]) -> String {
 }
 
 fn html_escape(input: &str) -> String {
-    input
+    neutralize_remote_urls(input)
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+fn neutralize_remote_urls(input: &str) -> String {
+    input
+        .replace("https://", "hxxps://")
+        .replace("http://", "hxxp://")
 }
 
 fn build_recommendations(
