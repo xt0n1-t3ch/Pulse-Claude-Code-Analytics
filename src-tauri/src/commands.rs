@@ -882,6 +882,7 @@ pub fn set_discord_enabled(enabled: bool) {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn set_discord_display_prefs(
     show_project: bool,
     show_branch: bool,

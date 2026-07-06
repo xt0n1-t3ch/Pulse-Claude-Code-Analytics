@@ -33,6 +33,12 @@ try {
       $text = $text -replace "crate::$name", "crate::codex::$name"
     }
     $text = $text -replace "fn presence_lines\(", "pub fn presence_lines("
+    if ($relative -eq "config.rs") {
+      $text = $text -replace 'crate::codex::util::silent_command\("wsl\.exe"\)', 'crate::util::silent_command("wsl.exe")'
+      $text = $text -replace 'Command::new\("wsl\.exe"\)', 'crate::util::silent_command("wsl.exe")'
+      $text = $text -replace "use std::process::\{Command, Stdio\};", "use std::process::Stdio;"
+      $text = $text -replace "#\[cfg\(any\(windows, test\)\)\]", "#[cfg(windows)]"
+    }
     if ($relative -eq "session/parser.rs") {
       $text = $text -replace 'Command::new\("git"\)', 'crate::util::silent_command("git")'
       $text = $text -replace "(?m)^use std::process::Command;`r?`n", ""

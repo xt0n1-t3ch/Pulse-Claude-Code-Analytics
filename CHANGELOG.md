@@ -2,6 +2,20 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.5.1] — 2026-07-06
+
+v1.5.1 is a Windows safety patch for the Codex runtime embedded in Pulse. No public API was removed.
+
+### Fixed
+
+- Mirrored Codex WSL session discovery is now explicit opt-in via `CODEX_PRESENCE_INCLUDE_WSL=1` or `CC_PRESENCE_INCLUDE_WSL=1`; by default Pulse does not invoke `wsl.exe` while polling Codex sessions.
+- The WSL opt-in path now uses Pulse's hidden subprocess launcher, so enabled WSL scans do not create visible WSL/conhost windows from the desktop app.
+- Codex source-sync scripts now preserve the WSL opt-in/no-window overlay, preventing a future sync from reintroducing the Windows console flood.
+
+### Validated
+
+- `cargo test --test codex_upstream_contract codex_wsl_probe_commands_use_hidden_windows_launcher`
+
 ## [1.5.0] — 2026-07-05
 
 v1.5.0 brings the Codex Discord Rich Presence overhaul into Pulse. Codex App, Codex CLI, VS Code Extension, and OpenCode-hosted Codex sessions now share one cost/cache/context contract and keep the correct Discord identity while active or idle. No public API was removed.

@@ -65,6 +65,11 @@ for relative in files:
     for module in modules:
         text = text.replace(f'crate::{module}', f'crate::codex::{module}')
     text = text.replace('fn presence_lines(', 'pub fn presence_lines(')
+    if relative == 'config.rs':
+        text = text.replace('crate::codex::util::silent_command("wsl.exe")', 'crate::util::silent_command("wsl.exe")')
+        text = text.replace('Command::new("wsl.exe")', 'crate::util::silent_command("wsl.exe")')
+        text = text.replace('use std::process::{Command, Stdio};\n', 'use std::process::Stdio;\n')
+        text = text.replace('#[cfg(any(windows, test))]', '#[cfg(windows)]')
     if relative == 'session/parser.rs':
         text = text.replace('Command::new("git")', 'crate::util::silent_command("git")')
         text = text.replace('use std::process::Command;\n', '')
