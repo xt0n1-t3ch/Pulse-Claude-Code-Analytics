@@ -184,10 +184,17 @@ pub(super) fn last_output_tokens_from_info(payload: &Value) -> Option<u64> {
     uint_at(payload, &["info", "last_token_usage", "output_tokens"])
 }
 
+pub(super) fn active_context_tokens_from_info(payload: &Value) -> Option<u64> {
+    let input = last_input_tokens_from_info(payload)?;
+    let output = last_output_tokens_from_info(payload).unwrap_or(0);
+    let cached = last_cached_input_tokens_from_info(payload).unwrap_or(0);
+    Some(input.saturating_sub(cached).saturating_add(output))
+}
+
 pub(super) fn build_context_window_snapshot(
     model_id: Option<&str>,
     event_window_tokens: Option<u64>,
-    last_turn_tokens: Option<u64>,
+    active_context_tokens: Option<u64>,
     session_total_tokens: Option<u64>,
 ) -> Option<ContextWindowSnapshot> {
     let (window_tokens, source) = if let Some(window_tokens) = event_window_tokens {
@@ -201,8 +208,8 @@ pub(super) fn build_context_window_snapshot(
     }
     // Context usage must track active-turn usage first; session totals are cumulative and can
     // greatly exceed context windows in long sessions.
-    let used_tokens = if let Some(last_turn_tokens) = last_turn_tokens {
-        last_turn_tokens
+    let used_tokens = if let Some(active_context_tokens) = active_context_tokens {
+        active_context_tokens
     } else {
         session_total_tokens.filter(|tokens| *tokens <= window_tokens)?
     }

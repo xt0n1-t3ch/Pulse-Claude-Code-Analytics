@@ -44,6 +44,8 @@ struct DiscordDisplayPrefs {
     show_activity: bool,
     show_tokens: bool,
     show_cost: bool,
+    show_limits: bool,
+    show_context: bool,
     show_systems: bool,
 }
 
@@ -56,6 +58,8 @@ impl Default for DiscordDisplayPrefs {
             show_activity: true,
             show_tokens: false,
             show_cost: false,
+            show_limits: true,
+            show_context: true,
             show_systems: true,
         }
     }
@@ -154,6 +158,8 @@ pub fn start_background_poller() {
                 show_activity: cfg.privacy.show_activity,
                 show_tokens: cfg.privacy.show_tokens,
                 show_cost: cfg.privacy.show_cost,
+                show_limits: cfg.privacy.show_limits,
+                show_context: cfg.privacy.show_context,
                 show_systems: cfg.privacy.show_systems,
             };
         }
@@ -883,6 +889,8 @@ pub fn set_discord_display_prefs(
     show_activity: bool,
     show_tokens: bool,
     show_cost: bool,
+    show_limits: bool,
+    show_context: bool,
     show_systems: bool,
 ) {
     if let Ok(mut d) = shared().lock() {
@@ -893,6 +901,8 @@ pub fn set_discord_display_prefs(
             show_activity,
             show_tokens,
             show_cost,
+            show_limits,
+            show_context,
             show_systems,
         };
     }
@@ -906,6 +916,8 @@ pub fn set_discord_display_prefs(
                 show_activity,
                 show_tokens,
                 show_cost,
+                show_limits,
+                show_context,
                 show_systems,
             },
         );
@@ -921,6 +933,8 @@ pub fn set_discord_display_prefs(
                 show_activity,
                 show_tokens,
                 show_cost,
+                show_limits,
+                show_context,
                 show_systems,
             },
         );
@@ -1051,6 +1065,8 @@ fn apply_claude_display_prefs(config: &mut PresenceConfig, prefs: &DiscordDispla
     config.privacy.show_activity = prefs.show_activity;
     config.privacy.show_tokens = prefs.show_tokens;
     config.privacy.show_cost = prefs.show_cost;
+    config.privacy.show_limits = prefs.show_limits;
+    config.privacy.show_context = prefs.show_context;
     config.privacy.show_systems = prefs.show_systems;
 }
 
@@ -1061,6 +1077,8 @@ fn apply_codex_display_prefs(config: &mut CodexPresenceConfig, prefs: &DiscordDi
     config.privacy.show_activity = prefs.show_activity;
     config.privacy.show_tokens = prefs.show_tokens;
     config.privacy.show_cost = prefs.show_cost;
+    config.privacy.show_limits = prefs.show_limits;
+    config.privacy.show_context = prefs.show_context;
     config.privacy.show_systems = prefs.show_systems;
 }
 
@@ -2840,7 +2858,7 @@ mod tests {
             std::env::set_var("CODEX_HOME", &codex_home);
         }
 
-        super::set_discord_display_prefs(true, false, true, true, true, true, true);
+        super::set_discord_display_prefs(true, false, true, true, true, true, false, false, true);
 
         let claude = TestClaudePresenceConfig::load_or_init().expect("claude config");
         let codex = TestCodexPresenceConfig::load_or_init().expect("codex config");
@@ -2849,6 +2867,10 @@ mod tests {
         assert!(!codex.privacy.show_git_branch);
         assert!(claude.privacy.show_cost);
         assert!(codex.privacy.show_cost);
+        assert!(!claude.privacy.show_limits);
+        assert!(!codex.privacy.show_limits);
+        assert!(!claude.privacy.show_context);
+        assert!(!codex.privacy.show_context);
         assert!(claude.privacy.show_systems);
         assert!(codex.privacy.show_systems);
     }
@@ -2905,6 +2927,8 @@ mod tests {
                 show_activity: true,
                 show_tokens: true,
                 show_cost: true,
+                show_limits: false,
+                show_context: false,
                 show_systems: true,
             },
         );
@@ -2916,6 +2940,9 @@ mod tests {
         assert!(!preview.details.contains("feat/marketplace"));
         assert!(preview.state.contains("ULTRACODE"));
         assert!(preview.state.contains("1 agent"));
+        assert!(!preview.state.contains("5h"));
+        assert!(!preview.state.contains("7d"));
+        assert!(!preview.state.contains("Ctx"));
     }
 
     #[test]

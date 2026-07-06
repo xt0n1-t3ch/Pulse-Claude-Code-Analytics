@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { sessions, activeSessions, discordUser, health, discordPreview, discordPresencePreview } from "../lib/stores";
+  import { sessions, activeSessions, rateLimits, discordUser, health, discordPreview, discordPresencePreview } from "../lib/stores";
   import { provider, providerProfile } from "../lib/provider";
   import { setDiscordEnabled } from "../lib/api";
   import type { SessionInfo } from "../lib/api";
@@ -24,9 +24,9 @@
 
   type Preset = "minimal" | "standard" | "full";
   const presets: Record<Preset, typeof $discordPreview> = {
-    minimal: { showProject: true, showBranch: false, showModel: false, showActivity: false, showTokens: false, showCost: false, showSystems: false },
-    standard: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: false, showCost: false, showSystems: true },
-    full: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: true, showCost: true, showSystems: true },
+    minimal: { showProject: true, showBranch: false, showModel: false, showActivity: false, showTokens: false, showCost: false, showLimits: false, showContext: false, showSystems: false },
+    standard: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: false, showCost: false, showLimits: true, showContext: true, showSystems: true },
+    full: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: true, showCost: true, showLimits: true, showContext: true, showSystems: true },
   };
   const presetOrder: Preset[] = ["minimal", "standard", "full"];
 
@@ -81,6 +81,14 @@
     if (s.showActivity) parts.push(previewSession.activity);
     if (s.showSystems) parts.push(...systemParts(previewSession));
     if (s.showTokens) parts.push(fmtTokens(previewSession.tokens) + " tokens");
+    if (s.showContext) {
+      const contextLine = contextUsagePart(previewSession);
+      if (contextLine) parts.push(contextLine);
+    }
+    if (s.showLimits) {
+      const limitLine = sessionLimitPart();
+      if (limitLine) parts.push(limitLine);
+    }
     return parts.join(" · ") || "Idle";
   });
 
@@ -95,6 +103,24 @@
     return parts;
   }
 
+  function contextUsagePart(session: SessionInfo): string | null {
+    if (!session.context_used_tokens || !session.context_window_tokens) return null;
+    const pct = Math.min(100, Math.max(0, (session.context_used_tokens / session.context_window_tokens) * 100));
+    return `Ctx ${pct.toFixed(0)}% used`;
+  }
+
+  function sessionLimitPart(): string | null {
+    if (!$rateLimits) return null;
+    const parts: string[] = [];
+    if ($rateLimits.five_hour_pct > 0) {
+      parts.push(`5h ${Math.max(0, 100 - $rateLimits.five_hour_pct).toFixed(0)}%`);
+    }
+    if ($rateLimits.seven_day_pct > 0) {
+      parts.push(`7d ${Math.max(0, 100 - $rateLimits.seven_day_pct).toFixed(0)}%`);
+    }
+    return parts.join(" • ") || null;
+  }
+
   const fieldRows = [
     { key: "showProject",  label: "Project name",  hint: "Repository or folder name." },
     { key: "showBranch",   label: "Git branch",    hint: "Current checked-out ref." },
@@ -102,6 +128,8 @@
     { key: "showActivity", label: "Activity",      hint: "What Pulse thinks you're doing." },
     { key: "showTokens",   label: "Token count",   hint: "Cumulative tokens this session." },
     { key: "showCost",     label: "Cost",          hint: "Running USD total for the session." },
+    { key: "showLimits",   label: "Session limits", hint: "5-hour and weekly remaining percentages." },
+    { key: "showContext",  label: "Context usage", hint: "Current context-window fill percentage." },
     { key: "showSystems",  label: "Systems",       hint: "Safe workflow and agent signals." },
   ] as const;
 

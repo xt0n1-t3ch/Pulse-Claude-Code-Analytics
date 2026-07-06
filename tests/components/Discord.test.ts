@@ -89,6 +89,8 @@ describe("Discord.svelte", () => {
       showActivity: true,
       showTokens: false,
       showCost: false,
+      showLimits: true,
+      showContext: true,
       showSystems: true,
     });
   });
@@ -138,7 +140,9 @@ describe("Discord.svelte", () => {
     await tick();
 
     expect(getByText("Rich Presence")).toBeTruthy();
-    expect(container.querySelectorAll(".field-cell").length).toBe(7);
+    expect(container.querySelectorAll(".field-cell").length).toBe(9);
+    expect(getByText("Session limits")).toBeTruthy();
+    expect(getByText("Context usage")).toBeTruthy();
     expect(container.querySelectorAll(".preset-opt").length).toBe(3);
   });
 

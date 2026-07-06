@@ -402,7 +402,7 @@ fn display_branding<'a>(
         PresenceSurface::Default => SurfaceDisplay {
             large_image_key: &config.display.large_image_key,
             large_text: &config.display.large_text,
-            idle_details: "Codex CLI / Codex VS Code Extension",
+            idle_details: "Codex CLI",
         },
         PresenceSurface::Desktop => SurfaceDisplay {
             large_image_key: &config.display.desktop_large_image_key,
@@ -557,7 +557,14 @@ pub fn presence_lines(
     if config.privacy.show_cost && session.total_cost_usd > 0.0 {
         state_parts.push(format_cost(session.total_cost_usd));
     }
-    if let Some(usage) = usage_state_part(session, config.privacy.show_tokens) {
+    if config.privacy.show_systems {
+        state_parts.extend(system_state_parts(session));
+    }
+    if let Some(usage) = usage_state_part(
+        session,
+        config.privacy.show_tokens,
+        config.privacy.show_context,
+    ) {
         state_parts.push(usage);
     }
     if config.privacy.show_limits
@@ -602,12 +609,16 @@ fn context_state_part(session: &CodexSessionSnapshot) -> Option<String> {
     ))
 }
 
-fn usage_state_part(session: &CodexSessionSnapshot, show_tokens: bool) -> Option<String> {
+fn usage_state_part(
+    session: &CodexSessionSnapshot,
+    show_tokens: bool,
+    show_context: bool,
+) -> Option<String> {
     let mut parts = Vec::new();
     if show_tokens && let Some(tokens) = token_state_part(session) {
         parts.push(tokens);
     }
-    if let Some(context) = context_state_part(session) {
+    if show_context && let Some(context) = context_state_part(session) {
         parts.push(context);
     }
     if parts.is_empty() {
@@ -615,6 +626,24 @@ fn usage_state_part(session: &CodexSessionSnapshot, show_tokens: bool) -> Option
     } else {
         Some(parts.join(" • "))
     }
+}
+
+fn system_state_parts(session: &CodexSessionSnapshot) -> Vec<String> {
+    let mut parts = Vec::new();
+    if let Some(activity) = &session.activity
+        && activity.pending_calls > 0
+    {
+        let label = if activity.pending_calls == 1 {
+            "tool active".to_string()
+        } else {
+            format!("{} tools active", activity.pending_calls)
+        };
+        parts.push(label);
+    }
+    if session.is_subagent {
+        parts.push("subagent".to_string());
+    }
+    parts
 }
 
 fn limits_state_part(limits: &RateLimits) -> Option<String> {
@@ -950,6 +979,57 @@ mod tests {
     }
 
     #[test]
+    fn context_toggle_hides_context_usage_without_hiding_tokens() {
+        let session = sample_session();
+        let mut config = PresenceConfig::default();
+        config.privacy.show_context = false;
+        let plan = resolved_plan_pro();
+        let service_tier = resolved_service_tier(false);
+
+        let (_details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert!(state.contains("30.0K tok"));
+        assert!(!state.contains("Ctx"));
+    }
+
+    #[test]
+    fn systems_toggle_uses_safe_codex_activity_labels() {
+        let mut session = sample_session();
+        session.is_subagent = true;
+        session.activity = Some(crate::codex::session::SessionActivitySnapshot {
+            kind: crate::codex::session::SessionActivityKind::RunningCommand,
+            target: Some("private-command".to_string()),
+            observed_at: None,
+            last_active_at: None,
+            last_effective_signal_at: None,
+            idle_candidate_at: None,
+            pending_calls: 2,
+        });
+        let mut config = PresenceConfig::default();
+        config.privacy.show_activity_target = false;
+        let plan = resolved_plan_pro();
+        let service_tier = resolved_service_tier(false);
+
+        let (_details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert!(state.contains("2 tools active"));
+        assert!(state.contains("subagent"));
+        assert!(!state.contains("private-command"));
+    }
+
+    #[test]
     fn state_keeps_priority_when_length_is_limited() {
         let mut session = sample_session();
         session.model = Some("gpt-5.3-codex-ultra-long-variant-name-for-tests".to_string());
@@ -1164,6 +1244,15 @@ mod tests {
         assert_eq!(branding.large_image_key, "codex-app");
         assert_eq!(branding.large_text, "Codex App");
         assert_eq!(branding.idle_details, "Codex App");
+    }
+
+    #[test]
+    fn default_idle_branding_is_explicit_codex_cli() {
+        let config = PresenceConfig::default();
+        let branding = display_branding(PresenceSurface::Default, &config);
+
+        assert_eq!(branding.idle_details, "Codex CLI");
+        assert!(!branding.idle_details.contains("VS Code"));
     }
 
     #[test]
