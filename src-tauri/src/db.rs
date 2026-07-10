@@ -492,6 +492,7 @@ fn history_timestamp_expr() -> &'static str {
 #[allow(clippy::too_many_arguments)]
 fn query_sessions(
     conn: &Connection,
+    provider: &str,
     days: Option<i64>,
     from_iso: Option<&str>,
     to_iso: Option<&str>,
@@ -504,7 +505,6 @@ fn query_sessions(
     limit: Option<i64>,
 ) -> Vec<HistoricalSession> {
     let history_ts = history_timestamp_expr();
-    let provider = active_provider_slug().to_string();
     let mut sql = String::from(
         "SELECT id, provider, session_name, project, model, model_id, context_window, branch, effort,
             started_at, ended_at, duration_secs, total_cost,
@@ -514,7 +514,7 @@ fn query_sessions(
          FROM sessions
          WHERE provider = ?1",
     );
-    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(provider)];
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(provider.to_string())];
     let mut param_idx = 2;
 
     if let Some(d) = days {
@@ -866,11 +866,12 @@ pub fn get_session_history(
     project: Option<&str>,
     limit: Option<i64>,
 ) -> Vec<HistoricalSession> {
+    let provider = active_provider_slug();
     let Ok(conn) = db().lock() else {
         return vec![];
     };
     query_sessions(
-        &conn, days, None, None, project, None, None, None, None, None, limit,
+        &conn, provider, days, None, None, project, None, None, None, None, None, limit,
     )
 }
 
@@ -883,11 +884,13 @@ pub fn get_session_history_filtered(
     max_cost: Option<f64>,
     limit: Option<i64>,
 ) -> Vec<HistoricalSession> {
+    let provider = active_provider_slug();
     let Ok(conn) = db().lock() else {
         return vec![];
     };
     query_sessions(
-        &conn, None, from_iso, to_iso, project, model, min_cost, max_cost, None, None, limit,
+        &conn, provider, None, from_iso, to_iso, project, model, min_cost, max_cost, None, None,
+        limit,
     )
 }
 
@@ -896,11 +899,13 @@ pub fn get_sessions_by_hour_range(
     end_hour: i64,
     days: Option<i64>,
 ) -> Vec<HistoricalSession> {
+    let provider = active_provider_slug();
     let Ok(conn) = db().lock() else {
         return vec![];
     };
     query_sessions(
         &conn,
+        provider,
         days,
         None,
         None,
@@ -1609,6 +1614,7 @@ mod tests {
 
         let rows = query_sessions(
             &conn,
+            &provider,
             Some(7),
             None,
             None,
@@ -1658,6 +1664,7 @@ mod tests {
 
         let rows = query_sessions(
             &conn,
+            &provider,
             None,
             None,
             None,
@@ -1705,6 +1712,7 @@ mod tests {
 
         let rows = query_sessions(
             &conn,
+            &provider,
             Some(7),
             None,
             None,
@@ -1744,6 +1752,7 @@ mod tests {
 
         let rows = query_sessions(
             &conn,
+            &provider,
             Some(7),
             None,
             None,
