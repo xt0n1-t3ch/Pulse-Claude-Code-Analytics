@@ -39,12 +39,14 @@ function Get-ContainedPath {
     throw "Vendored path escapes its allowed prefix: $RelativePath"
   }
 
-  $rootPrefix = $RootPath.TrimEnd(
-    [System.IO.Path]::DirectorySeparatorChar,
-    [System.IO.Path]::AltDirectorySeparatorChar
-  ) + [System.IO.Path]::DirectorySeparatorChar
-  $fullPath = [System.IO.Path]::GetFullPath((Join-Path $RootPath $normalized))
-  if (-not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  $canonicalRoot = [System.IO.Path]::GetFullPath($RootPath)
+  $fullPath = [System.IO.Path]::GetFullPath((Join-Path $canonicalRoot $normalized))
+  $relativeToRoot = [System.IO.Path]::GetRelativePath($canonicalRoot, $fullPath).Replace("\", "/")
+  if (
+    [System.IO.Path]::IsPathRooted($relativeToRoot) -or
+    $relativeToRoot -eq ".." -or
+    $relativeToRoot.StartsWith("../", [System.StringComparison]::Ordinal)
+  ) {
     throw "Vendored path escapes the repository root: $RelativePath"
   }
   $fullPath
