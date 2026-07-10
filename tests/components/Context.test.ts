@@ -18,8 +18,8 @@ const breakdown: ContextBreakdown = {
   system_tools: 6_000,
   memory_files: [],
   memory_total: 0,
-  skills: [],
-  skills_total: 0,
+  skills: [{ name: "research", tokens: 4_200 }],
+  skills_total: 4_200,
   messages: 24_000,
   mcp_tools: [],
   mcp_total: 0,
@@ -172,5 +172,16 @@ describe("Context.svelte", () => {
     await waitFor(() => {
       expect(getContextBreakdown).toHaveBeenCalled();
     });
+  });
+
+  it("labels installed skills as estimated inventory instead of loaded context", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([makeSession("inventory", "pulse")]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    const { findByText, queryByText } = render(Context);
+
+    expect(await findByText("Installed skill inventory")).toBeTruthy();
+    expect(queryByText(/skills loaded/i)).toBeNull();
   });
 });

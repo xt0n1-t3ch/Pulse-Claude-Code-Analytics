@@ -13,6 +13,7 @@
     type PromptComplexityReport,
     type SessionHealthReport,
     type TraceOverview,
+    type ProviderCapabilities,
     type Severity,
   } from "../lib/api";
   import { addToast } from "../lib/stores";
@@ -27,6 +28,11 @@
   let prompts = $state<PromptComplexityReport | null>(null);
   let health = $state<SessionHealthReport | null>(null);
   let trace = $state<TraceOverview | null>(null);
+  let capabilities = $state<ProviderCapabilities>({
+    cache_health: false,
+    model_routing: false,
+    extra_usage: false,
+  });
   let loading = $state(true);
   let hasLoaded = $state(false);
   let days = $state(30);
@@ -44,6 +50,7 @@
     const requestedDays = days;
     try {
       const bundle = await getReportsBundle(requestedDays);
+      capabilities = bundle.capabilities;
       cache = bundle.cache_health;
       recs = bundle.recommendations;
       inflections = bundle.inflection_points;
@@ -160,9 +167,11 @@
     <div>
       <h2 class="view-title">Reports &amp; Insights</h2>
       <p class="view-sub">
-        Deep analysis of your {$providerProfile.productName} usage — {$providerProfile.claudeOnlyAnalytics
+        Deep analysis of your {$providerProfile.productName} usage — {capabilities.model_routing
           ? "cache efficiency, model routing, cost spikes, and ready-to-paste fixes."
-          : "cost trends, tool mix, prompt complexity, and ready-to-paste fixes."}
+          : capabilities.cache_health
+            ? "cache efficiency, cost trends, tool mix, and ready-to-paste fixes."
+            : "cost trends, tool mix, prompt complexity, and ready-to-paste fixes."}
       </p>
     </div>
     <div class="controls">
@@ -203,7 +212,7 @@
       </div>
     {/if}
     <div class="report-body" class:reloading={loading && hasLoaded}>
-    {#if cache && $providerProfile.claudeOnlyAnalytics}
+    {#if cache && capabilities.cache_health}
       <section class="card hero-card">
         <div class="hero-left">
           <div
@@ -244,8 +253,8 @@
       </section>
     {/if}
 
-    <div class="two-col" class:single={!($providerProfile.claudeOnlyAnalytics && routing)}>
-      {#if routing && $providerProfile.claudeOnlyAnalytics}
+    <div class="two-col" class:single={!(capabilities.model_routing && routing)}>
+      {#if routing && capabilities.model_routing}
         <section class="card">
           <h3 class="card-title">Model Routing</h3>
           <p class="card-sub">{routing.diagnosis}</p>

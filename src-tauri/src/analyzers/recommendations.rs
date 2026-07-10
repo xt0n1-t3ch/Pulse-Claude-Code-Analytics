@@ -33,7 +33,7 @@ pub struct AnalysisContext<'a> {
     pub provider: Provider,
     pub sessions: &'a [HistoricalSession],
     pub cache: &'a CacheHealthReport,
-    pub routing: &'a ModelRoutingReport,
+    pub routing: Option<&'a ModelRoutingReport>,
     pub inflections: &'a [InflectionPoint],
     pub tool_frequency: Option<&'a ToolFrequencyReport>,
     pub prompt_complexity: Option<&'a PromptComplexityReport>,
@@ -96,24 +96,27 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
         });
     }
 
-    if ctx.routing.opus.cost_share_pct >= 90.0 && ctx.routing.total_cost > 10.0 {
+    if let Some(routing) = ctx.routing
+        && routing.opus.cost_share_pct >= 90.0
+        && routing.total_cost > 10.0
+    {
         recs.push(Recommendation {
             id: "opus-dominance".into(),
             severity: Severity::Warning,
             title: "Opus-tier models are carrying almost all your spend".into(),
             description: format!(
                 "{:.0}% of cost is premium-tier reasoning ({} sessions). Simple lookups, commit messages, and quick refactors often run fine on cheaper models.",
-                ctx.routing.opus.cost_share_pct, ctx.routing.opus.sessions
+                routing.opus.cost_share_pct, routing.opus.sessions
             ),
             estimated_savings: Some(format!(
                 "~${:.2} if ~30% of premium work moves down one tier",
-                ctx.routing.estimated_savings_if_rerouted
+                routing.estimated_savings_if_rerouted
             )),
             action: "For the next few sessions, try the mid-tier model first on reads / small edits and only escalate when reasoning depth is needed."
                 .into(),
             fix_prompt: format!(
                 "Looking at my last 30 days of {provider_name} usage, {:.0}% of cost is coming from my highest-tier reasoning model. Suggest a concrete routing workflow: which classes of tasks should I push to cheaper models without hurting quality?",
-                ctx.routing.opus.cost_share_pct
+                routing.opus.cost_share_pct
             ),
             fix_label: fix_label.clone(),
             instruction_file: instruction_file.to_string(),

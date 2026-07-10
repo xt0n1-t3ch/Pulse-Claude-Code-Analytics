@@ -31,10 +31,11 @@ last 7 days count 2× so recent improvements lift the grade quickly.
 ## Recommendation contract
 
 Every recommendation is a `Recommendation { id, severity, title, description,
-estimated_savings, action, fix_prompt, color }`. The `fix_prompt` is the
-ready-to-paste Claude Code prompt behind the UI's "Fix with Claude Code" button
-— keep it concrete (file paths, metrics, the actual ask) so pasting it into CC
-produces useful output without extra context from the user.
+estimated_savings, action, fix_prompt, color }`. The `fix_prompt` is a
+provider-neutral execution prompt. The UI labels it **Fix with Claude Code** or
+**Fix with Codex** from the provider captured for the report request. Keep the
+prompt concrete (file paths, metrics, and the actual ask) so either coding agent
+can act on it without extra context from the user.
 
 Built-in rules (order matters — highest-severity first in the resulting list):
 
@@ -53,7 +54,7 @@ When no rules fire, the engine emits a single `all-good` Positive card.
 1. Compute the finding inside `generate()` in `recommendations.rs` (you already
    have `ctx.sessions`, `ctx.cache`, `ctx.routing`, `ctx.inflections`).
 2. Push a new `Recommendation` with a unique `id` (used by `copy_fix_prompt`),
-   a severity, and a `fix_prompt` that a Claude Code session could act on cold.
+   a severity, and a `fix_prompt` that the captured provider can act on cold.
 3. Sort-by-severity is done in the frontend (`Reports.svelte`) — you don't need
    to maintain order in Rust.
 

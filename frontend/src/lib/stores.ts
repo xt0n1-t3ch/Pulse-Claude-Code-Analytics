@@ -1,4 +1,4 @@
-import { writable, derived, type Writable } from "svelte/store";
+import { writable, derived } from "svelte/store";
 import type {
   HealthResponse,
   MetricsResponse,
@@ -6,6 +6,8 @@ import type {
   RateLimitInfo,
   DiscordUserInfo,
   DiscordPresencePreview,
+  DiscordSettings,
+  DiscordDisplayPrefs,
   PlanInfo,
 } from "./api";
 import {
@@ -13,30 +15,11 @@ import {
   getMetrics,
   getLiveSessions,
   getDiscordPreview,
+  getDiscordSettings,
   getRateLimits,
   getDiscordUser,
   getPlanInfo,
-  setDiscordDisplayPrefs,
 } from "./api";
-
-function persisted<T>(key: string, initial: T): Writable<T> {
-  const storage = globalThis.localStorage;
-  if (!storage) return writable<T>(initial);
-  const stored = storage.getItem(key);
-  const parsed = stored !== null ? (JSON.parse(stored) as T) : initial;
-  const value =
-    typeof initial === "object" &&
-    initial !== null &&
-    typeof parsed === "object" &&
-    parsed !== null &&
-    !Array.isArray(initial) &&
-    !Array.isArray(parsed)
-      ? ({ ...initial, ...parsed } as T)
-      : parsed;
-  const store = writable<T>(value);
-  store.subscribe((v) => storage.setItem(key, JSON.stringify(v)));
-  return store;
-}
 
 export const health = writable<HealthResponse | null>(null);
 export const metrics = writable<MetricsResponse | null>(null);
@@ -44,6 +27,7 @@ export const sessions = writable<SessionInfo[]>([]);
 export const rateLimits = writable<RateLimitInfo | null>(null);
 export const discordUser = writable<DiscordUserInfo | null>(null);
 export const discordPresencePreview = writable<DiscordPresencePreview | null>(null);
+export const discordSettings = writable<DiscordSettings | null>(null);
 export const planInfo = writable<PlanInfo | null>(null);
 export const currentView = writable<string>("dashboard");
 
@@ -59,7 +43,7 @@ export interface DiscordPreviewSettings {
   showSystems: boolean;
 }
 
-export const discordPreview = persisted<DiscordPreviewSettings>("pulse-discord-preview", {
+export const discordPreview = writable<DiscordPreviewSettings>({
   showProject: true,
   showBranch: true,
   showModel: true,
@@ -71,25 +55,44 @@ export const discordPreview = persisted<DiscordPreviewSettings>("pulse-discord-p
   showSystems: true,
 });
 
-let discordPrefsInitialized = false;
-discordPreview.subscribe((s) => {
-  if (!discordPrefsInitialized) {
-    discordPrefsInitialized = true;
-  }
-  setDiscordDisplayPrefs({
-    show_project: s.showProject,
-    show_branch: s.showBranch,
-    show_model: s.showModel,
-    show_activity: s.showActivity,
-    show_tokens: s.showTokens,
-    show_cost: s.showCost,
-    show_limits: s.showLimits,
-    show_context: s.showContext,
-    show_systems: s.showSystems,
-  })
-    .then(refreshDiscordPresencePreview)
-    .catch(() => {});
-});
+export function displayPrefsToPreview(prefs: DiscordDisplayPrefs): DiscordPreviewSettings {
+  return {
+    showProject: prefs.show_project,
+    showBranch: prefs.show_branch,
+    showModel: prefs.show_model,
+    showActivity: prefs.show_activity,
+    showTokens: prefs.show_tokens,
+    showCost: prefs.show_cost,
+    showLimits: prefs.show_limits,
+    showContext: prefs.show_context,
+    showSystems: prefs.show_systems,
+  };
+}
+
+export function previewToDisplayPrefs(preview: DiscordPreviewSettings): DiscordDisplayPrefs {
+  return {
+    show_project: preview.showProject,
+    show_branch: preview.showBranch,
+    show_model: preview.showModel,
+    show_activity: preview.showActivity,
+    show_tokens: preview.showTokens,
+    show_cost: preview.showCost,
+    show_limits: preview.showLimits,
+    show_context: preview.showContext,
+    show_systems: preview.showSystems,
+  };
+}
+
+export function applyDiscordSettings(settings: DiscordSettings): void {
+  discordSettings.set(settings);
+  discordPreview.set(displayPrefsToPreview(settings.display_prefs));
+}
+
+export async function loadDiscordSettings(): Promise<DiscordSettings> {
+  const settings = await getDiscordSettings();
+  applyDiscordSettings(settings);
+  return settings;
+}
 
 export interface Toast {
   id: number;

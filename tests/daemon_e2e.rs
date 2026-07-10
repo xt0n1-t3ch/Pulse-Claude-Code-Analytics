@@ -346,7 +346,7 @@ fn codex_token_line(timestamp: &str) -> String {
 
 fn resolved_pro_plan() -> ResolvedPlan {
     ResolvedPlan {
-        tier: DetectedPlanTier::Pro,
+        tier: DetectedPlanTier::Pro20x,
         source: DetectedPlanSource::Telemetry,
         observed_at: None,
         raw_plan_type: Some("pro".to_string()),
@@ -415,17 +415,10 @@ fn codex_daemon_pipeline_parses_fixture_and_builds_presence_state() {
     );
 
     assert_eq!(snapshot.project_name, "pulse");
+    assert_eq!(model_display, "GPT-5.3 Codex · Extra High");
     assert!(
-        model_display.contains("GPT-5.3-Codex"),
-        "model display: {model_display}"
+        !model_display.contains('\u{26a1}'),
+        "unsupported Fast state must not be invented: {model_display}"
     );
-    assert!(
-        model_display.contains("(Extra High)"),
-        "effort suffix: {model_display}"
-    );
-    assert!(
-        model_display.contains('\u{26a1}'),
-        "fast marker expected: {model_display}"
-    );
-    assert_eq!(plan.label(true), "Pro ($200/month)");
+    assert_eq!(plan.label(true), "Pro 20x ($200/month)");
 }

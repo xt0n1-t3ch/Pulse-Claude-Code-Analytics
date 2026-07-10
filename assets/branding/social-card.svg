@@ -40,11 +40,11 @@
   <!-- Top accent bar -->
   <rect x="40" y="40" width="1360" height="3" rx="2" fill="url(#accentBar)"/>
 
-  <!-- Main title: CLAUDE CODE -->
-  <text x="720" y="145" fill="url(#titleGrad)" font-size="82" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="800" text-anchor="middle" letter-spacing="6">CLAUDE CODE</text>
+  <!-- Main title: PULSE -->
+  <text x="720" y="145" fill="url(#titleGrad)" font-size="82" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="800" text-anchor="middle" letter-spacing="10">PULSE</text>
 
-  <!-- Subtitle: DISCORD PRESENCE -->
-  <text x="720" y="195" fill="#a8a29e" font-size="32" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle" letter-spacing="10">DISCORD PRESENCE</text>
+  <!-- Subtitle: dual-provider analytics -->
+  <text x="720" y="195" fill="#a8a29e" font-size="27" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="600" text-anchor="middle" letter-spacing="7">CLAUDE CODE · CODEX · ANALYTICS</text>
 
   <!-- Clawd pixel mascot (2x scale: 176x64px) centered -->
   <g transform="translate(652, 220) scale(2)">
@@ -91,7 +91,7 @@
   </g>
 
   <!-- Tagline -->
-  <text x="720" y="310" fill="#78716c" font-size="20" font-family="'Segoe UI', Inter, Arial, sans-serif" text-anchor="middle">Real-time activity, tokens, and cost tracking for your Discord profile</text>
+  <text x="720" y="310" fill="#78716c" font-size="20" font-family="'Segoe UI', Inter, Arial, sans-serif" text-anchor="middle">Local cost, cache, context, plan telemetry, and Discord Rich Presence</text>
 
   <!-- Divider -->
   <line x1="160" y1="335" x2="1280" y2="335" stroke="#2a2523"/>
@@ -106,13 +106,13 @@
   <text x="440" y="388" fill="#78716c" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="700" letter-spacing="0.5">PLAYING</text>
 
   <!-- Discord card: app name -->
-  <text x="440" y="410" fill="#faf9f7" font-size="18" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="700">Claude Code</text>
+  <text x="440" y="410" fill="#faf9f7" font-size="18" font-family="'Segoe UI', Inter, Arial, sans-serif" font-weight="700">Pulse · Claude Code + Codex</text>
 
   <!-- Discord card: details line -->
   <text x="440" y="434" fill="#a8a29e" font-size="15" font-family="'Segoe UI', Inter, Arial, sans-serif">Editing files · my-project (main)</text>
 
   <!-- Discord card: state line -->
-  <text x="440" y="456" fill="#a8a29e" font-size="15" font-family="'Segoe UI', Inter, Arial, sans-serif">Opus 4.6 · Max 20x ($200/mo) · $3.45 · 5.2M tokens</text>
+  <text x="440" y="456" fill="#a8a29e" font-size="15" font-family="'Segoe UI', Inter, Arial, sans-serif">Opus 4.8 / GPT-5.6 Sol · reasoning · cost · context</text>
 
   <!-- Discord card: usage bars -->
   <text x="440" y="478" fill="#78716c" font-size="13" font-family="'Segoe UI', Inter, Arial, sans-serif">5h</text>

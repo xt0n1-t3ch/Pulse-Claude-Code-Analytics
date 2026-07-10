@@ -2,6 +2,43 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.5.2] — 2026-07-10
+
+v1.5.2 is a compatibility, provenance, and presentation-correctness patch for GPT-5.6 and the existing Codex lane. No public Tauri command was removed.
+
+### Added
+
+- GPT-5.6 Sol, Terra, and Luna in the immutable Codex model catalog, including aliases, App labels, supported reasoning tiers, independent Standard/Fast capability, API pricing, Codex credit rates, cache policy, and sourced context metadata.
+- Selectable `Codex App` / `ChatGPT App` desktop Rich Presence design, with separate Codex CLI and VS Code Extension surface labels.
+- Complete Discord privacy controls for project, branch, model, activity, tokens, cost, limits, context, and systems in both Pulse and the vendored canonical presentation contract.
+- SQLite schema v4 provenance fields for pricing completeness, cache savings, context source, and speed.
+
+### Changed
+
+- Pulse now vendors Codex Discord Rich Presence v1.7.5 by immutable tag, commit, and per-file hashes. Pulse-owned adapters remain outside the canonical mirror.
+- Costs, cache savings, context windows, labels, reasoning effort, speed, and Discord lines consume the canonical model/presentation owners instead of frontend or Tauri fallback tables.
+- Cache Health is available for Codex when its observed token telemetry supports it; Claude-only model-routing analysis remains capability-gated.
+- Daily analytics are derived idempotently from `sessions`; the legacy `daily_stats` table remains untouched for rollback but is no longer an analytics source.
+- Pulse branding, README, docs, report copy, and repository metadata now present Claude Code and Codex (ChatGPT App) as equal product lanes.
+
+### Fixed
+
+- Turning off Git branch now removes it from the live Codex Discord payload as well as the Pulse preview.
+- GPT-5.6 model and reasoning display uses a clear separator, such as `GPT-5.6 Sol · Max`, while Fast remains an independent speed marker.
+- Unknown Codex models no longer inherit GPT-5.1 pricing; unavailable and partial observations remain explicit.
+- Context no longer invents fixed 10K/6K/3.3% inventory estimates or treats every installed skill as loaded telemetry.
+- Reports capture one provider per generation and escape external text before producing offline HTML.
+
+### Security
+
+- Offline HTML reports include a restrictive Content Security Policy and encode transcript/database text at the rendering boundary.
+- Release and vendoring gates verify immutable source hashes, version surfaces, tag provenance, and checksums.
+
+### Validated
+
+- Model, alias, effort, speed, context, pricing-completeness, privacy-toggle, migration, report-injection, frontend, and release-contract suites.
+- Rust format, Clippy with warnings denied, workspace tests/build, Svelte check, frontend tests/build, dependency audit, and Tauri packaging.
+
 ## [1.5.1] — 2026-07-06
 
 v1.5.1 is a Windows safety patch for the Codex runtime embedded in Pulse. No public API was removed.
@@ -219,6 +256,8 @@ v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Win
 - **Local-first** — SQLite at `~/.claude/pulse-analytics.db`, zero telemetry.
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
+[1.5.2]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.2
+[1.5.1]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.1
 [1.5.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.0
 [1.4.2]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.2
 [1.4.1]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.4.1

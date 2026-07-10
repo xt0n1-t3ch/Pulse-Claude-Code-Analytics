@@ -6,6 +6,7 @@
 // the large art.
 import claudeCode from "../assets/rp/claude-code.png";
 import codexApp from "../assets/rp/codex-app.png";
+import chatGptApp from "../assets/rp/chatgpt-app.jpg";
 
 export interface RpArt {
   /** Large image URL (bundled). */
@@ -18,20 +19,24 @@ export interface RpArt {
   assetKey: string;
 }
 
-export function rpArtFor(provider: string, appName?: string | null): RpArt {
+export function rpArtFor(
+  provider: string,
+  assetKey?: string | null,
+  largeText?: string | null,
+): RpArt {
   if (provider === "codex") {
-    const isApp = appName === "Codex App";
+    const isCodexApp = assetKey === "codex-app";
     return {
-      large: codexApp,
+      large: isCodexApp ? codexApp : chatGptApp,
       small: null,
-      largeText: isApp ? "Codex App" : "Codex CLI / VS Code",
-      assetKey: isApp ? "codex-app" : "codex-logo",
+      largeText: largeText || (isCodexApp ? "Codex App" : "ChatGPT App"),
+      assetKey: assetKey || (isCodexApp ? "codex-app" : "codex-logo"),
     };
   }
   return {
     large: claudeCode,
     small: null,
-    largeText: "Claude Code",
-    assetKey: "large",
+    largeText: largeText || "Claude Code",
+    assetKey: assetKey || "large",
   };
 }

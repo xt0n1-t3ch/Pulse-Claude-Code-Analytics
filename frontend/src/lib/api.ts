@@ -134,6 +134,12 @@ export interface ProviderInfo {
     active_provider: string;
 }
 
+export interface ProviderCapabilities {
+    cache_health: boolean;
+    model_routing: boolean;
+    extra_usage: boolean;
+}
+
 export interface ProviderCopyInfo {
     provider: string;
     provider_label: string;
@@ -187,8 +193,22 @@ export interface DiscordPresencePreview {
     app_name: string;
     details: string;
     state: string;
+    large_image_key: string;
+    large_text: string;
+    small_image_key: string | null;
+    small_text: string | null;
     has_session: boolean;
     duration_secs: number;
+}
+
+export interface DiscordSettings {
+    provider: string;
+    enabled: boolean;
+    status: string;
+    publisher: string;
+    display_prefs: DiscordDisplayPrefs;
+    desktop_design: "codex_app" | "chatgpt_app" | null;
+    supports_desktop_design: boolean;
 }
 
 export function getHealth(): Promise<HealthResponse> {
@@ -205,6 +225,10 @@ export function getLiveSessions(): Promise<SessionInfo[]> {
 
 export function getDiscordPreview(): Promise<DiscordPresencePreview> {
     return invoke("get_discord_preview");
+}
+
+export function getDiscordSettings(): Promise<DiscordSettings> {
+    return invoke("get_discord_settings");
 }
 
 export function getRateLimits(): Promise<RateLimitInfo | null> {
@@ -229,12 +253,18 @@ export function discordDisplayPrefsArgs(prefs: DiscordDisplayPrefs): Record<stri
     };
 }
 
-export function setDiscordEnabled(enabled: boolean): Promise<void> {
+export function setDiscordEnabled(enabled: boolean): Promise<DiscordSettings> {
     return invoke("set_discord_enabled", { enabled });
 }
 
-export function setDiscordDisplayPrefs(prefs: DiscordDisplayPrefs): Promise<void> {
+export function setDiscordDisplayPrefs(prefs: DiscordDisplayPrefs): Promise<DiscordSettings> {
     return invoke("set_discord_display_prefs", discordDisplayPrefsArgs(prefs));
+}
+
+export function setCodexDesktopDesign(
+    design: "codex_app" | "chatgpt_app",
+): Promise<DiscordSettings> {
+    return invoke("set_codex_desktop_design", { design });
 }
 
 export function getPlanInfo(): Promise<PlanInfo> {
@@ -541,7 +571,7 @@ export function getInflectionPoints(days?: number): Promise<InflectionPoint[]> {
     return invoke("get_inflection_points", { days: days ?? null });
 }
 
-export function getModelRouting(days?: number): Promise<ModelRoutingReport> {
+export function getModelRouting(days?: number): Promise<ModelRoutingReport | null> {
     return invoke("get_model_routing", { days: days ?? null });
 }
 
@@ -624,6 +654,7 @@ export function getSessionHealth(days?: number): Promise<SessionHealthReport> {
 
 export interface ReportsBundle {
     provider: string;
+    capabilities: ProviderCapabilities;
     days: number;
     total_sessions: number;
     recommendations: Recommendation[];
@@ -632,7 +663,7 @@ export interface ReportsBundle {
     prompt_complexity: PromptComplexityReport;
     session_health: SessionHealthReport;
     cache_health: CacheHealthReport;
-    model_routing: ModelRoutingReport;
+    model_routing: ModelRoutingReport | null;
     inflection_points: InflectionPoint[];
 }
 

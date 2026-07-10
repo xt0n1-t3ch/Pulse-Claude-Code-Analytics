@@ -11,11 +11,14 @@ repository.
 | Upstream repo | <https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence> |
 | Local mirror | `src/codex/` |
 | Pin file | `src/codex/UPSTREAM.json` |
-| Sync strategy | source sync with a small Pulse compatibility overlay |
+| Pinned release | `v1.7.5` |
+| Pinned commit | `2b3c7f51cf320c9a0c0beced963254348202c8c1` |
+| Shared config | schema 12 with persisted `presence_enabled` |
+| Sync strategy | immutable tag/commit source sync with a small Pulse compatibility overlay |
 
 The local mirror copies the Rust modules Pulse consumes for Codex session parsing,
 pricing, telemetry, display labels, and Rich Presence composition. `UPSTREAM.json`
-records the upstream branch and commit so CI can prove whether Pulse is current.
+records the upstream tag, full commit, sync-script version, file inventory, and SHA-256 hashes so CI can prove the mirror is immutable and exact.
 
 ## Why source sync instead of a Cargo Git dependency
 
@@ -31,10 +34,11 @@ contract:
 
 - `src/codex/mod.rs` declares the mirrored modules under Pulse's namespace.
 - `src/codex/process.rs` exposes the OpenCode process probe needed by the Pulse UI.
-- `src/codex/cost.rs` appends Pulse-only fast-mode helpers for GPT-5.5 and GPT-5.4.
 - `src/codex/session/parser.rs` rewrites upstream `git` probes through Pulse's no-window command helper so Windows polling does not open console windows.
 - `tests/codex_upstream_contract.rs` checks the Pulse-facing module boundary stays
   present after every sync.
+
+Pulse does not append pricing tables or Fast multipliers to vendored files. Model identity, pricing, context, and presentation stay owned by the canonical mirror; Pulse adapters translate the public DTOs into Tauri responses.
 
 All other mirrored code should come from upstream through the sync script.
 
@@ -44,17 +48,16 @@ All other mirrored code should come from upstream through the sync script.
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-rich-presence-upstream.ps1
 ```
 
-The check reads `src/codex/UPSTREAM.json`, resolves upstream `main`, and fails if
-the pinned commit is stale. CI runs the same check.
+The release check validates every file hash against `src/codex/UPSTREAM.json`. A separate non-required scheduled drift check compares the pin with upstream and opens or updates one issue; normal CI does not silently replace a released pin with moving `main`.
 
 ## Pull latest upstream code
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-codex-rich-presence.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-codex-rich-presence.ps1 -Tag v1.7.5 -Commit 2b3c7f51cf320c9a0c0beced963254348202c8c1
 ```
 
-The update script clones the upstream repo, refreshes `src/codex/`, reapplies the
-compatibility overlay, updates `UPSTREAM.json`, formats Rust, checks freshness, and
+The update script checks out the explicit tag and commit, refreshes `src/codex/`, reapplies the
+compatibility overlay, updates `UPSTREAM.json`, formats Rust, validates hashes, and
 runs:
 
 ```powershell

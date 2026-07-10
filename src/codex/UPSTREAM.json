@@ -2,81 +2,95 @@
   "schema_version": 2,
   "sync_version": 2,
   "repository": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
-  "ref": "v1.7.0",
-  "commit": "736faa3be62362c3f859ad0f1bfe2966b6cd9893",
-  "upstream_committed_at": "2026-07-05T23:53:28-05:00",
-  "strategy": "legacy-overlay-v1",
-  "inventory": "legacy-v1",
+  "ref": "v1.7.5",
+  "commit": "2b3c7f51cf320c9a0c0beced963254348202c8c1",
+  "upstream_committed_at": "2026-07-10T02:47:56-05:00",
+  "strategy": "namespace-rebase-v2",
+  "inventory": "model-catalog-v2",
   "provenance": "official",
   "contract_sha256": "e869842fbcb4a832efc44c383c33b0e53529376e6a28271c4d92dc3d52863ed3",
   "files": [
     {
       "source": "src/config.rs",
       "target": "src/codex/config.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "2bb57617e58c817f670b55b90ce0a6a46c4746ec5bb313746fe2d87a29849bae",
-      "target_sha256": "962afc6c91f0f5a4537dfe149ca959805ed60040b1d41f085eda8608c2c463f2"
+      "mode": "namespace-rebase",
+      "source_sha256": "d1755695064fab07f7533c1c9735f7466a1b91b2347b266dcccb2c8225552114",
+      "target_sha256": "34bf0d5127267a29b3ec2387e540becee28535a8862762ad8199daed2cff6845"
     },
     {
       "source": "src/cost.rs",
       "target": "src/codex/cost.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "deeead7f9039b266fa17affcd1347c901c3110855d5a93d582870380a44f6b41",
-      "target_sha256": "cf5a9784b7ce3bae4a01997c2aa5815b88a1777b579b2272fc66a0eaa1186039"
+      "mode": "namespace-rebase",
+      "source_sha256": "ba12e4e64a53d618a63395a30eb8a3a43fb086add681598cc008ca854d01f9ce",
+      "target_sha256": "145dd1f46257a0732326fd60da3e36216dd66dc9a82158a439160efdbafdb8a9"
     },
     {
       "source": "src/discord.rs",
       "target": "src/codex/discord.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "e3fb0f6082e60cc2ceac2a2b26930e223bcdfad1771fd290045bff4978ce0c87",
-      "target_sha256": "552013d7a6ed7ccdb148891d180d407fba23d3b01c27aa0d0d9cafed62d19857"
+      "mode": "namespace-rebase",
+      "source_sha256": "9cf9db528e3dce1d70a4839d053e329d93ecd8d5e0eb3a51b496739097bf4c53",
+      "target_sha256": "55ad0f84256b01870ab3e93e27cd3e14825fa9deb0e8dc15ed4ef9cdf6d4dffd"
+    },
+    {
+      "source": "src/model.rs",
+      "target": "src/codex/model.rs",
+      "mode": "namespace-rebase",
+      "source_sha256": "acd66ab2f99aa86a5f673db6946aa21eb959b70b5a7de6f9fb07c4ac4bb47d06",
+      "target_sha256": "2ef30f1ca3915f4628064b6371324f3b758f1afd6d4ce8cccdae1be88f04e3d9"
+    },
+    {
+      "source": "src/model_catalog.json",
+      "target": "src/codex/model_catalog.json",
+      "mode": "byte-copy",
+      "source_sha256": "037e199b23ca95d6ac0a99718b4f353e555f8eeae95637dce0e13485d81ba39a",
+      "target_sha256": "037e199b23ca95d6ac0a99718b4f353e555f8eeae95637dce0e13485d81ba39a"
     },
     {
       "source": "src/session.rs",
       "target": "src/codex/session.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "579e54f3e9f3c0166332bd35a03e453cf224d1714177e9066c81c1d2d43c4f6b",
-      "target_sha256": "9f708c8a8ae32ef12ba60317a1a2b7f71c75a6ba940dc724ce066e93358e493b"
+      "mode": "namespace-rebase",
+      "source_sha256": "f88b0c9bb40f1af39d6f7adb7cddbdb3390fddd4f84e9fbd41c10ba8003ef86f",
+      "target_sha256": "0b558dca2c6b0a65081e3e287c4d0ce1860ba0a5e1ad8e9981366b643a1bf202"
     },
     {
       "source": "src/util.rs",
       "target": "src/codex/util.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "c231ef1ff87b3ade6041c2887ed8d3bc57b99ef75fab9e808601ff8d95a01dda",
-      "target_sha256": "a1eaa7beefef76729ddeb0c43fecdf25ad21c968cd610759ebc1e2e7fa5647eb"
+      "mode": "namespace-rebase",
+      "source_sha256": "58f05a423c0628fa93e434353ee2f2fe20208715ee92a58a1d1922318e199b77",
+      "target_sha256": "0e606a04585eaee441fc5f378613f4323e7d6202affe64638df563cc7bc1ee9f"
     },
     {
       "source": "src/session/activity.rs",
       "target": "src/codex/session/activity.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "7d56b30b2f294cd4ad323612c8bd6d4154524db5eed7ac24ae71e56fafb4a72e",
-      "target_sha256": "3b0a0da193de842c3083a867d39f9fc0edfa5d2e6c682927a9dfa4a03a135e53"
+      "mode": "namespace-rebase",
+      "source_sha256": "9c82e90967ba946725b1bdee0cb6008ddc3b4d3dc7e9193ac3e2360bf30f7fcf",
+      "target_sha256": "14fd7880a9f8aa4d8350f32a0527db39a7c13143e16ed84c52aa0a1cb31742d2"
     },
     {
       "source": "src/session/parser.rs",
       "target": "src/codex/session/parser.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "6b0622c2152706c04fb970b5a16b476a8e99a13a6c6176e1cd724b28f48254dc",
-      "target_sha256": "5308db4b623763dd857e4f10dc927cc604f1ac5d408136f68220ae9b301bb7f8"
+      "mode": "namespace-rebase",
+      "source_sha256": "fcc2e79ba653018378297e851b460eae08b14d8b4bb96bdd5862227164ca37ff",
+      "target_sha256": "3a09587470c7e8feb871afa9a36d77aa1aa1431798efeb2b08c51e0e765def39"
     },
     {
       "source": "src/telemetry/limits.rs",
       "target": "src/codex/telemetry/limits.rs",
-      "mode": "legacy-overlay",
+      "mode": "namespace-rebase",
       "source_sha256": "ae6af06eb79324171dd361b3de8fdf1c28035ace6211755470511e9ec1dcce91",
       "target_sha256": "ae6af06eb79324171dd361b3de8fdf1c28035ace6211755470511e9ec1dcce91"
     },
     {
       "source": "src/telemetry/plan.rs",
       "target": "src/codex/telemetry/plan.rs",
-      "mode": "legacy-overlay",
-      "source_sha256": "24650595521d75bf5b11d41462a3f19904c5a4234e5e8cfb20a8032491392bc1",
-      "target_sha256": "ee06c455d34b2fbd31690ba41c4db1cd364db14cc9f853a6498afc1355cabe50"
+      "mode": "namespace-rebase",
+      "source_sha256": "ed296000ab0f9d1622d41cb117acbd81dbcdf03b188396a8976b0e797e8eee30",
+      "target_sha256": "efd4d4a2b48eb525f75109fb857aeea007cbc224f8d12c32a805b0489dfbfac3"
     },
     {
       "source": "src/telemetry/service_tier.rs",
       "target": "src/codex/telemetry/service_tier.rs",
-      "mode": "legacy-overlay",
+      "mode": "namespace-rebase",
       "source_sha256": "951c1b9b21ea20dc2607757e7d9c1248bf664ac36acabf83b8fcbac3343b52ba",
       "target_sha256": "3317c66235c4423c97be0b37b95b854df4b98d5016ffb64660050d5d875e04bc"
     }

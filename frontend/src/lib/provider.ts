@@ -20,10 +20,6 @@ export interface ProviderProfile {
     accent: string;
     /** Default Discord Rich Presence asset key. Backend may override. */
     defaultAssetKey: string;
-    /** Which analytics blocks are meaningful for this provider.
-     *  Anthropic-only telemetry (cache read/write ratio, Opus/Sonnet/Haiku routing,
-     *  reasoning effort tiers) is gated behind `claudeOnlyAnalytics`. */
-    claudeOnlyAnalytics: boolean;
     /** Whether provider exposes plan overage / extra-usage style controls. */
     supportsExtraUsage: boolean;
     /** Primary local session path shown in settings. */
@@ -46,7 +42,6 @@ const BASE: Record<Provider, ProviderProfile> = {
         tagline: "Claude Code Analytics",
         accent: "#d97757",
         defaultAssetKey: "large",
-        claudeOnlyAnalytics: true,
         supportsExtraUsage: true,
         sessionsPath: "~/.claude/projects/",
         instructionFile: "CLAUDE.md",
@@ -61,7 +56,6 @@ const BASE: Record<Provider, ProviderProfile> = {
         tagline: "Codex Analytics",
         accent: "#10a37f",
         defaultAssetKey: "codex-logo",
-        claudeOnlyAnalytics: false,
         supportsExtraUsage: false,
         sessionsPath: "~/.codex/sessions/",
         instructionFile: "AGENTS.md",
@@ -84,7 +78,6 @@ const NEUTRAL_PROFILE: ProviderProfile = {
     tagline: "Session Analytics",
     accent: "#9aa0a6",
     defaultAssetKey: "large",
-    claudeOnlyAnalytics: false,
     supportsExtraUsage: false,
     sessionsPath: "—",
     instructionFile: "—",

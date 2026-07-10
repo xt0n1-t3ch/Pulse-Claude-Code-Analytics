@@ -4,9 +4,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use cc_discord_presence::codex::config::{PresenceConfig as CodexPresenceConfig, PresenceSurface};
-use cc_discord_presence::codex::discord::DiscordPresence as CodexDiscordPresence;
-use cc_discord_presence::codex::discord::presence_lines as codex_presence_lines;
+use cc_discord_presence::codex::config::{
+    DesktopPresenceDesign, PresenceConfig as CodexPresenceConfig, PresenceSurface,
+};
+use cc_discord_presence::codex::discord::{
+    DiscordPresence as CodexDiscordPresence, active_presence_presentation,
+    idle_presence_presentation,
+};
+use cc_discord_presence::codex::model::SpeedMode as CodexSpeedMode;
 use cc_discord_presence::codex::session::{
     self as codex_session, CodexSessionSnapshot, GitBranchCache as CodexGitBranchCache,
     SessionParseCache as CodexSessionParseCache,
@@ -19,11 +24,13 @@ use cc_discord_presence::discord::DiscordPresence as ClaudeDiscordPresence;
 use cc_discord_presence::discord::presence_lines as claude_presence_lines;
 use cc_discord_presence::provider::Provider;
 use cc_discord_presence::session::{
-    self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, Speed, latest_limits_source,
+    self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, latest_limits_source,
     merge_statusline_into_sessions, preferred_active_session, read_statusline_data,
 };
 use cc_discord_presence::usage::UsageManager;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::live::PublisherLease;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STALE_THRESHOLD: Duration = Duration::from_secs(120);
@@ -36,17 +43,17 @@ fn uptime_secs() -> u64 {
     START_TIME.get_or_init(Instant::now).elapsed().as_secs()
 }
 
-#[derive(Clone)]
-struct DiscordDisplayPrefs {
-    show_project: bool,
-    show_branch: bool,
-    show_model: bool,
-    show_activity: bool,
-    show_tokens: bool,
-    show_cost: bool,
-    show_limits: bool,
-    show_context: bool,
-    show_systems: bool,
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct DiscordDisplayPrefs {
+    pub show_project: bool,
+    pub show_branch: bool,
+    pub show_model: bool,
+    pub show_activity: bool,
+    pub show_tokens: bool,
+    pub show_cost: bool,
+    pub show_limits: bool,
+    pub show_context: bool,
+    pub show_systems: bool,
 }
 
 impl Default for DiscordDisplayPrefs {
@@ -65,6 +72,17 @@ impl Default for DiscordDisplayPrefs {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DiscordSettings {
+    pub provider: String,
+    pub enabled: bool,
+    pub status: String,
+    pub publisher: String,
+    pub display_prefs: DiscordDisplayPrefs,
+    pub desktop_design: Option<String>,
+    pub supports_desktop_design: bool,
+}
+
 #[derive(Default, Clone)]
 enum ActiveSessions {
     #[default]
@@ -80,6 +98,7 @@ struct CachedData {
     claude_usage: Option<CachedUsage>,
     claude_usage_error: Option<String>,
     discord_status: String,
+    discord_publisher: String,
     discord_enabled: bool,
     discord_prefs: DiscordDisplayPrefs,
     codex_opencode_running: bool,
@@ -139,7 +158,8 @@ fn codex_plan_key_from_tier(tier: DetectedPlanTier) -> &'static str {
         DetectedPlanTier::Plus => "plus",
         DetectedPlanTier::Business => "business",
         DetectedPlanTier::Enterprise => "enterprise",
-        DetectedPlanTier::Pro => "pro",
+        DetectedPlanTier::Pro5x => "pro_5x",
+        DetectedPlanTier::Pro20x => "pro_20x",
         DetectedPlanTier::Unknown => "",
     }
 }
@@ -149,19 +169,19 @@ pub fn start_background_poller() {
 
     if let Ok(mut d) = data.lock() {
         d.active_provider = cc_discord_presence::provider::load_active_provider();
-        d.discord_enabled = true;
-        if let Ok(cfg) = PresenceConfig::load_or_init() {
-            d.discord_prefs = DiscordDisplayPrefs {
-                show_project: cfg.privacy.show_project_name,
-                show_branch: cfg.privacy.show_git_branch,
-                show_model: cfg.privacy.show_model,
-                show_activity: cfg.privacy.show_activity,
-                show_tokens: cfg.privacy.show_tokens,
-                show_cost: cfg.privacy.show_cost,
-                show_limits: cfg.privacy.show_limits,
-                show_context: cfg.privacy.show_context,
-                show_systems: cfg.privacy.show_systems,
-            };
+        match d.active_provider {
+            Provider::Claude => {
+                d.discord_enabled = true;
+                if let Ok(config) = PresenceConfig::load_or_init() {
+                    d.discord_prefs = claude_display_prefs(&config);
+                }
+            }
+            Provider::Codex => {
+                if let Ok(config) = CodexPresenceConfig::load_or_init() {
+                    d.discord_enabled = config.presence_enabled;
+                    d.discord_prefs = codex_display_prefs(&config);
+                }
+            }
         }
     }
 
@@ -176,6 +196,9 @@ pub fn start_background_poller() {
         let mut claude_discord = ClaudeDiscordPresence::new(claude_config.effective_client_id());
         let mut codex_discord = CodexDiscordPresence::new(codex_config.effective_client_id());
         let mut codex_plan_detector = PlanDetector::new();
+        let mut claude_publisher = PublisherLease::new(cc_discord_presence::config::lock_path());
+        let mut codex_publisher =
+            PublisherLease::new(cc_discord_presence::codex::config::lock_path());
 
         loop {
             let provider = current_provider();
@@ -192,8 +215,13 @@ pub fn start_background_poller() {
                 })
                 .unwrap_or((true, DiscordDisplayPrefs::default(), false));
 
-            let discord_status = match provider {
+            let (discord_status, discord_publisher) = match provider {
                 Provider::Claude => {
+                    codex_publisher.release();
+                    let publisher_owned = claude_publisher.try_acquire().unwrap_or_else(|error| {
+                        tracing::warn!(error = %error, "failed to acquire Claude publisher lease");
+                        false
+                    });
                     if let Ok(fresh) = PresenceConfig::load_or_init() {
                         claude_config = fresh;
                     }
@@ -267,7 +295,7 @@ pub fn start_background_poller() {
                     claude_config.plan = manual_plan.or_else(|| detected_plan_key.clone());
 
                     persist_live_claude_snapshots(&active);
-                    let status = if discord_enabled {
+                    let status = if discord_enabled && publisher_owned {
                         let active_session = preferred_active_session(&active);
                         let limits = latest_limits_source(&active).map(|s| &s.limits);
                         if let Err(err) = claude_discord.update(
@@ -280,10 +308,14 @@ pub fn start_background_poller() {
                         }
                         codex_discord.shutdown();
                         claude_discord.status().to_string()
-                    } else {
+                    } else if !discord_enabled {
                         claude_discord.shutdown();
                         codex_discord.shutdown();
                         "Disabled".to_string()
+                    } else {
+                        claude_discord.shutdown();
+                        codex_discord.shutdown();
+                        "Controlled by external daemon".to_string()
                     };
 
                     if let Ok(mut d) = data.lock() {
@@ -291,12 +323,26 @@ pub fn start_background_poller() {
                         d.claude_usage = cached_usage;
                         d.claude_usage_error = usage_error;
                     }
-                    status
+                    (
+                        status,
+                        if publisher_owned {
+                            "pulse"
+                        } else {
+                            "external_daemon"
+                        }
+                        .to_string(),
+                    )
                 }
                 Provider::Codex => {
+                    claude_publisher.release();
+                    let publisher_owned = codex_publisher.try_acquire().unwrap_or_else(|error| {
+                        tracing::warn!(error = %error, "failed to acquire Codex publisher lease");
+                        false
+                    });
                     if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
                         codex_config = fresh;
                     }
+                    let discord_enabled = codex_config.presence_enabled;
 
                     apply_codex_display_prefs(&mut codex_config, &prefs);
 
@@ -318,18 +364,10 @@ pub fn start_background_poller() {
                         cc_discord_presence::codex::process::is_opencode_running();
                     let codex_desktop_running =
                         cc_discord_presence::codex::process::is_desktop_surface_running();
-                    let surface_override = if codex_desktop_running {
-                        PresenceSurface::Desktop
-                    } else {
-                        PresenceSurface::Default
-                    };
+                    let surface_override = codex_fallback_surface(codex_desktop_running);
 
-                    persist_live_codex_snapshots(
-                        &active,
-                        resolved_service_tier.is_fast(),
-                        opencode_running,
-                    );
-                    let status = if discord_enabled {
+                    persist_live_codex_snapshots(&active, &codex_config, surface_override);
+                    let status = if discord_enabled && publisher_owned {
                         let active_session = codex_session::preferred_active_session(&active);
                         let effective_limits = codex_session::latest_limits_source(&active);
                         let limits = effective_limits.as_ref().map(|item| &item.limits);
@@ -345,25 +383,39 @@ pub fn start_background_poller() {
                         }
                         claude_discord.shutdown();
                         codex_discord.status().to_string()
-                    } else {
+                    } else if !discord_enabled {
                         claude_discord.shutdown();
                         codex_discord.shutdown();
                         "Disabled".to_string()
+                    } else {
+                        claude_discord.shutdown();
+                        codex_discord.shutdown();
+                        "Controlled by external daemon".to_string()
                     };
 
                     if let Ok(mut d) = data.lock() {
+                        d.discord_enabled = discord_enabled;
                         d.sessions = ActiveSessions::Codex(active);
                         d.codex_opencode_running = opencode_running;
                         d.codex_desktop_surface_running = codex_desktop_running;
                         d.claude_usage = None;
                         d.claude_usage_error = None;
                     }
-                    status
+                    (
+                        status,
+                        if publisher_owned {
+                            "pulse"
+                        } else {
+                            "external_daemon"
+                        }
+                        .to_string(),
+                    )
                 }
             };
 
             if let Ok(mut d) = data.lock() {
                 d.discord_status = discord_status;
+                d.discord_publisher = discord_publisher;
             }
 
             thread::sleep(REFRESH_INTERVAL);
@@ -413,15 +465,30 @@ fn read_codex_desktop_surface_running() -> bool {
         .is_some_and(|d| d.codex_desktop_surface_running)
 }
 
+fn codex_fallback_surface(desktop_surface_running: bool) -> PresenceSurface {
+    if desktop_surface_running {
+        PresenceSurface::Desktop
+    } else {
+        PresenceSurface::Cli
+    }
+}
+
+fn codex_session_surface(
+    session: &CodexSessionSnapshot,
+    fallback_surface: PresenceSurface,
+) -> PresenceSurface {
+    session.detected_surface().unwrap_or(fallback_surface)
+}
+
 fn current_live_session_infos() -> Vec<SessionInfo> {
     match current_provider() {
         Provider::Claude => build_claude_session_infos(&read_claude_sessions()),
         Provider::Codex => {
-            let fast_mode = resolve_service_tier().is_fast();
+            let config = CodexPresenceConfig::load_or_init().unwrap_or_default();
             build_codex_session_infos(
                 &read_codex_sessions(),
-                fast_mode,
-                read_codex_desktop_surface_running(),
+                &config,
+                codex_fallback_surface(read_codex_desktop_surface_running()),
             )
         }
     }
@@ -441,6 +508,10 @@ pub struct DiscordPresencePreview {
     pub app_name: String,
     pub details: String,
     pub state: String,
+    pub large_image_key: String,
+    pub large_text: String,
+    pub small_image_key: Option<String>,
+    pub small_text: Option<String>,
     pub has_session: bool,
     pub duration_secs: u64,
 }
@@ -717,8 +788,8 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
 
 fn build_codex_session_infos(
     snapshots: &[CodexSessionSnapshot],
-    fast_mode: bool,
-    desktop_surface_running: bool,
+    config: &CodexPresenceConfig,
+    fallback_surface: PresenceSurface,
 ) -> Vec<SessionInfo> {
     let now = SystemTime::now();
     let idle = now
@@ -734,17 +805,17 @@ fn build_codex_session_infos(
                 .map(|st| (chrono::Utc::now() - st).num_seconds().max(0) as u64)
                 .unwrap_or(0);
             let model_id_raw = s.model.clone().unwrap_or_default();
-            let model_key = if model_id_raw.is_empty() {
-                "gpt-5-codex".to_string()
+            let model_key = model_id_raw.clone();
+            let fast = s.speed.mode == CodexSpeedMode::Fast;
+            let display_name = if model_key.is_empty() {
+                "Unknown".to_string()
             } else {
-                model_id_raw.clone()
+                cc_discord_presence::codex::util::format_model_display(
+                    &model_key,
+                    s.reasoning_effort,
+                    fast,
+                )
             };
-            let display_name = cc_discord_presence::codex::util::format_model_display(
-                &model_key,
-                s.reasoning_effort,
-                fast_mode,
-            );
-            let speed = cc_discord_presence::codex::cost::speed_multiplier(&model_key, fast_mode);
             let context_window = s
                 .context_window
                 .as_ref()
@@ -752,13 +823,11 @@ fn build_codex_session_infos(
                 .or_else(|| {
                     cc_discord_presence::codex::cost::default_model_context_window(&model_key)
                 })
-                .unwrap_or(cc_discord_presence::codex::cost::CODEX_OAUTH_CONTEXT_WINDOW);
-            let context_window_label = if context_window >= 1_000_000 {
-                "1M".to_string()
-            } else if context_window >= 400_000 {
-                "400K".to_string()
+                .unwrap_or(0);
+            let context_window_label = if context_window == 0 {
+                "Unknown".to_string()
             } else {
-                format!("{}K", context_window / 1_000)
+                cc_discord_presence::codex::util::format_tokens(context_window)
             };
             let input_total = codex_total_input_tokens(s);
             let cached_input = s.cached_input_tokens_total;
@@ -777,20 +846,21 @@ fn build_codex_session_infos(
                 activity
             };
             let activity_target = s.activity.as_ref().and_then(|a| a.target.clone());
+            let surface = codex_session_surface(s, fallback_surface);
             SessionInfo {
                 provider: Provider::Codex.as_str().to_string(),
-                app_name: if desktop_surface_running || s.is_desktop_surface() {
-                    Some("Codex App".to_string())
-                } else {
-                    None
-                },
+                app_name: Some(
+                    surface
+                        .label(config.display.desktop_presence_design)
+                        .to_string(),
+                ),
                 session_id: s.session_id.clone(),
                 session_name: None,
                 project: s.project_name.clone(),
                 model: display_name,
                 model_id: model_key,
                 context_window: context_window_label,
-                cost: s.total_cost_usd * speed,
+                cost: s.known_cost_usd.unwrap_or(0.0),
                 tokens: s
                     .session_total_tokens
                     .unwrap_or(input_total + s.output_tokens_total),
@@ -813,16 +883,22 @@ fn build_codex_session_infos(
                 duration_secs,
                 has_thinking: s.reasoning_effort.is_some(),
                 workflow_label: None,
-                subagent_count: usize::from(s.is_subagent),
+                subagent_count: 0,
                 subagents: Vec::new(),
                 tokens_per_sec: 0.0,
-                input_cost: s.cost_breakdown.input_cost_usd * speed,
-                output_cost: s.cost_breakdown.output_cost_usd * speed,
+                input_cost: s.cost_breakdown.input_cost_usd,
+                output_cost: s.cost_breakdown.output_cost_usd,
                 cache_write_cost: 0.0,
-                cache_read_cost: s.cost_breakdown.cached_input_cost_usd * speed,
-                speed: Speed::from_fast(fast_mode).as_str().to_string(),
-                fast: fast_mode,
-                service_tier: None,
+                cache_read_cost: s.cost_breakdown.cached_input_cost_usd,
+                speed: s.speed.mode.label().to_ascii_lowercase(),
+                fast,
+                service_tier: s.speed.known.then(|| {
+                    if fast {
+                        "priority".to_string()
+                    } else {
+                        "standard".to_string()
+                    }
+                }),
                 intro_pricing: None,
                 has_inflated_tokenizer: false,
             }
@@ -852,10 +928,10 @@ fn persist_live_claude_snapshots(snapshots: &[ClaudeSessionSnapshot]) {
 
 fn persist_live_codex_snapshots(
     snapshots: &[CodexSessionSnapshot],
-    fast_mode: bool,
-    opencode_running: bool,
+    config: &CodexPresenceConfig,
+    fallback_surface: PresenceSurface,
 ) {
-    let result = build_codex_session_infos(snapshots, fast_mode, opencode_running);
+    let result = build_codex_session_infos(snapshots, config, fallback_surface);
     persist_live_session_infos(Provider::Codex, &result);
 }
 
@@ -875,10 +951,19 @@ pub fn get_health() -> HealthResponse {
 }
 
 #[tauri::command]
-pub fn set_discord_enabled(enabled: bool) {
-    if let Ok(mut d) = shared().lock() {
-        d.discord_enabled = enabled;
+pub fn set_discord_enabled(enabled: bool) -> Result<DiscordSettings, String> {
+    if current_provider() == Provider::Codex {
+        let mut config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+        config.presence_enabled = enabled;
+        config.save().map_err(|error| error.to_string())?;
     }
+
+    let mut data = shared()
+        .lock()
+        .map_err(|_| "Discord settings state is unavailable".to_string())?;
+    data.discord_enabled = enabled;
+    drop(data);
+    get_discord_settings()
 }
 
 #[tauri::command]
@@ -893,54 +978,45 @@ pub fn set_discord_display_prefs(
     show_limits: bool,
     show_context: bool,
     show_systems: bool,
-) {
-    if let Ok(mut d) = shared().lock() {
-        d.discord_prefs = DiscordDisplayPrefs {
-            show_project,
-            show_branch,
-            show_model,
-            show_activity,
-            show_tokens,
-            show_cost,
-            show_limits,
-            show_context,
-            show_systems,
-        };
-    }
-    if let Ok(mut cfg) = PresenceConfig::load_or_init() {
-        apply_claude_display_prefs(
-            &mut cfg,
-            &DiscordDisplayPrefs {
-                show_project,
-                show_branch,
-                show_model,
-                show_activity,
-                show_tokens,
-                show_cost,
-                show_limits,
-                show_context,
-                show_systems,
-            },
-        );
-        log_save_error("claude-display-prefs", cfg.save());
-    }
-    if let Ok(mut cfg) = CodexPresenceConfig::load_or_init() {
-        apply_codex_display_prefs(
-            &mut cfg,
-            &DiscordDisplayPrefs {
-                show_project,
-                show_branch,
-                show_model,
-                show_activity,
-                show_tokens,
-                show_cost,
-                show_limits,
-                show_context,
-                show_systems,
-            },
-        );
-        log_save_error("codex-display-prefs", cfg.save());
-    }
+) -> Result<DiscordSettings, String> {
+    let prefs = DiscordDisplayPrefs {
+        show_project,
+        show_branch,
+        show_model,
+        show_activity,
+        show_tokens,
+        show_cost,
+        show_limits,
+        show_context,
+        show_systems,
+    };
+    let mut claude_config = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+    apply_claude_display_prefs(&mut claude_config, &prefs);
+    claude_config.save().map_err(|error| error.to_string())?;
+
+    let mut codex_config =
+        CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+    apply_codex_display_prefs(&mut codex_config, &prefs);
+    codex_config.save().map_err(|error| error.to_string())?;
+
+    shared()
+        .lock()
+        .map_err(|_| "Discord settings state is unavailable".to_string())?
+        .discord_prefs = prefs;
+    get_discord_settings()
+}
+
+#[tauri::command]
+pub fn set_codex_desktop_design(design: String) -> Result<DiscordSettings, String> {
+    let design = match design.trim().to_ascii_lowercase().as_str() {
+        "codex_app" => DesktopPresenceDesign::CodexApp,
+        "chatgpt_app" => DesktopPresenceDesign::ChatGptApp,
+        _ => return Err("Desktop design must be codex_app or chatgpt_app".to_string()),
+    };
+    let mut config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+    config.display.desktop_presence_design = design;
+    config.save().map_err(|error| error.to_string())?;
+    get_discord_settings()
 }
 
 /// Ask the background poller to drop its usage cache and hit the API on the
@@ -1083,6 +1159,110 @@ fn apply_codex_display_prefs(config: &mut CodexPresenceConfig, prefs: &DiscordDi
     config.privacy.show_systems = prefs.show_systems;
 }
 
+fn claude_display_prefs(config: &PresenceConfig) -> DiscordDisplayPrefs {
+    DiscordDisplayPrefs {
+        show_project: config.privacy.show_project_name,
+        show_branch: config.privacy.show_git_branch,
+        show_model: config.privacy.show_model,
+        show_activity: config.privacy.show_activity,
+        show_tokens: config.privacy.show_tokens,
+        show_cost: config.privacy.show_cost,
+        show_limits: config.privacy.show_limits,
+        show_context: config.privacy.show_context,
+        show_systems: config.privacy.show_systems,
+    }
+}
+
+fn codex_display_prefs(config: &CodexPresenceConfig) -> DiscordDisplayPrefs {
+    DiscordDisplayPrefs {
+        show_project: config.privacy.show_project_name,
+        show_branch: config.privacy.show_git_branch,
+        show_model: config.privacy.show_model,
+        show_activity: config.privacy.show_activity,
+        show_tokens: config.privacy.show_tokens,
+        show_cost: config.privacy.show_cost,
+        show_limits: config.privacy.show_limits,
+        show_context: config.privacy.show_context,
+        show_systems: config.privacy.show_systems,
+    }
+}
+
+fn desktop_design_key(design: DesktopPresenceDesign) -> &'static str {
+    match design {
+        DesktopPresenceDesign::CodexApp => "codex_app",
+        DesktopPresenceDesign::ChatGptApp => "chatgpt_app",
+    }
+}
+
+fn build_discord_settings(
+    provider: Provider,
+    cached: &CachedData,
+    claude_config: Option<&PresenceConfig>,
+    codex_config: Option<&CodexPresenceConfig>,
+) -> DiscordSettings {
+    let (enabled, display_prefs, desktop_design, supports_desktop_design) = match provider {
+        Provider::Claude => (
+            cached.discord_enabled,
+            claude_config
+                .map(claude_display_prefs)
+                .unwrap_or_else(|| cached.discord_prefs.clone()),
+            None,
+            false,
+        ),
+        Provider::Codex => (
+            codex_config
+                .map(|config| config.presence_enabled)
+                .unwrap_or(cached.discord_enabled),
+            codex_config
+                .map(codex_display_prefs)
+                .unwrap_or_else(|| cached.discord_prefs.clone()),
+            codex_config.map(|config| {
+                desktop_design_key(config.display.desktop_presence_design).to_string()
+            }),
+            true,
+        ),
+    };
+
+    DiscordSettings {
+        provider: provider.as_str().to_string(),
+        enabled,
+        status: cached.discord_status.clone(),
+        publisher: cached.discord_publisher.clone(),
+        display_prefs,
+        desktop_design,
+        supports_desktop_design,
+    }
+}
+
+#[tauri::command]
+pub fn get_discord_settings() -> Result<DiscordSettings, String> {
+    let provider = current_provider();
+    let cached = shared()
+        .lock()
+        .map_err(|_| "Discord settings state is unavailable".to_string())?
+        .clone();
+    match provider {
+        Provider::Claude => {
+            let config = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            Ok(build_discord_settings(
+                provider,
+                &cached,
+                Some(&config),
+                None,
+            ))
+        }
+        Provider::Codex => {
+            let config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            Ok(build_discord_settings(
+                provider,
+                &cached,
+                None,
+                Some(&config),
+            ))
+        }
+    }
+}
+
 fn build_claude_discord_preview(
     sessions: &[ClaudeSessionSnapshot],
     config: &PresenceConfig,
@@ -1093,6 +1273,10 @@ fn build_claude_discord_preview(
             app_name: "Claude Code".to_string(),
             details: "Claude Code".to_string(),
             state: "Waiting for session".to_string(),
+            large_image_key: config.display.large_image_key.clone(),
+            large_text: config.display.large_text.clone(),
+            small_image_key: None,
+            small_text: None,
             has_session: false,
             duration_secs: 0,
         };
@@ -1106,6 +1290,10 @@ fn build_claude_discord_preview(
         app_name: "Claude Code".to_string(),
         details,
         state,
+        large_image_key: config.display.large_image_key.clone(),
+        large_text: config.display.large_text.clone(),
+        small_image_key: None,
+        small_text: None,
         has_session: true,
         duration_secs: claude_duration_secs(session),
     }
@@ -1116,17 +1304,18 @@ fn build_codex_discord_preview(
     config: &CodexPresenceConfig,
     desktop_surface_running: bool,
 ) -> DiscordPresencePreview {
-    let app_name = if desktop_surface_running {
-        "Codex App"
-    } else {
-        "Codex"
-    };
+    let fallback_surface = codex_fallback_surface(desktop_surface_running);
     let Some(session) = codex_session::preferred_active_session(sessions) else {
+        let presentation = idle_presence_presentation(fallback_surface, config);
         return DiscordPresencePreview {
             provider: Provider::Codex.as_str().to_string(),
-            app_name: app_name.to_string(),
-            details: app_name.to_string(),
-            state: "Idling...".to_string(),
+            app_name: presentation.app_name,
+            details: presentation.details,
+            state: presentation.state,
+            large_image_key: presentation.large_image_key,
+            large_text: presentation.large_text,
+            small_image_key: presentation.small_image_key,
+            small_text: presentation.small_text,
             has_session: false,
             duration_secs: 0,
         };
@@ -1136,7 +1325,8 @@ fn build_codex_discord_preview(
     let resolved_plan = PlanDetector::new().resolve_from_sessions(sessions, &config.openai_plan);
     let effective_limits = codex_session::latest_limits_source(sessions);
     let limits = effective_limits.as_ref().map(|item| &item.limits);
-    let (details, state) = codex_presence_lines(
+    let presentation = active_presence_presentation(
+        codex_session_surface(session, fallback_surface),
         session,
         limits,
         &resolved_plan,
@@ -1146,9 +1336,13 @@ fn build_codex_discord_preview(
 
     DiscordPresencePreview {
         provider: Provider::Codex.as_str().to_string(),
-        app_name: app_name.to_string(),
-        details,
-        state,
+        app_name: presentation.app_name,
+        details: presentation.details,
+        state: presentation.state,
+        large_image_key: presentation.large_image_key,
+        large_text: presentation.large_text,
+        small_image_key: presentation.small_image_key,
+        small_text: presentation.small_text,
         has_session: true,
         duration_secs: codex_duration_secs(session),
     }
@@ -1632,7 +1826,12 @@ pub fn set_plan_override(plan: String) {
                     "go" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Go),
                     "plus" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Plus),
                     "team" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business),
-                    "pro" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro),
+                    "pro_5x" | "pro5x" => {
+                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro5x)
+                    }
+                    "pro" | "pro_20x" | "pro20x" => {
+                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro20x)
+                    }
                     "business" => {
                         Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business)
                     }
@@ -2007,7 +2206,7 @@ fn empty_context_breakdown(model: &str, context_window: u64) -> ContextBreakdown
         context_window,
         used_tokens: 0,
         free_space: context_window,
-        autocompact_buffer: (context_window as f64 * 0.033) as u64,
+        autocompact_buffer: 0,
         system_prompt: 0,
         system_tools: 0,
         memory_files: Vec::new(),
@@ -2138,31 +2337,22 @@ fn build_claude_context_breakdown(selected: Option<&ClaudeSessionSnapshot>) -> C
     let skills_total: u64 = skills.iter().map(|f| f.tokens).sum();
     let mcp_tools = collect_claude_mcp_tools(&claude_home.join("settings.json"));
     let mcp_total: u64 = mcp_tools.iter().map(|f| f.tokens).sum();
-    let system_prompt: u64 = 10_000;
-    let system_tools: u64 = 6_000;
-    let known = system_prompt + system_tools + memory_total + skills_total + mcp_total;
-    let used_tokens = if current_context_tokens > 0 {
-        current_context_tokens.min(ctx_window)
-    } else {
-        (known + u64::from(selected.is_some()) * 1_000).min(ctx_window)
-    };
-    let messages = used_tokens.saturating_sub(known);
-    let autocompact_buffer = (ctx_window as f64 * 0.033) as u64;
-    let free_space = ctx_window.saturating_sub(used_tokens.saturating_add(autocompact_buffer));
+    let used_tokens = current_context_tokens.min(ctx_window);
+    let free_space = ctx_window.saturating_sub(used_tokens);
 
     ContextBreakdown {
         model,
         context_window: ctx_window,
         used_tokens,
         free_space,
-        autocompact_buffer,
-        system_prompt,
-        system_tools,
+        autocompact_buffer: 0,
+        system_prompt: 0,
+        system_tools: 0,
         memory_files,
         memory_total,
         skills,
         skills_total,
-        messages,
+        messages: used_tokens,
         mcp_tools,
         mcp_total,
     }
@@ -2238,25 +2428,21 @@ fn build_codex_context_breakdown(selected: Option<&CodexSessionSnapshot>) -> Con
     let skills_total: u64 = skills.iter().map(|f| f.tokens).sum();
     let mcp_tools = collect_codex_mcp_tools(&codex_home.join("config.toml"));
     let mcp_total: u64 = mcp_tools.iter().map(|f| f.tokens).sum();
-    let autocompact_buffer = (ctx_window as f64 * 0.033) as u64;
-    let system_prompt = memory_total.min(used_tokens);
-    let known = system_prompt + skills_total + mcp_total;
-    let messages = used_tokens.saturating_sub(known);
-    let free_space = ctx_window.saturating_sub(used_tokens.saturating_add(autocompact_buffer));
+    let free_space = ctx_window.saturating_sub(used_tokens);
 
     ContextBreakdown {
         model,
         context_window: ctx_window,
         used_tokens,
         free_space,
-        autocompact_buffer,
-        system_prompt,
+        autocompact_buffer: 0,
+        system_prompt: 0,
         system_tools: 0,
         memory_files,
         memory_total,
         skills,
         skills_total,
-        messages,
+        messages: used_tokens,
         mcp_tools,
         mcp_total,
     }
@@ -2563,8 +2749,15 @@ pub async fn get_inflection_points(
 #[tauri::command]
 pub async fn get_model_routing(
     days: Option<i64>,
-) -> crate::analyzers::model_routing::ModelRoutingReport {
-    offload(move || crate::analyzers::model_routing::analyze(&analyzer_sessions(days))).await
+) -> Option<crate::analyzers::model_routing::ModelRoutingReport> {
+    let provider = analyzer_provider();
+    offload(move || {
+        provider
+            .capabilities()
+            .model_routing
+            .then(|| crate::analyzers::model_routing::analyze(&analyzer_sessions(days)))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2666,7 +2859,10 @@ fn recommendations_from_traces(
     traces: &std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace>,
 ) -> Vec<crate::analyzers::recommendations::Recommendation> {
     let cache = crate::analyzers::cache_health::analyze_for_provider(provider, sessions);
-    let routing = crate::analyzers::model_routing::analyze(sessions);
+    let routing = provider
+        .capabilities()
+        .model_routing
+        .then(|| crate::analyzers::model_routing::analyze(sessions));
     let inflections = crate::analyzers::inflection::detect_for_provider(provider, sessions);
     let tool_frequency = crate::analyzers::tool_frequency::analyze(sessions, traces);
     let prompt_complexity = crate::analyzers::prompt_complexity::analyze(sessions, traces);
@@ -2680,7 +2876,7 @@ fn recommendations_from_traces(
         provider,
         sessions,
         cache: &cache,
-        routing: &routing,
+        routing: routing.as_ref(),
         inflections: &inflections,
         tool_frequency: Some(&tool_frequency),
         prompt_complexity: Some(&prompt_complexity),
@@ -2692,6 +2888,7 @@ fn recommendations_from_traces(
 #[derive(Serialize)]
 pub struct ReportsBundle {
     pub provider: String,
+    pub capabilities: cc_discord_presence::provider::ProviderCapabilities,
     pub days: i64,
     pub total_sessions: usize,
     pub recommendations: Vec<crate::analyzers::recommendations::Recommendation>,
@@ -2700,7 +2897,7 @@ pub struct ReportsBundle {
     pub prompt_complexity: crate::analyzers::prompt_complexity::PromptComplexityReport,
     pub session_health: crate::analyzers::session_health::SessionHealthReport,
     pub cache_health: crate::analyzers::cache_health::CacheHealthReport,
-    pub model_routing: crate::analyzers::model_routing::ModelRoutingReport,
+    pub model_routing: Option<crate::analyzers::model_routing::ModelRoutingReport>,
     pub inflection_points: Vec<crate::analyzers::inflection::InflectionPoint>,
 }
 
@@ -2733,7 +2930,10 @@ pub fn build_reports_bundle_from_roots(
     );
 
     let cache_health = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
-    let model_routing = crate::analyzers::model_routing::analyze(&sessions);
+    let capabilities = provider.capabilities();
+    let model_routing = capabilities
+        .model_routing
+        .then(|| crate::analyzers::model_routing::analyze(&sessions));
     let inflection_points = crate::analyzers::inflection::detect_for_provider(provider, &sessions);
     let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
     let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
@@ -2753,7 +2953,7 @@ pub fn build_reports_bundle_from_roots(
         provider,
         sessions: &sessions,
         cache: &cache_health,
-        routing: &model_routing,
+        routing: model_routing.as_ref(),
         inflections: &inflection_points,
         tool_frequency: Some(&tool_frequency),
         prompt_complexity: Some(&prompt_complexity),
@@ -2763,6 +2963,7 @@ pub fn build_reports_bundle_from_roots(
 
     ReportsBundle {
         provider: provider.as_str().to_string(),
+        capabilities,
         days: days.unwrap_or(30),
         total_sessions: sessions.len(),
         recommendations,
@@ -2783,8 +2984,15 @@ mod tests {
         build_codex_session_infos, codex_plan_key_from_tier, codex_total_input_tokens,
         plan_key_from_override,
     };
-    use cc_discord_presence::codex::config::PresenceConfig as TestCodexPresenceConfig;
-    use cc_discord_presence::codex::cost::{PricingSource, TokenCostBreakdown};
+    use cc_discord_presence::codex::config::{
+        DesktopPresenceDesign, DisplayConfig, OpenAiPlanMode,
+        PresenceConfig as TestCodexPresenceConfig, PresenceSurface as TestPresenceSurface,
+        PrivacyConfig,
+    };
+    use cc_discord_presence::codex::cost::{
+        CostAttribution, PricingSource, PricingStatus, TokenCostBreakdown,
+    };
+    use cc_discord_presence::codex::model::{SessionSpeed, SpeedMode, SpeedSource};
     use cc_discord_presence::codex::session::CodexSessionSnapshot;
     use cc_discord_presence::codex::telemetry::limits::RateLimits;
     use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
@@ -2846,7 +3054,7 @@ mod tests {
     }
 
     #[test]
-    fn display_prefs_are_saved_for_claude_and_codex_together() {
+    fn discord_controls_are_saved_for_claude_and_codex_together() {
         let temp =
             std::env::temp_dir().join(format!("pulse-display-prefs-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
@@ -2859,7 +3067,10 @@ mod tests {
             std::env::set_var("CODEX_HOME", &codex_home);
         }
 
-        super::set_discord_display_prefs(true, false, true, true, true, true, false, false, true);
+        super::set_discord_display_prefs(true, false, true, true, true, true, false, false, true)
+            .expect("save display preferences");
+        super::set_active_provider("codex".to_string());
+        let settings = super::set_discord_enabled(false).expect("disable Codex presence");
 
         let claude = TestClaudePresenceConfig::load_or_init().expect("claude config");
         let codex = TestCodexPresenceConfig::load_or_init().expect("codex config");
@@ -2874,6 +3085,45 @@ mod tests {
         assert!(!codex.privacy.show_context);
         assert!(claude.privacy.show_systems);
         assert!(codex.privacy.show_systems);
+        assert!(!codex.presence_enabled);
+        assert!(!settings.enabled);
+    }
+
+    #[test]
+    fn codex_discord_settings_reflect_persisted_privacy_design_and_publisher() {
+        let config = TestCodexPresenceConfig {
+            presence_enabled: false,
+            privacy: PrivacyConfig {
+                show_git_branch: false,
+                ..PrivacyConfig::default()
+            },
+            display: DisplayConfig {
+                desktop_presence_design: DesktopPresenceDesign::ChatGptApp,
+                ..DisplayConfig::default()
+            },
+            ..TestCodexPresenceConfig::default()
+        };
+        let cached = super::CachedData {
+            active_provider: cc_discord_presence::provider::Provider::Codex,
+            discord_status: "Controlled by external daemon".to_string(),
+            discord_publisher: "external_daemon".to_string(),
+            discord_enabled: true,
+            ..Default::default()
+        };
+
+        let settings = super::build_discord_settings(
+            cc_discord_presence::provider::Provider::Codex,
+            &cached,
+            None,
+            Some(&config),
+        );
+
+        assert_eq!(settings.provider, "codex");
+        assert!(!settings.enabled);
+        assert_eq!(settings.publisher, "external_daemon");
+        assert!(!settings.display_prefs.show_branch);
+        assert_eq!(settings.desktop_design.as_deref(), Some("chatgpt_app"));
+        assert!(settings.supports_desktop_design);
     }
 
     #[test]
@@ -2996,20 +3246,25 @@ mod tests {
 
     #[test]
     fn codex_session_info_never_carries_an_intro_pricing_badge_or_inflated_tokenizer_flag() {
-        let standard = build_codex_session_infos(&[sample_codex_snapshot()], false, false);
+        let standard = build_codex_session_infos(
+            &[sample_codex_snapshot()],
+            &TestCodexPresenceConfig::default(),
+            TestPresenceSurface::Cli,
+        );
 
         assert!(standard[0].intro_pricing.is_none());
         assert!(!standard[0].has_inflated_tokenizer);
     }
 
     #[test]
-    fn codex_session_info_counts_subagent_source_safely() {
-        let mut snapshot = sample_codex_snapshot();
-        snapshot.is_subagent = true;
+    fn codex_session_info_does_not_invent_subagent_count() {
+        let infos = build_codex_session_infos(
+            &[sample_codex_snapshot()],
+            &TestCodexPresenceConfig::default(),
+            TestPresenceSurface::Cli,
+        );
 
-        let infos = build_codex_session_infos(&[snapshot], false, false);
-
-        assert_eq!(infos[0].subagent_count, 1);
+        assert_eq!(infos[0].subagent_count, 0);
         assert!(infos[0].subagents.is_empty());
         assert_eq!(infos[0].workflow_label, None);
     }
@@ -3048,12 +3303,22 @@ mod tests {
             "the Context Window view must show current fill, not the session's all-time peak"
         );
         assert_eq!(breakdown.context_window, 1_000_000);
+        assert_eq!(breakdown.system_prompt, 0);
+        assert_eq!(breakdown.system_tools, 0);
+        assert_eq!(breakdown.autocompact_buffer, 0);
+        assert_eq!(breakdown.messages, breakdown.used_tokens);
+        assert_eq!(breakdown.free_space, 1_000_000 - 25_500);
         assert!(
             breakdown.free_space > 0,
             "a session that genuinely emptied out after compaction must show real free space, \
              not 0 (the exact symptom Tony reported: a CRITICAL \"100% full\" recommendation \
              for a session that isn't actually full right now)"
         );
+
+        let empty = super::empty_context_breakdown("Claude", 200_000);
+        assert_eq!(empty.used_tokens, 0);
+        assert_eq!(empty.autocompact_buffer, 0);
+        assert_eq!(empty.free_space, 200_000);
     }
 
     #[test]
@@ -3082,7 +3347,11 @@ mod tests {
             codex_plan_key_from_tier(DetectedPlanTier::Enterprise),
             "enterprise"
         );
-        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Pro), "pro");
+        assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Pro5x), "pro_5x");
+        assert_eq!(
+            codex_plan_key_from_tier(DetectedPlanTier::Pro20x),
+            "pro_20x"
+        );
         assert_eq!(codex_plan_key_from_tier(DetectedPlanTier::Unknown), "");
     }
 
@@ -3096,6 +3365,7 @@ mod tests {
             originator: None,
             source: None,
             reasoning_effort: None,
+            speed: SessionSpeed::default(),
             approval_policy: None,
             sandbox_policy: None,
             session_total_tokens: Some(54_764_083),
@@ -3108,13 +3378,18 @@ mod tests {
             last_cached_input_tokens: None,
             last_output_tokens: None,
             total_cost_usd: 0.0,
+            known_cost_usd: None,
             cost_breakdown: TokenCostBreakdown {
                 input_cost_usd: 0.0,
+                cache_write_cost_usd: 0.0,
                 cached_input_cost_usd: 0.0,
                 output_cost_usd: 0.0,
                 cached_input_savings_usd: 0.0,
             },
             pricing_source: PricingSource::Fallback,
+            pricing_status: PricingStatus::Unavailable,
+            cost_attribution: CostAttribution::SingleModel,
+            cost_breakdown_reconciled: false,
             context_window: None,
             limits: RateLimits::default(),
             rate_limit_envelopes: Vec::new(),
@@ -3123,7 +3398,6 @@ mod tests {
             last_token_event_at: None,
             last_activity: SystemTime::UNIX_EPOCH,
             source_file: PathBuf::from("C:/Users/xt0n1/.codex/sessions/sample.jsonl"),
-            is_subagent: false,
         }
     }
 
@@ -3134,11 +3408,15 @@ mod tests {
     }
 
     #[test]
-    fn codex_session_info_keeps_oauth_context_at_400k_for_gpt_5_4() {
-        let infos = build_codex_session_infos(&[sample_codex_snapshot()], false, false);
+    fn codex_session_info_uses_the_canonical_effective_context_for_gpt_5_4() {
+        let infos = build_codex_session_infos(
+            &[sample_codex_snapshot()],
+            &TestCodexPresenceConfig::default(),
+            TestPresenceSurface::Cli,
+        );
 
-        assert_eq!(infos[0].context_window, "400K");
-        assert_eq!(infos[0].context_window_tokens, 400_000);
+        assert_eq!(infos[0].context_window, "258.4K");
+        assert_eq!(infos[0].context_window_tokens, 258_400);
     }
 
     #[test]
@@ -3150,6 +3428,31 @@ mod tests {
         assert_eq!(preview.details, "Codex App");
         assert_eq!(preview.state, "Idling...");
         assert!(!preview.has_session);
+    }
+
+    #[test]
+    fn codex_discord_preview_uses_selected_chatgpt_identity_and_hides_branch() {
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.model = Some("gpt-5.6-sol".into());
+        snapshot.reasoning_effort = Some(cc_discord_presence::codex::model::ReasoningEffort::Max);
+        snapshot.git_branch = Some("main".into());
+        snapshot.originator = Some("Codex Desktop".into());
+        let mut config = TestCodexPresenceConfig::default();
+        config.display.desktop_presence_design = DesktopPresenceDesign::ChatGptApp;
+        config.privacy.show_git_branch = false;
+        config.openai_plan.mode = OpenAiPlanMode::Manual;
+
+        let preview = build_codex_discord_preview(&[snapshot], &config, true);
+
+        assert_eq!(preview.app_name, "ChatGPT App");
+        assert_eq!(preview.large_image_key, "codex-logo");
+        assert_eq!(preview.large_text, "ChatGPT App");
+        assert!(!preview.details.contains("main"));
+        assert!(
+            preview
+                .state
+                .starts_with("GPT-5.6 Sol · Max | Pro 20x ($200/month)")
+        );
     }
 
     #[test]
@@ -3181,26 +3484,33 @@ mod tests {
     }
 
     #[test]
-    fn fast_mode_scales_codex_cost_by_speed_multiplier() {
+    fn codex_session_info_does_not_multiply_canonical_fast_cost_twice() {
         use super::build_codex_session_infos;
 
         let mut snapshot = sample_codex_snapshot();
         snapshot.model = Some("gpt-5.5".into());
+        snapshot.speed = SessionSpeed::explicit(SpeedMode::Fast, SpeedSource::ThreadSettings);
         snapshot.total_cost_usd = 4.0;
+        snapshot.known_cost_usd = Some(4.0);
+        snapshot.pricing_status = PricingStatus::Exact;
         snapshot.cost_breakdown = TokenCostBreakdown {
             input_cost_usd: 1.0,
+            cache_write_cost_usd: 0.0,
             cached_input_cost_usd: 0.5,
             output_cost_usd: 2.5,
             cached_input_savings_usd: 4.5,
         };
 
-        let standard = build_codex_session_infos(&[snapshot.clone()], false, false);
-        let fast = build_codex_session_infos(&[snapshot], true, false);
+        let info = build_codex_session_infos(
+            &[snapshot],
+            &TestCodexPresenceConfig::default(),
+            TestPresenceSurface::Cli,
+        );
 
-        assert!((standard[0].cost - 4.0).abs() < 0.0001);
-        assert!((fast[0].cost - 10.0).abs() < 0.0001);
-        assert!((fast[0].input_cost - 2.5).abs() < 0.0001);
-        assert!((fast[0].output_cost - 6.25).abs() < 0.0001);
-        assert!((fast[0].cache_read_cost - 1.25).abs() < 0.0001);
+        assert!((info[0].cost - 4.0).abs() < 0.0001);
+        assert!((info[0].input_cost - 1.0).abs() < 0.0001);
+        assert!((info[0].output_cost - 2.5).abs() < 0.0001);
+        assert!((info[0].cache_read_cost - 0.5).abs() < 0.0001);
+        assert!(info[0].fast);
     }
 }

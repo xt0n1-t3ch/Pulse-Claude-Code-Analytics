@@ -1,25 +1,83 @@
 <script lang="ts">
-  import { sessions, activeSessions, rateLimits, discordUser, health, discordPreview, discordPresencePreview } from "../lib/stores";
+  import { onMount } from "svelte";
+  import {
+    sessions,
+    activeSessions,
+    rateLimits,
+    discordUser,
+    health,
+    discordPreview,
+    discordPresencePreview,
+    discordSettings,
+    addToast,
+    applyDiscordSettings,
+    loadDiscordSettings,
+    previewToDisplayPrefs,
+    refreshDiscordPresencePreview,
+  } from "../lib/stores";
   import { provider, providerProfile } from "../lib/provider";
-  import { setDiscordEnabled } from "../lib/api";
+  import {
+    setCodexDesktopDesign,
+    setDiscordDisplayPrefs,
+    setDiscordEnabled,
+  } from "../lib/api";
   import type { SessionInfo } from "../lib/api";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
   import { rpArtFor } from "../lib/rpArt";
   import PulseMark from "../components/PulseMark.svelte";
 
   let discordEnabled = $state(true);
+  let settingsPending = $state(false);
 
   $effect(() => {
-    if ($health) discordEnabled = $health.discord_enabled;
+    if ($discordSettings) discordEnabled = $discordSettings.enabled;
+    else if ($health) discordEnabled = $health.discord_enabled;
   });
 
-  function toggleDiscord(): void {
-    discordEnabled = !discordEnabled;
-    setDiscordEnabled(discordEnabled);
+  onMount(async () => {
+    try {
+      const settings = await loadDiscordSettings();
+      discordEnabled = settings.enabled;
+      await refreshDiscordPresencePreview();
+    } catch (error) {
+      addToast(`Discord settings failed to load: ${String(error)}`, "danger", 5000);
+    }
+  });
+
+  async function toggleDiscord(): Promise<void> {
+    if (settingsPending) return;
+    const previous = discordEnabled;
+    discordEnabled = !previous;
+    settingsPending = true;
+    try {
+      applyDiscordSettings(await setDiscordEnabled(discordEnabled));
+      await refreshDiscordPresencePreview();
+    } catch (error) {
+      discordEnabled = previous;
+      addToast(`Rich Presence update failed: ${String(error)}`, "danger", 5000);
+    } finally {
+      settingsPending = false;
+    }
+  }
+
+  async function persistPreview(next: typeof $discordPreview): Promise<void> {
+    if (settingsPending) return;
+    const previous = $discordPreview;
+    discordPreview.set(next);
+    settingsPending = true;
+    try {
+      applyDiscordSettings(await setDiscordDisplayPrefs(previewToDisplayPrefs(next)));
+      await refreshDiscordPresencePreview();
+    } catch (error) {
+      discordPreview.set(previous);
+      addToast(`Discord privacy update failed: ${String(error)}`, "danger", 5000);
+    } finally {
+      settingsPending = false;
+    }
   }
 
   function toggleSetting(key: keyof typeof $discordPreview): void {
-    discordPreview.update((s) => ({ ...s, [key]: !s[key] }));
+    void persistPreview({ ...$discordPreview, [key]: !$discordPreview[key] });
   }
 
   type Preset = "minimal" | "standard" | "full";
@@ -31,7 +89,27 @@
   const presetOrder: Preset[] = ["minimal", "standard", "full"];
 
   function applyPreset(name: Preset): void {
-    discordPreview.set({ ...presets[name] });
+    void persistPreview({ ...presets[name] });
+  }
+
+  async function changeDesktopDesign(
+    design: "codex_app" | "chatgpt_app",
+  ): Promise<void> {
+    if (settingsPending || $discordSettings?.desktop_design === design) return;
+    const previous = $discordSettings;
+    if (previous) {
+      applyDiscordSettings({ ...previous, desktop_design: design });
+    }
+    settingsPending = true;
+    try {
+      applyDiscordSettings(await setCodexDesktopDesign(design));
+      await refreshDiscordPresencePreview();
+    } catch (error) {
+      if (previous) applyDiscordSettings(previous);
+      addToast(`Desktop identity update failed: ${String(error)}`, "danger", 5000);
+    } finally {
+      settingsPending = false;
+    }
   }
 
   let activePreset = $derived.by<Preset | null>(() => {
@@ -51,7 +129,13 @@
   let activeSessionCount = $derived($activeSessions.length);
   let previewAppName = $derived(previewSession?.app_name ?? $providerProfile.productName);
   let presenceAppName = $derived($discordPresencePreview?.app_name ?? previewAppName);
-  let previewArt = $derived(rpArtFor(previewSession?.provider ?? $provider, previewSession?.app_name));
+  let previewArt = $derived(
+    rpArtFor(
+      $discordPresencePreview?.provider ?? previewSession?.provider ?? $provider,
+      $discordPresencePreview?.large_image_key,
+      $discordPresencePreview?.large_text,
+    ),
+  );
   let previewAssetKey = $derived(previewArt.assetKey);
   let previewFast = $derived(previewSession?.fast ?? false);
 
@@ -178,7 +262,7 @@
       <!-- Section 1: Master toggle -->
       <div class="cc-toggle-row" class:on={discordEnabled}>
         <label class="big-toggle">
-          <input type="checkbox" checked={discordEnabled} onchange={toggleDiscord} />
+          <input type="checkbox" checked={discordEnabled} disabled={settingsPending} onchange={toggleDiscord} />
           <span class="toggle-track">
             <span class="toggle-thumb"></span>
           </span>
@@ -192,6 +276,35 @@
           </span>
         </label>
       </div>
+
+      {#if $discordSettings?.supports_desktop_design}
+        <div class="cc-section identity-section">
+          <div class="cc-section-head">
+            <div class="cc-section-text">
+              <h3 class="cc-section-title">Desktop identity</h3>
+              <p class="cc-section-desc">Choose the Discord app name and large artwork for Codex Desktop.</p>
+            </div>
+            <div class="preset-seg identity-seg" role="group" aria-label="Codex desktop design">
+              <button
+                type="button"
+                class="preset-opt"
+                class:active={$discordSettings.desktop_design === "codex_app"}
+                aria-pressed={$discordSettings.desktop_design === "codex_app"}
+                disabled={settingsPending}
+                onclick={() => changeDesktopDesign("codex_app")}
+              >Codex App</button>
+              <button
+                type="button"
+                class="preset-opt"
+                class:active={$discordSettings.desktop_design === "chatgpt_app"}
+                aria-pressed={$discordSettings.desktop_design === "chatgpt_app"}
+                disabled={settingsPending}
+                onclick={() => changeDesktopDesign("chatgpt_app")}
+              >ChatGPT App</button>
+            </div>
+          </div>
+        </div>
+      {/if}
 
       <!-- Section 2: Preset -->
       <div class="cc-section">
@@ -208,6 +321,7 @@
                 class="preset-opt"
                 class:active={activePreset === name}
                 aria-selected={activePreset === name}
+                disabled={settingsPending}
                 onclick={() => applyPreset(name)}
               >{name.charAt(0).toUpperCase() + name.slice(1)}</button>
             {/each}
@@ -237,6 +351,7 @@
                 <input
                   type="checkbox"
                   checked={$discordPreview[row.key]}
+                  disabled={settingsPending}
                   onchange={() => toggleSetting(row.key)}
                 />
                 <span class="toggle-slider"></span>

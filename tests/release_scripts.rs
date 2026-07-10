@@ -151,6 +151,13 @@ fn updater_syncs_explicit_tag_and_commit_without_touching_pulse_adapters() {
     let cost = read(pulse.path().join("src/codex/cost.rs"));
     assert_eq!(cost.matches("pub fn speed_multiplier").count(), 1);
     assert!(cost.contains("crate::codex::config"));
+    let formatted = Command::new("rustfmt")
+        .arg("--edition=2024")
+        .arg("--check")
+        .arg(pulse.path().join("src/codex/cost.rs"))
+        .output()
+        .expect("check synced Rust formatting");
+    assert_success(&formatted);
     assert_eq!(
         fs::read(canonical.path().join("src/model_catalog.json")).expect("canonical catalog"),
         fs::read(pulse.path().join("src/codex/model_catalog.json")).expect("vendored catalog")

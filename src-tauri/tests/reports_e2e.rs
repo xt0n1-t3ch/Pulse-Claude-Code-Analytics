@@ -188,6 +188,33 @@ fn bundle_scans_jsonl_tree_exactly_once() {
 }
 
 #[test]
+fn codex_bundle_exposes_cache_health_without_claude_model_routing() {
+    let _guard = lock_scan_counter();
+    let fixture = build_fixture();
+    let mut sessions = fixture.sessions.clone();
+    for session in &mut sessions {
+        session.provider = Provider::Codex.as_str().to_string();
+        session.model = "GPT-5.6 Sol".to_string();
+        session.model_id = "gpt-5.6-sol".to_string();
+    }
+
+    let bundle = build_reports_bundle_from_roots(
+        Provider::Codex,
+        Some(30),
+        sessions,
+        Vec::new(),
+        Vec::new(),
+    );
+
+    assert!(bundle.capabilities.cache_health);
+    assert!(!bundle.capabilities.model_routing);
+    assert!(bundle.cache_health.sessions_analyzed > 0);
+    assert!(bundle.model_routing.is_none());
+
+    fs::remove_dir_all(&fixture.root).ok();
+}
+
+#[test]
 fn oversized_jsonl_is_skipped() {
     let _guard = lock_scan_counter();
     let fixture = build_fixture();

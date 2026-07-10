@@ -1,7 +1,5 @@
 use crate::db;
 
-const REPO_URL: &str = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics";
-
 struct ReportData {
     sessions: Vec<db::HistoricalSession>,
     daily: Vec<db::DailyStat>,
@@ -223,10 +221,16 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
 /// Render the analytics report as Markdown — suitable for pasting into a
 /// GitHub issue, a Slack message, or a CC session. Sections mirror the HTML
 /// report: cache grade, stats, top sessions, project + model breakdowns.
-/// Render the analytics report as Markdown — suitable for pasting into a
-/// GitHub issue, a Slack message, or a CC session. Sections mirror the HTML
-/// report: cache grade, stats, top sessions, project + model breakdowns.
 pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> String {
+    let provider = cc_discord_presence::provider::load_active_provider();
+    generate_markdown_report_for_provider(provider, days, project)
+}
+
+pub fn generate_markdown_report_for_provider(
+    provider: cc_discord_presence::provider::Provider,
+    days: Option<i64>,
+    project: Option<&str>,
+) -> String {
     use super::analyzers::{
         cache_health, inflection, model_routing, prompt_complexity, session_trace, tool_frequency,
         trace_overview,
@@ -234,7 +238,6 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
     use std::fmt::Write as _;
 
     let d = days.unwrap_or(30);
-    let provider = cc_discord_presence::provider::load_active_provider();
     let data = load_report_data(d, project);
     let sessions = data.sessions;
     let projects = data.projects;
@@ -246,8 +249,11 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
     let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
     let total_tokens: i64 = sessions.iter().map(|s| s.total_tokens).sum();
 
+    let capabilities = provider.capabilities();
     let cache = cache_health::analyze_for_provider(provider, &sessions);
-    let routing = model_routing::analyze(&sessions);
+    let routing = capabilities
+        .model_routing
+        .then(|| model_routing::analyze(&sessions));
     let inflections = inflection::detect_for_provider(provider, &sessions);
     let traces = session_trace::load_session_traces(&sessions);
     let tool_frequency = tool_frequency::analyze(&sessions, &traces);
@@ -263,10 +269,9 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
     });
 
     let period = project
-        .map(|p| format!("{p} — last {d} days"))
+        .map(|p| format!("{} — last {d} days", markdown_escape(p)))
         .unwrap_or_else(|| format!("All projects — last {d} days"));
     let generated = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
-    let md_escape = |value: &str| value.replace('|', r"\|").replace(['\r', '\n'], " ");
     let truncate = |value: &str, max_chars: usize| {
         let mut out = String::new();
         for (idx, ch) in value.chars().enumerate() {
@@ -335,85 +340,92 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
         format_tokens_short(cache.total_input)
     )
     .unwrap();
-    writeln!(md, "- Diagnosis: {}\n", cache.diagnosis).unwrap();
+    writeln!(md, "- Diagnosis: {}\n", markdown_escape(&cache.diagnosis)).unwrap();
 
-    writeln!(md, "## Routing\n").unwrap();
-    writeln!(md, "| Family | Sessions | Cost share | Avg cost/session | Total cost |\n|---|---:|---:|---:|---:|").unwrap();
-    for (label, stats) in [
-        ("Opus", &routing.opus),
-        ("Sonnet", &routing.sonnet),
-        ("Haiku", &routing.haiku),
-        ("Other", &routing.other),
-    ] {
-        writeln!(
-            md,
-            "| {} | {} | {:.1}% | {} | {} |",
-            label,
-            stats.sessions,
-            stats.cost_share_pct,
-            format_cost(stats.avg_cost_per_session),
-            format_cost(stats.cost)
-        )
-        .unwrap();
-    }
-    writeln!(md, "\nRouting diagnosis: {}", routing.diagnosis).unwrap();
-    writeln!(
-        md,
-        "Estimated reroute savings: {}\n",
-        format_cost(routing.estimated_savings_if_rerouted)
-    )
-    .unwrap();
-
-    if !models.is_empty() {
-        writeln!(md, "### Model Distribution\n").unwrap();
-        writeln!(md, "| Model | Sessions | Cost |\n|---|---:|---:|").unwrap();
-        for (name, count, cost) in &models {
-            let marker = if model_label_is_fast_capable(name) {
-                " ⚡"
-            } else {
-                ""
-            };
+    if let Some(routing) = routing.as_ref() {
+        writeln!(md, "## Routing\n").unwrap();
+        writeln!(md, "| Family | Sessions | Cost share | Avg cost/session | Total cost |\n|---|---:|---:|---:|---:|").unwrap();
+        for (label, stats) in [
+            ("Opus", &routing.opus),
+            ("Sonnet", &routing.sonnet),
+            ("Haiku", &routing.haiku),
+            ("Other", &routing.other),
+        ] {
             writeln!(
                 md,
-                "| {}{} | {} | {} |",
-                md_escape(name),
-                marker,
-                count,
-                format_cost(*cost)
+                "| {} | {} | {:.1}% | {} | {} |",
+                label,
+                stats.sessions,
+                stats.cost_share_pct,
+                format_cost(stats.avg_cost_per_session),
+                format_cost(stats.cost)
             )
             .unwrap();
         }
-        writeln!(md).unwrap();
-    }
+        writeln!(
+            md,
+            "\nRouting diagnosis: {}",
+            markdown_escape(&routing.diagnosis)
+        )
+        .unwrap();
+        writeln!(
+            md,
+            "Estimated reroute savings: {}\n",
+            format_cost(routing.estimated_savings_if_rerouted)
+        )
+        .unwrap();
 
-    let speed_split = compute_speed_split(&sessions);
-    writeln!(md, "### Speed Split\n").unwrap();
-    writeln!(
-        md,
-        "| Tier | Sessions | Cost | Share |\n|---|---:|---:|---:|"
-    )
-    .unwrap();
-    writeln!(
-        md,
-        "| Fast-capable ⚡ | {} | {} | {:.1}% |",
-        speed_split.fast_sessions,
-        format_cost(speed_split.fast_cost),
-        speed_split.fast_share_pct()
-    )
-    .unwrap();
-    writeln!(
-        md,
-        "| Standard | {} | {} | {:.1}% |",
-        speed_split.standard_sessions,
-        format_cost(speed_split.standard_cost),
-        speed_split.standard_share_pct()
-    )
-    .unwrap();
-    writeln!(
-        md,
-        "\nFast-capable spend runs on Opus 4.8+ models (2x priority-speed rate when fast mode is active).\n"
-    )
-    .unwrap();
+        if !models.is_empty() {
+            writeln!(md, "### Model Distribution\n").unwrap();
+            writeln!(md, "| Model | Sessions | Cost |\n|---|---:|---:|").unwrap();
+            for (name, count, cost) in &models {
+                let marker = if model_label_is_fast_capable(name) {
+                    " ⚡"
+                } else {
+                    ""
+                };
+                writeln!(
+                    md,
+                    "| {}{} | {} | {} |",
+                    markdown_escape(name),
+                    marker,
+                    count,
+                    format_cost(*cost)
+                )
+                .unwrap();
+            }
+            writeln!(md).unwrap();
+        }
+
+        let speed_split = compute_speed_split(&sessions);
+        writeln!(md, "### Speed Split\n").unwrap();
+        writeln!(
+            md,
+            "| Tier | Sessions | Cost | Share |\n|---|---:|---:|---:|"
+        )
+        .unwrap();
+        writeln!(
+            md,
+            "| Fast-capable ⚡ | {} | {} | {:.1}% |",
+            speed_split.fast_sessions,
+            format_cost(speed_split.fast_cost),
+            speed_split.fast_share_pct()
+        )
+        .unwrap();
+        writeln!(
+            md,
+            "| Standard | {} | {} | {:.1}% |",
+            speed_split.standard_sessions,
+            format_cost(speed_split.standard_cost),
+            speed_split.standard_share_pct()
+        )
+        .unwrap();
+        writeln!(
+            md,
+            "\nFast-capable spend runs on Opus 4.8+ models (2x priority-speed rate when fast mode is active).\n"
+        )
+        .unwrap();
+    }
 
     writeln!(md, "## Inflections\n").unwrap();
     if inflections.is_empty() {
@@ -433,13 +445,13 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
             writeln!(
                 md,
                 "| {} | {} | {:.2}x | {} | {} | {} | {} |",
-                point.date,
+                markdown_escape(&point.date),
                 direction,
                 point.multiplier,
                 point.sessions_on_day,
                 format_cost(point.cost_on_day),
                 format_cost(point.baseline_cost),
-                md_escape(&point.note)
+                markdown_escape(&point.note)
             )
             .unwrap();
         }
@@ -460,8 +472,8 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
                 md,
                 "| {} | {} | {} | {} | {} | {} |",
                 idx + 1,
-                md_escape(&session.project),
-                md_escape(&session.model),
+                markdown_escape(&session.project),
+                markdown_escape(&session.model),
                 format_tokens_short(session.total_tokens),
                 format_duration(session.duration_secs),
                 format_cost(session.total_cost)
@@ -477,12 +489,12 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
             writeln!(
                 md,
                 "| {} | {} | {} | {} | {} | {} |",
-                md_escape(&project.project),
+                markdown_escape(&project.project),
                 project.session_count,
                 format_tokens_short(project.total_tokens),
                 format_cost(project.avg_session_cost),
                 format_cost(project.total_cost),
-                md_escape(&project.top_model)
+                markdown_escape(&project.top_model)
             )
             .unwrap();
         }
@@ -509,14 +521,19 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
     )
     .unwrap();
     writeln!(md, "- MCP share: {:.1}%", tool_frequency.mcp_share_pct).unwrap();
-    writeln!(md, "- Diagnosis: {}\n", tool_frequency.diagnosis).unwrap();
+    writeln!(
+        md,
+        "- Diagnosis: {}\n",
+        markdown_escape(&tool_frequency.diagnosis)
+    )
+    .unwrap();
     if tool_frequency.available && !tool_frequency.top_tools.is_empty() {
         writeln!(md, "| Tool | Calls | Share |\n|---|---:|---:|").unwrap();
         for tool in &tool_frequency.top_tools {
             writeln!(
                 md,
                 "| {} | {} | {:.1}% |",
-                md_escape(&tool.name),
+                markdown_escape(&tool.name),
                 tool.count,
                 tool.share_pct
             )
@@ -562,7 +579,7 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
             writeln!(
                 md,
                 "| {} | {} | {:.1}% |",
-                md_escape(&tool.name),
+                markdown_escape(&tool.name),
                 tool.calls,
                 tool.share_pct
             )
@@ -573,10 +590,15 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
     writeln!(
         md,
         "```mermaid\n{}\n```\n",
-        trace_overview.telemetry_mermaid
+        markdown_code_block(&trace_overview.telemetry_mermaid)
     )
     .unwrap();
-    writeln!(md, "```mermaid\n{}\n```\n", trace_overview.cache_mermaid).unwrap();
+    writeln!(
+        md,
+        "```mermaid\n{}\n```\n",
+        markdown_code_block(&trace_overview.cache_mermaid)
+    )
+    .unwrap();
 
     writeln!(md, "## Prompts\n").unwrap();
     writeln!(
@@ -609,7 +631,12 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
         prompt_complexity.low_specificity_sessions
     )
     .unwrap();
-    writeln!(md, "- Diagnosis: {}\n", prompt_complexity.diagnosis).unwrap();
+    writeln!(
+        md,
+        "- Diagnosis: {}\n",
+        markdown_escape(&prompt_complexity.diagnosis)
+    )
+    .unwrap();
     if prompt_complexity.available && !prompt_complexity.top_sessions.is_empty() {
         writeln!(
             md,
@@ -620,11 +647,11 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
             writeln!(
                 md,
                 "| {} | {} | {} | {} | {} |",
-                md_escape(&session.project),
+                markdown_escape(&session.project),
                 session.complexity_score,
                 session.specificity_score,
-                md_escape(session.label),
-                md_escape(&truncate(&session.preview, 96))
+                markdown_escape(session.label),
+                markdown_escape(&truncate(&session.preview, 96))
             )
             .unwrap();
         }
@@ -637,6 +664,15 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
 }
 
 pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String {
+    let provider = cc_discord_presence::provider::load_active_provider();
+    generate_html_report_for_provider(provider, days, project)
+}
+
+pub fn generate_html_report_for_provider(
+    provider: cc_discord_presence::provider::Provider,
+    days: Option<i64>,
+    project: Option<&str>,
+) -> String {
     use super::analyzers::{
         cache_health, inflection, model_routing, prompt_complexity, session_trace, tool_frequency,
         trace_overview,
@@ -645,7 +681,6 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     use std::fmt::Write as _;
 
     let d = days.unwrap_or(30);
-    let provider = cc_discord_presence::provider::load_active_provider();
     let data = load_report_data(d, project);
     let sessions = data.sessions;
     let daily = data.daily;
@@ -666,8 +701,11 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     let total_cache_w: i64 = sessions.iter().map(|s| s.cache_write_tokens).sum();
     let total_cache_r: i64 = sessions.iter().map(|s| s.cache_read_tokens).sum();
 
+    let capabilities = provider.capabilities();
     let cache = cache_health::analyze_for_provider(provider, &sessions);
-    let routing = model_routing::analyze(&sessions);
+    let routing = capabilities
+        .model_routing
+        .then(|| model_routing::analyze(&sessions));
     let inflections = inflection::detect_for_provider(provider, &sessions);
     let traces = session_trace::load_session_traces(&sessions);
     let tool_frequency = tool_frequency::analyze(&sessions, &traces);
@@ -680,10 +718,7 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
         'C' => "#fbbf24",
         _ => "#ef4444",
     };
-    let speed_split = compute_speed_split(&sessions);
-    let speed_split_html = build_speed_split_html(&speed_split);
     let project_table_html = build_project_table(&projects);
-    let model_table_html = build_model_table(&models, total_sessions);
     let top_sessions_html = build_top_sessions(&sessions);
     let hourly_heatmap_html = build_hourly_heatmap(&hourly);
     let recommendations = build_recommendations(provider, &sessions, &traces);
@@ -691,15 +726,22 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     for day in &daily {
         *by_date.entry(day.date.clone()).or_default() += day.total_cost;
     }
-    let mut routing_rows_html = String::new();
-    for (label, stats) in [
-        ("Opus", &routing.opus),
-        ("Sonnet", &routing.sonnet),
-        ("Haiku", &routing.haiku),
-        ("Other", &routing.other),
-    ] {
-        let width = stats.cost_share_pct.clamp(0.0, 100.0);
-        write!(routing_rows_html, r##"<div class="routing-row"><div class="routing-label-row"><span class="routing-name">{label}</span><span class="routing-share">{share:.1}%</span></div><div class="routing-meta">{sessions} sessions · {avg_cost} avg · {cost}</div><div class="routing-track"><div class="routing-fill" style="width:{width:.1}%"></div></div></div>"##, label = html_escape(label), share = stats.cost_share_pct, sessions = stats.sessions, avg_cost = format_cost(stats.avg_cost_per_session), cost = html_escape(&format_cost(stats.cost)), width = width).unwrap();
+    let mut routing_section_html = String::new();
+    if let Some(routing) = routing.as_ref() {
+        let speed_split = compute_speed_split(&sessions);
+        let speed_split_html = build_speed_split_html(&speed_split);
+        let model_table_html = build_model_table(&models, total_sessions);
+        let mut routing_rows_html = String::new();
+        for (label, stats) in [
+            ("Opus", &routing.opus),
+            ("Sonnet", &routing.sonnet),
+            ("Haiku", &routing.haiku),
+            ("Other", &routing.other),
+        ] {
+            let width = stats.cost_share_pct.clamp(0.0, 100.0);
+            write!(routing_rows_html, r##"<div class="routing-row"><div class="routing-label-row"><span class="routing-name">{label}</span><span class="routing-share">{share:.1}%</span></div><div class="routing-meta">{sessions} sessions · {avg_cost} avg · {cost}</div><div class="routing-track"><div class="routing-fill" style="width:{width:.1}%"></div></div></div>"##, label = html_escape(label), share = stats.cost_share_pct, sessions = stats.sessions, avg_cost = format_cost(stats.avg_cost_per_session), cost = html_escape(&format_cost(stats.cost)), width = width).unwrap();
+        }
+        write!(routing_section_html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div><div class="section-grid" style="margin-top:18px;">{speed_split_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&format_cost(routing.estimated_savings_if_rerouted)), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html, speed_split_html = speed_split_html).unwrap();
     }
 
     let mut inflections_html = String::new();
@@ -755,7 +797,13 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     if prompt_complexity.available && !prompt_complexity.top_sessions.is_empty() {
         prompt_table_html.push_str(r#"<div class="card"><h2>Most Complex Prompts</h2><table><tr><th>Project</th><th>Complexity</th><th>Specificity</th><th>Label</th><th>Preview</th></tr>"#);
         for session in prompt_complexity.top_sessions.iter().take(8) {
-            write!(prompt_table_html, r#"<tr><td>{}</td><td class="num">{}</td><td class="num">{}</td><td>{}</td><td class="preview-cell">{}</td></tr>"#, html_escape(&session.project), session.complexity_score, session.specificity_score, html_escape(session.label), html_escape(&truncate(&session.preview, 140))).unwrap();
+            prompt_table_html.push_str(&render_prompt_row(
+                &session.project,
+                session.complexity_score,
+                session.specificity_score,
+                session.label,
+                &truncate(&session.preview, 140),
+            ));
         }
         prompt_table_html.push_str("</table></div>");
     } else {
@@ -774,7 +822,7 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
 
     let mut html = String::new();
     html.push_str(&crate::report_template::report_head());
-    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{period_label}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, provider_name = html_escape(cc_discord_presence::provider::load_active_provider().display_name()), period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
+    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{period_label}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, provider_name = html_escape(provider.display_name()), period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
     let topology_tools_html = if trace_overview.top_tools.is_empty() {
         r#"<div class="empty-state">No traced tool mix yet.</div>"#.to_string()
     } else {
@@ -795,9 +843,13 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
         html
     };
 
-    html.push_str(r##"<nav class="anchor-nav screen-only"><a href="#cache">Cache</a><a href="#routing">Routing</a><a href="#inflections">Inflections</a><a href="#sessions">Sessions</a><a href="#tools">Tools</a><a href="#topology">Topology</a><a href="#prompts">Prompts</a><a href="#recommendations">Fixes</a></nav>"##);
+    if capabilities.model_routing {
+        html.push_str(r##"<nav class="anchor-nav screen-only"><a href="#cache">Cache</a><a href="#routing">Routing</a><a href="#inflections">Inflections</a><a href="#sessions">Sessions</a><a href="#tools">Tools</a><a href="#topology">Topology</a><a href="#prompts">Prompts</a><a href="#recommendations">Fixes</a></nav>"##);
+    } else {
+        html.push_str(r##"<nav class="anchor-nav screen-only"><a href="#cache">Cache</a><a href="#inflections">Inflections</a><a href="#sessions">Sessions</a><a href="#tools">Tools</a><a href="#topology">Topology</a><a href="#prompts">Prompts</a><a href="#recommendations">Fixes</a></nav>"##);
+    }
     write!(html, r##"<section id="cache" class="section"><div class="section-header"><div><h2>Cache</h2><p>Weighted cache health drives grade color. Token mix stays visible for fast copy-paste review.</p></div></div><div class="section-grid"><div class="card"><div class="cache-grade"><div class="cache-letter" style="color:{grade_color}">{cache_grade}</div><div class="cache-copy"><h3>Cache Health</h3><div class="ratio">{cache_ratio:.1}%</div><p>{cache_diagnosis}</p></div></div><div class="metric-strip"><div class="metric"><div class="label">Overall Hit Ratio</div><div class="value">{overall_ratio:.1}%</div></div><div class="metric"><div class="label">Cache Read</div><div class="value">{cache_read}</div></div><div class="metric"><div class="label">Cache Write</div><div class="value">{cache_write}</div></div></div></div><div class="card chart-card"><h2>Token Composition</h2>{token_chart_html}<ul class="token-legend"><li><span class="dot" style="background:#f5f5f5"></span>Pure Input<b>{pure_input_short}</b></li><li><span class="dot" style="background:#7cb9e8"></span>Output<b>{output_short}</b></li><li><span class="dot" style="background:#fbbf24"></span>Cache Write<b>{cache_w_short}</b></li><li><span class="dot" style="background:#22c55e"></span>Cache Read<b>{cache_r_short}</b></li></ul></div></div></section>"##, grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, cache_diagnosis = html_escape(&cache.diagnosis), overall_ratio = cache.hit_ratio, cache_read = html_escape(&format_tokens_short(cache.total_cache_read)), cache_write = html_escape(&format_tokens_short(cache.total_cache_write)), token_chart_html = token_chart_html, pure_input_short = html_escape(&format_tokens_short(total_input)), output_short = html_escape(&format_tokens_short(total_output)), cache_w_short = html_escape(&format_tokens_short(total_cache_w)), cache_r_short = html_escape(&format_tokens_short(total_cache_r))).unwrap();
-    write!(html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div><div class="section-grid" style="margin-top:18px;">{speed_split_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&format_cost(routing.estimated_savings_if_rerouted)), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html, speed_split_html = speed_split_html).unwrap();
+    html.push_str(&routing_section_html);
     write!(html, r##"<section id="inflections" class="section"><div class="section-header"><div><h2>Inflections</h2><p>Spike cards use red rail. Efficiency drops use green rail. Sorted by absolute signal strength.</p></div></div>{inflections_html}</section>"##, inflections_html = inflections_html).unwrap();
     write!(html, r##"<section id="sessions" class="section"><div class="section-header"><div><h2>Sessions</h2><p>Daily cost trend, hourly activity, top sessions, project mix. Same data sources. Cleaner export.</p></div></div><div class="section-grid"><div class="card chart-card"><h2>Daily Cost Trend</h2>{daily_chart_html}</div><div class="card"><h2>Hourly Activity</h2>{hourly_heatmap_html}</div></div><div class="section-grid" style="margin-top:18px;">{top_sessions_html}{project_table_html}</div></section>"##, daily_chart_html = daily_chart_html, hourly_heatmap_html = hourly_heatmap_html, top_sessions_html = top_sessions_html, project_table_html = project_table_html).unwrap();
     write!(html, r##"<section id="tools" class="section"><div class="section-header"><div><h2>Tools</h2><p>Tool intensity, MCP share, compact gaps, top tool mix.</p></div></div><div class="info-grid"><div class="info-card"><div class="info-label">Traced Sessions</div><div class="info-value">{traced_sessions}</div><p>{sessions_analyzed} sessions analyzed</p></div><div class="info-card"><div class="info-label">Total Tool Calls</div><div class="info-value">{tool_calls}</div><p>{tools_per_session:.1} avg per session</p></div><div class="info-card"><div class="info-label">Calls / Hour</div><div class="info-value">{calls_per_hour:.1}</div><p>{mcp_share:.1}% MCP share</p></div><div class="info-card"><div class="info-label">Compact Gaps</div><div class="info-value">{compact_gaps}</div><p>{tool_diagnosis}</p></div></div><div style="margin-top:18px;">{tools_table_html}</div></section>"##, traced_sessions = tool_frequency.traced_sessions, sessions_analyzed = tool_frequency.sessions_analyzed, tool_calls = tool_frequency.total_tool_calls, tools_per_session = tool_frequency.avg_tools_per_session, calls_per_hour = tool_frequency.avg_tool_calls_per_hour, mcp_share = tool_frequency.mcp_share_pct, compact_gaps = tool_frequency.compact_gap_sessions, tool_diagnosis = html_escape(&tool_frequency.diagnosis), tools_table_html = tools_table_html).unwrap();
@@ -821,11 +873,10 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     write!(html, r##"<section id="prompts" class="section"><div class="section-header"><div><h2>Prompts</h2><p>Prompt complexity stays copyable. Preview column trims long prompts without hiding signal.</p></div></div><div class="info-grid"><div class="info-card"><div class="info-label">Prompts Analyzed</div><div class="info-value">{prompts_analyzed}</div><p>{prompt_sessions} sessions scanned</p></div><div class="info-card"><div class="info-label">Avg Complexity</div><div class="info-value">{avg_complexity:.1}</div><p>{high_complexity} high-complexity sessions</p></div><div class="info-card"><div class="info-label">Avg Specificity</div><div class="info-value">{avg_specificity:.1}</div><p>{low_specificity} low-specificity sessions</p></div><div class="info-card"><div class="info-label">Diagnosis</div><div class="info-value">{prompt_label}</div><p>{prompt_diagnosis}</p></div></div><div style="margin-top:18px;">{prompt_table_html}</div></section>"##, prompts_analyzed = prompt_complexity.prompts_analyzed, prompt_sessions = prompt_complexity.sessions_analyzed, avg_complexity = prompt_complexity.avg_complexity_score, high_complexity = prompt_complexity.high_complexity_sessions, avg_specificity = prompt_complexity.avg_specificity_score, low_specificity = prompt_complexity.low_specificity_sessions, prompt_label = if prompt_complexity.available { "Live" } else { "Pending" }, prompt_diagnosis = html_escape(&prompt_complexity.diagnosis), prompt_table_html = prompt_table_html).unwrap();
     write!(
         html,
-        r##"<section id="recommendations" class="section"><div class="section-header"><div><h2>Recommendations</h2><p>Rule-based fixes from the Pulse recommendations engine. Each card ships with a "{fix_label}" button — paste into {provider_name} to remediate.</p></div></div><ul class="rec-list">{recommendations}</ul></section><footer class="footer"><div class="footer-brand">Pulse · {provider_name} Analytics</div><div class="footer-meta">All-time <b>{all_time_sessions}</b> sessions · <b>{all_time_cost}</b> · {all_time_days} days tracked</div><div class="footer-links"><a href="{repo_url}">Source</a> · v{version}</div></footer></div>"##,
+        r##"<section id="recommendations" class="section"><div class="section-header"><div><h2>Recommendations</h2><p>Rule-based fixes from the Pulse recommendations engine. Each card ships with a "{fix_label}" prompt — paste into {provider_name} to remediate.</p></div></div><ul class="rec-list">{recommendations}</ul></section><footer class="footer"><div class="footer-brand">Pulse · {provider_name} Analytics</div><div class="footer-meta">All-time <b>{all_time_sessions}</b> sessions · <b>{all_time_cost}</b> · {all_time_days} days tracked</div><div class="footer-links">Offline report · v{version}</div></footer></div>"##,
         provider_name = html_escape(provider.display_name()),
         fix_label = html_escape(provider.fix_action_label()),
         recommendations = recommendations,
-        repo_url = REPO_URL,
         version = env!("CARGO_PKG_VERSION"),
         all_time_sessions = summary.total_sessions,
         all_time_cost = html_escape(&format_cost(summary.total_cost)),
@@ -924,7 +975,11 @@ fn format_duration(secs: i64) -> String {
 
 fn build_top_sessions(sessions: &[db::HistoricalSession]) -> String {
     let mut sorted: Vec<_> = sessions.iter().collect();
-    sorted.sort_by(|a, b| b.total_cost.partial_cmp(&a.total_cost).unwrap());
+    sorted.sort_by(|a, b| {
+        b.total_cost
+            .partial_cmp(&a.total_cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let top = &sorted[..sorted.len().min(25)];
     if top.is_empty() {
         return String::new();
@@ -933,10 +988,13 @@ fn build_top_sessions(sessions: &[db::HistoricalSession]) -> String {
         r#"<div class="card"><h2>Most Costly Sessions</h2><table><tr><th>#</th><th>Project</th><th>Model</th><th>Tokens</th><th>Duration</th><th style="text-align:right">Cost</th></tr>"#,
     );
     for (i, s) in top.iter().enumerate() {
-        html.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"cost\">{}</td></tr>",
-            i + 1, s.project, s.model, format_tokens_short(s.total_tokens),
-            format_duration(s.duration_secs), format_cost(s.total_cost)
+        html.push_str(&render_session_row(
+            i + 1,
+            &s.project,
+            &s.model,
+            s.total_tokens,
+            s.duration_secs,
+            s.total_cost,
         ));
     }
     html.push_str("</table></div>");
@@ -953,8 +1011,11 @@ fn build_project_table(projects: &[db::ProjectStat]) -> String {
     for p in projects {
         html.push_str(&format!(
             "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"cost\">{}</td></tr>",
-            p.project, p.session_count, format_tokens_short(p.total_tokens),
-            format_cost(p.avg_session_cost), format_cost(p.total_cost)
+            html_escape(&p.project),
+            p.session_count,
+            html_escape(&format_tokens_short(p.total_tokens)),
+            html_escape(&format_cost(p.avg_session_cost)),
+            html_escape(&format_cost(p.total_cost))
         ));
     }
     html.push_str("</table></div>");
@@ -1225,10 +1286,77 @@ fn html_escape(input: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+fn markdown_escape(input: &str) -> String {
+    let encoded = html_escape(input).replace(['\r', '\n'], " ");
+    let mut escaped = String::with_capacity(encoded.len());
+    for ch in encoded.chars() {
+        if matches!(
+            ch,
+            '\\' | '`'
+                | '*'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '#'
+                | '+'
+                | '-'
+                | '.'
+                | '!'
+                | '|'
+                | '>'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+fn markdown_code_block(input: &str) -> String {
+    neutralize_remote_urls(input).replace("```", "` ` `")
+}
+
 fn neutralize_remote_urls(input: &str) -> String {
     input
         .replace("https://", "hxxps://")
         .replace("http://", "hxxp://")
+}
+
+fn render_session_row(
+    index: usize,
+    project: &str,
+    model: &str,
+    total_tokens: i64,
+    duration_secs: i64,
+    total_cost: f64,
+) -> String {
+    format!(
+        "<tr><td>{index}</td><td>{project}</td><td>{model}</td><td class=\"num\">{tokens}</td><td class=\"num\">{duration}</td><td class=\"cost\">{cost}</td></tr>",
+        project = html_escape(project),
+        model = html_escape(model),
+        tokens = html_escape(&format_tokens_short(total_tokens)),
+        duration = html_escape(&format_duration(duration_secs)),
+        cost = html_escape(&format_cost(total_cost)),
+    )
+}
+
+fn render_prompt_row(
+    project: &str,
+    complexity_score: u8,
+    specificity_score: u8,
+    label: &str,
+    preview: &str,
+) -> String {
+    format!(
+        r#"<tr><td>{project}</td><td class="num">{complexity_score}</td><td class="num">{specificity_score}</td><td>{label}</td><td class="preview-cell">{preview}</td></tr>"#,
+        project = html_escape(project),
+        label = html_escape(label),
+        preview = html_escape(preview),
+    )
 }
 
 fn build_recommendations(
@@ -1253,7 +1381,7 @@ fn build_recommendations(
         provider,
         sessions,
         cache: &cache,
-        routing: &routing,
+        routing: provider.capabilities().model_routing.then_some(&routing),
         inflections: &inflections,
         tool_frequency: Some(&tool_frequency),
         prompt_complexity: Some(&prompt_complexity),
@@ -1273,29 +1401,55 @@ fn build_recommendations(
                 super::analyzers::Severity::Info => "info",
                 super::analyzers::Severity::Positive => "positive",
             };
-            let savings = r
-                .estimated_savings
-                .as_ref()
-                .map(|s| {
-                    format!(
-                        r#"<div class="rec-meta"><span class="meta-k">Potential savings</span><span class="meta-v accent">{}</span></div>"#,
-                        html_escape(s)
-                    )
-                })
-                .unwrap_or_default();
-            let fix_btn = if r.fix_prompt.is_empty()
+            let fix_prompt = if r.fix_prompt.is_empty()
                 || matches!(r.severity, super::analyzers::Severity::Positive)
             {
-                String::new()
+                None
             } else {
-                format!(
-                    r#"<button class="rec-fix" data-prompt="{}">Fix with {}</button>"#,
-                    html_escape(&r.fix_prompt),
-                    html_escape(provider_name)
-                )
+                Some(r.fix_prompt.as_str())
             };
+            render_recommendation(
+                provider_name,
+                severity_key,
+                &r.title,
+                &r.description,
+                &r.action,
+                r.estimated_savings.as_deref(),
+                fix_prompt,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_recommendation(
+    provider_name: &str,
+    severity_key: &str,
+    title: &str,
+    description: &str,
+    action: &str,
+    estimated_savings: Option<&str>,
+    fix_prompt: Option<&str>,
+) -> String {
+    let savings = estimated_savings
+        .map(|value| {
             format!(
-                r##"<li class="rec-item rec-{sev}" data-sev="{sev}">
+                r#"<div class="rec-meta"><span class="meta-k">Potential savings</span><span class="meta-v accent">{}</span></div>"#,
+                html_escape(value)
+            )
+        })
+        .unwrap_or_default();
+    let fix_details = fix_prompt
+        .map(|prompt| {
+            format!(
+                r#"<details class="rec-fix"><summary>Fix with {provider}</summary><pre class="rec-fix-prompt">{prompt}</pre></details>"#,
+                provider = html_escape(provider_name),
+                prompt = html_escape(prompt),
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r##"<li class="rec-item rec-{sev}" data-sev="{sev}">
   <div class="rec-head">
     <span class="rec-pill {sev}">{sev_label}</span>
     <div class="rec-title">{title}</div>
@@ -1303,17 +1457,92 @@ fn build_recommendations(
   <div class="rec-desc">{desc}</div>
   {savings}
   <div class="rec-meta"><span class="meta-k">Action</span><span class="meta-v">{action}</span></div>
-  {fix_btn}
+  {fix_details}
 </li>"##,
-                sev = severity_key,
-                sev_label = severity_key.to_uppercase(),
-                title = html_escape(&r.title),
-                desc = html_escape(&r.description),
-                action = html_escape(&r.action),
-                savings = savings,
-                fix_btn = fix_btn,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        sev = severity_key,
+        sev_label = severity_key.to_uppercase(),
+        title = html_escape(title),
+        desc = html_escape(description),
+        action = html_escape(action),
+        savings = savings,
+        fix_details = fix_details,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HOSTILE: &str = r#"</td><script>globalThis.pwned=1</script><img src=x onerror=alert(1)><a href="https://evil.example/x">&boom</a>"#;
+
+    fn assert_inert(fragment: &str) {
+        assert!(!fragment.contains("<script"));
+        assert!(!fragment.contains("<img"));
+        assert!(!fragment.contains("<a href"));
+        assert!(!fragment.contains("https://evil.example"));
+        assert!(fragment.contains("&lt;script&gt;"));
+        assert!(fragment.contains("hxxps://evil.example"));
+    }
+
+    #[test]
+    fn database_session_project_and_model_fields_are_inert_html() {
+        let row = render_session_row(1, HOSTILE, HOSTILE, 42, 60, 0.25);
+        assert_inert(&row);
+        assert_eq!(row.matches("&lt;script&gt;").count(), 2);
+    }
+
+    #[test]
+    fn database_project_and_date_aggregates_are_inert_html() {
+        let project = db::ProjectStat {
+            project: HOSTILE.to_string(),
+            session_count: 1,
+            total_cost: 0.25,
+            total_tokens: 42,
+            avg_session_cost: 0.25,
+            avg_duration_secs: 60.0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            top_model: HOSTILE.to_string(),
+        };
+        let project_table = build_project_table(&[project]);
+        assert_inert(&project_table);
+
+        let daily = std::collections::BTreeMap::from([(HOSTILE.to_string(), 0.25)]);
+        let daily_chart = build_daily_cost_svg(&daily);
+        assert_inert(&daily_chart);
+    }
+
+    #[test]
+    fn prompt_project_label_and_preview_fields_are_inert_html() {
+        let row = render_prompt_row(HOSTILE, 90, 10, HOSTILE, HOSTILE);
+        assert_inert(&row);
+        assert_eq!(row.matches("&lt;script&gt;").count(), 3);
+    }
+
+    #[test]
+    fn recommendation_copy_and_fix_prompt_are_inert_html() {
+        let recommendation = render_recommendation(
+            "Codex",
+            "warning",
+            HOSTILE,
+            HOSTILE,
+            HOSTILE,
+            Some(HOSTILE),
+            Some(HOSTILE),
+        );
+        assert_inert(&recommendation);
+        assert_eq!(recommendation.matches("&lt;script&gt;").count(), 5);
+        assert!(!recommendation.contains("data-prompt="));
+        assert!(!recommendation.contains("<button"));
+        assert!(recommendation.contains("<details class=\"rec-fix\">"));
+    }
+
+    #[test]
+    fn markdown_external_text_cannot_create_html_or_links() {
+        let escaped = markdown_escape(HOSTILE);
+        assert!(!escaped.contains("<script"));
+        assert!(!escaped.contains("https://evil.example"));
+        assert!(escaped.contains("&lt;script&gt;"));
+        assert!(escaped.contains("hxxps://evil\\.example/x"));
+    }
 }

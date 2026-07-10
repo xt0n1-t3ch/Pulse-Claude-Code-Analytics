@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
-use pulse::report::{generate_html_report, generate_markdown_report};
+use cc_discord_presence::provider::Provider;
+use pulse::report::{generate_html_report_for_provider, generate_markdown_report_for_provider};
 
 fn html() -> String {
-    generate_html_report(Some(30), None)
+    generate_html_report_for_provider(Provider::Claude, Some(30), None)
 }
 
 fn sample_html_path() -> PathBuf {
@@ -87,6 +88,102 @@ fn html_report_is_well_formed_with_style_and_charts() {
 }
 
 #[test]
+fn html_report_enforces_a_scriptless_offline_content_security_policy() {
+    let report = html();
+    let expected_policy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
+
+    assert!(
+        report.contains(&format!(
+            r#"<meta http-equiv="Content-Security-Policy" content="{expected_policy}">"#
+        )),
+        "offline report must publish the exact restrictive CSP"
+    );
+    assert!(
+        !report.contains("<script"),
+        "offline report must not contain executable script blocks"
+    );
+    assert!(
+        !report.contains("onclick="),
+        "offline report must not contain inline event handlers"
+    );
+    assert!(
+        !report.contains("javascript:"),
+        "offline report must not contain script navigation URLs"
+    );
+    assert!(
+        !report.contains(r#"<a href="http"#),
+        "offline report must not expose network navigation anchors"
+    );
+}
+
+#[test]
+fn html_and_markdown_reports_escape_hostile_project_filters() {
+    let hostile = r#"</div><script>globalThis.pwned=1</script><a href="https://evil.example/x" data-x='1'>&boom</a>"#;
+    let report = generate_html_report_for_provider(Provider::Claude, Some(30), Some(hostile));
+    let markdown = generate_markdown_report_for_provider(Provider::Claude, Some(30), Some(hostile));
+
+    assert!(
+        !report.contains(hostile),
+        "raw hostile HTML must never survive"
+    );
+    assert!(
+        report.contains("&lt;/div&gt;&lt;script&gt;globalThis.pwned=1&lt;/script&gt;&lt;a href=&quot;hxxps://evil.example/x&quot; data-x=&#39;1&#39;&gt;&amp;boom&lt;/a&gt;"),
+        "hostile filter must render only as inert encoded text"
+    );
+    assert!(
+        !markdown.contains("<script>"),
+        "Markdown export must not retain executable raw HTML"
+    );
+    assert!(
+        markdown.contains("&lt;script&gt;") && markdown.contains("&lt;/script&gt;"),
+        "Markdown export must encode hostile HTML"
+    );
+}
+
+#[test]
+fn report_uses_one_provider_snapshot_for_every_provider_specific_label() {
+    for (provider, expected_html, expected_markdown, foreign_html, foreign_markdown) in [
+        (
+            Provider::Claude,
+            "<div class=\"info-value\">Claude Code</div><p>CLAUDE.md · Fix with Claude Code</p>",
+            "- Provider: Claude Code\n- Instruction file: CLAUDE.md",
+            "<div class=\"info-value\">Codex</div><p>AGENTS.md · Fix with Codex</p>",
+            "- Provider: Codex\n- Instruction file: AGENTS.md",
+        ),
+        (
+            Provider::Codex,
+            "<div class=\"info-value\">Codex</div><p>AGENTS.md · Fix with Codex</p>",
+            "- Provider: Codex\n- Instruction file: AGENTS.md",
+            "<div class=\"info-value\">Claude Code</div><p>CLAUDE.md · Fix with Claude Code</p>",
+            "- Provider: Claude Code\n- Instruction file: CLAUDE.md",
+        ),
+    ] {
+        let report = generate_html_report_for_provider(provider, Some(30), None);
+        let markdown = generate_markdown_report_for_provider(provider, Some(30), None);
+
+        assert!(report.contains(expected_html));
+        assert!(markdown.contains(expected_markdown));
+        assert!(!report.contains(foreign_html));
+        assert!(!markdown.contains(foreign_markdown));
+    }
+}
+
+#[test]
+fn codex_reports_keep_cache_health_and_omit_claude_only_routing() {
+    let html = generate_html_report_for_provider(Provider::Codex, Some(30), None);
+    let markdown = generate_markdown_report_for_provider(Provider::Codex, Some(30), None);
+
+    assert!(html.contains(r#"id="cache""#));
+    assert!(markdown.contains("## Cache"));
+    assert!(!html.contains(r#"id="routing""#));
+    assert!(!html.contains("Model Routing Analysis"));
+    assert!(!html.contains("Opus 4.8+"));
+    assert!(!markdown.contains("## Routing"));
+    assert!(!markdown.contains("Speed Split"));
+    assert!(!markdown.contains("Opus 4.8+"));
+}
+
+#[test]
 fn html_report_contains_brand_kpi_and_sections() {
     let report = html();
     assert!(report.contains("Pulse"), "brand kicker present");
@@ -139,7 +236,7 @@ fn html_report_uses_offline_system_font_stack() {
 
 #[test]
 fn markdown_report_is_valid_non_empty_gfm_with_sections() {
-    let md = generate_markdown_report(Some(30), None);
+    let md = generate_markdown_report_for_provider(Provider::Claude, Some(30), None);
     assert!(!md.trim().is_empty(), "markdown report must be non-empty");
     assert!(
         md.contains("# Pulse Analytics Report"),
