@@ -1,0 +1,71 @@
+name: Codex upstream freshness
+
+on:
+  schedule:
+    - cron: "23 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: codex-upstream-freshness
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile upstream drift issue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+
+      - name: Read immutable pin and current upstream main
+        id: drift
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $manifest = Get-Content -Raw src/codex/UPSTREAM.json | ConvertFrom-Json
+          $pinned = [string]$manifest.commit
+          if ($pinned -notmatch '^[0-9a-fA-F]{40}$') { throw "UPSTREAM.json has an invalid commit" }
+          $latest = (gh api repos/xt0n1-t3ch/Codex-Discord-Rich-Presence/commits/main --jq .sha).Trim()
+          if ($latest -notmatch '^[0-9a-fA-F]{40}$') { throw "GitHub returned an invalid upstream commit" }
+          "pinned=$pinned" >> $env:GITHUB_OUTPUT
+          "latest=$latest" >> $env:GITHUB_OUTPUT
+          "stale=$($pinned -ne $latest)".ToLowerInvariant() >> $env:GITHUB_OUTPUT
+
+      - name: Open, update, or close the single drift issue
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED_SHA: ${{ steps.drift.outputs.pinned }}
+          LATEST_SHA: ${{ steps.drift.outputs.latest }}
+          IS_STALE: ${{ steps.drift.outputs.stale }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $title = "sync(codex): refresh vendored upstream"
+          $issues = @(gh issue list --state open --limit 100 --json number,title,body | ConvertFrom-Json)
+          $matches = @($issues | Where-Object title -eq $title)
+          if ($matches.Count -gt 1) { throw "Multiple open Codex upstream drift issues exist" }
+
+          if ($env:IS_STALE -eq "true") {
+            $body = @"
+          The vendored Codex Rich Presence source is behind upstream `main`.
+
+          - Pinned commit: ``$env:PINNED_SHA``
+          - Upstream commit: ``$env:LATEST_SHA``
+
+          Update only after selecting an immutable canonical release tag and full commit SHA. Run `scripts/update-codex-rich-presence.ps1` with both values, review the vendored diff, and keep the resulting manifest hashes in the same commit.
+          "@
+            $bodyPath = Join-Path $env:RUNNER_TEMP "codex-upstream-drift.md"
+            [System.IO.File]::WriteAllText($bodyPath, $body)
+            if ($matches.Count -eq 0) {
+              gh issue create --title $title --body-file $bodyPath
+            } elseif ($matches[0].body.Replace("`r`n", "`n").Trim() -ne $body.Replace("`r`n", "`n").Trim()) {
+              gh issue edit $matches[0].number --body-file $bodyPath
+            }
+          } elseif ($matches.Count -eq 1) {
+            gh issue close $matches[0].number --reason completed
+          }

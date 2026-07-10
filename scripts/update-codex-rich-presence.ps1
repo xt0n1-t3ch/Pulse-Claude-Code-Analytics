@@ -1,235 +1,257 @@
+[CmdletBinding()]
 param(
-  [string]$Repository = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence.git",
-  [string]$Branch = "main"
+  [Parameter(Mandatory)] [string]$Tag,
+  [Parameter(Mandatory)] [string]$Commit,
+  [string]$Root = (Join-Path $PSScriptRoot ".."),
+  [switch]$TestMode,
+  [string]$TestRepository
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$root = Resolve-Path (Join-Path $PSScriptRoot "..")
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ("pulse-codex-rp-sync-" + [guid]::NewGuid().ToString("N"))
-$codexDir = Join-Path $root "src/codex"
-$manifestPath = Join-Path $codexDir "UPSTREAM.json"
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$tagPattern = '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?$'
+$shaPattern = '^[0-9a-fA-F]{40}$'
 
-$before = "not-synced"
-if (Test-Path $manifestPath) {
-  $before = [string]((Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json).commit)
+function Invoke-Git {
+  param([Parameter(Mandatory)] [string[]]$Arguments)
+
+  $output = @(& git @Arguments 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "git $($Arguments -join ' ') failed: $($output -join [Environment]::NewLine)"
+  }
+  @($output | ForEach-Object { [string]$_ })
 }
 
-try {
-  git clone --depth 1 --branch $Branch $Repository $work | Out-Host
-  $after = git -C $work rev-parse HEAD
+function Get-Sha256 {
+  param([Parameter(Mandatory)] [string]$Path)
+  (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 
-  $relativeFiles = @(
-    "config.rs", "cost.rs", "discord.rs", "session.rs", "util.rs",
-    "session/activity.rs", "session/parser.rs", "telemetry/limits.rs", "telemetry/plan.rs", "telemetry/service_tier.rs"
-  )
+function Assert-PulseAdapters {
+  param([Parameter(Mandatory)] [string]$CodexDirectory)
 
-  foreach ($relative in $relativeFiles) {
-    $source = Join-Path (Join-Path $work "src") $relative
-    $target = Join-Path $codexDir $relative
-    New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-    $text = [System.IO.File]::ReadAllText($source, [System.Text.Encoding]::UTF8)
-    foreach ($name in @("config", "cost", "discord", "metrics", "process_guard", "session", "telemetry", "util", "opencode")) {
-      $text = $text -replace "crate::$name", "crate::codex::$name"
-    }
-    $text = $text -replace "fn presence_lines\(", "pub fn presence_lines("
-    if ($relative -eq "config.rs") {
-      $text = $text -replace 'crate::codex::util::silent_command\("wsl\.exe"\)', 'crate::util::silent_command("wsl.exe")'
-      $text = $text -replace 'Command::new\("wsl\.exe"\)', 'crate::util::silent_command("wsl.exe")'
-      $text = $text -replace "use std::process::\{Command, Stdio\};", "use std::process::Stdio;"
-      $text = $text -replace "#\[cfg\(any\(windows, test\)\)\]", "#[cfg(windows)]"
-    }
-    if ($relative -eq "session/parser.rs") {
-      $text = $text -replace 'Command::new\("git"\)', 'crate::util::silent_command("git")'
-      $text = $text -replace "(?m)^use std::process::Command;`r?`n", ""
-    }
-    [System.IO.File]::WriteAllText($target, $text, $utf8NoBom)
+  $modulePath = Join-Path $CodexDirectory "mod.rs"
+  $processPath = Join-Path $CodexDirectory "process.rs"
+  if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) {
+    throw "Pulse-owned adapter is missing: src/codex/mod.rs"
+  }
+  if (-not (Test-Path -LiteralPath $processPath -PathType Leaf)) {
+    throw "Pulse-owned adapter is missing: src/codex/process.rs"
   }
 
-  [System.IO.File]::WriteAllText((Join-Path $codexDir "mod.rs"), (@(
-    "pub mod config;",
-    "pub mod cost;",
-    "pub mod discord;",
-    "pub mod process;",
-    "pub mod session;",
-    "pub mod telemetry {",
-    "    pub mod limits;",
-    "    pub mod plan;",
-    "    pub mod service_tier;",
-    "}",
-    "pub mod util;"
-  ) -join "`n") + "`n", $utf8NoBom)
+  $moduleSource = Get-Content -Raw -LiteralPath $modulePath
+  if (-not $moduleSource.Contains("pub mod process;")) {
+    throw "Pulse-owned src/codex/mod.rs must expose the process adapter"
+  }
 
-  Set-Content -LiteralPath (Join-Path $codexDir "process.rs") -Encoding utf8 -Value @"
-#[cfg(windows)]
-use std::process::Stdio;
-
-#[cfg(any(windows, test))]
-const OPENCODE_PROCESS_NAMES: [&str; 3] = ["OpenCode.exe", "opencode.exe", "opencode-cli.exe"];
-
-pub fn is_opencode_running() -> bool {
-    is_opencode_running_impl()
+  $processSource = Get-Content -Raw -LiteralPath $processPath
+  foreach ($requiredSymbol in @(
+    "Codex.exe",
+    "is_opencode_running",
+    "is_codex_app_running",
+    "is_desktop_surface_running"
+  )) {
+    if (-not $processSource.Contains($requiredSymbol)) {
+      throw "Pulse-owned process adapter is missing required symbol: $requiredSymbol"
+    }
+  }
 }
 
-#[cfg(windows)]
-fn is_opencode_running_impl() -> bool {
-    let output = crate::util::silent_command("tasklist")
-        .arg("/FO")
-        .arg("CSV")
-        .arg("/NH")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output();
+function Test-InventoryAvailable {
+  param(
+    [Parameter(Mandatory)] [object]$Inventory,
+    [Parameter(Mandatory)] [string]$CheckoutRoot
+  )
 
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
+  foreach ($mapping in @($Inventory.files)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $CheckoutRoot ([string]$mapping.source)) -PathType Leaf)) {
+      return $false
     }
-
-    let text = String::from_utf8_lossy(&output.stdout);
-    tasklist_has_opencode(&text)
+  }
+  $true
 }
 
-#[cfg(not(windows))]
-fn is_opencode_running_impl() -> bool {
-    false
+if ($Tag -notmatch $tagPattern) {
+  throw "Tag must be an immutable semantic version tag such as v1.7.2"
+}
+if ($Commit -notmatch $shaPattern) {
+  throw "Commit must be a full 40-character Git SHA"
+}
+$Commit = $Commit.ToLowerInvariant()
+
+$rootPath = (Resolve-Path -LiteralPath $Root).Path
+$codexDirectory = Join-Path $rootPath "src/codex"
+Assert-PulseAdapters $codexDirectory
+
+$contractPath = Join-Path $PSScriptRoot "codex-vendor-contract.json"
+try {
+  $contract = Get-Content -Raw -LiteralPath $contractPath | ConvertFrom-Json
+} catch {
+  throw "scripts/codex-vendor-contract.json is not valid JSON: $($_.Exception.Message)"
+}
+$officialRepository = [string]$contract.official_repository
+if ($officialRepository -ne "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence") {
+  throw "Vendoring contract names an unexpected official repository"
 }
 
-#[cfg(any(windows, test))]
-pub(crate) fn tasklist_has_opencode(output: &str) -> bool {
-    output.lines().any(|line| {
-        let Some(name) = tasklist_image_name(line) else {
-            return false;
-        };
-        OPENCODE_PROCESS_NAMES
-            .iter()
-            .any(|expected| name.eq_ignore_ascii_case(expected))
-    })
+if ($TestMode) {
+  if ([string]::IsNullOrWhiteSpace($TestRepository) -or -not (Test-Path -LiteralPath $TestRepository -PathType Container)) {
+    throw "-TestMode requires an existing local -TestRepository"
+  }
+  $repositorySource = (Resolve-Path -LiteralPath $TestRepository).Path
+  $provenance = "test"
+} else {
+  if (-not [string]::IsNullOrWhiteSpace($TestRepository)) {
+    throw "-TestRepository is accepted only with -TestMode"
+  }
+  $repositorySource = "$officialRepository.git"
+  $provenance = "official"
 }
 
-#[cfg(any(windows, test))]
-fn tasklist_image_name(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    if trimmed.is_empty()
-        || trimmed.eq_ignore_ascii_case(
-            "INFO: No tasks are running which match the specified criteria.",
-        )
-    {
-        return None;
-    }
-
-    let name = tasklist_csv_image_name(trimmed)
-        .unwrap_or_else(|| trimmed.split_whitespace().next().unwrap_or(trimmed));
-    if name.is_empty() || name.eq_ignore_ascii_case("Image Name") {
-        None
-    } else {
-        Some(name)
-    }
+$remoteRefs = Invoke-Git @(
+  "ls-remote",
+  "--tags",
+  $repositorySource,
+  "refs/tags/$Tag",
+  "refs/tags/$Tag^{}"
+)
+$tagObject = $remoteRefs | Where-Object { $_ -match "^[0-9a-fA-F]{40}\s+refs/tags/$([regex]::Escape($Tag))$" } | Select-Object -First 1
+$peeledTag = $remoteRefs | Where-Object { $_ -match "^[0-9a-fA-F]{40}\s+refs/tags/$([regex]::Escape($Tag))\^\{\}$" } | Select-Object -First 1
+if ($null -eq $tagObject) {
+  throw "Repository has no tag named $Tag"
+}
+if ($null -eq $peeledTag) {
+  throw "Tag $Tag must be an annotated tag"
+}
+$resolvedCommit = ($peeledTag -split '\s+')[0].ToLowerInvariant()
+if ($resolvedCommit -ne $Commit) {
+  throw "Tag $Tag does not resolve to commit $Commit (resolved $resolvedCommit)"
 }
 
-#[cfg(any(windows, test))]
-fn tasklist_csv_image_name(line: &str) -> Option<&str> {
-    if let Some(rest) = line.strip_prefix('"') {
-        let end = rest.find('"')?;
-        return Some(&rest[..end]);
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ("pulse-codex-rp-sync-" + [guid]::NewGuid().ToString("N"))
+$checkout = Join-Path $work "canonical"
+$verificationRoot = Join-Path $work "verification"
+$verificationCodex = Join-Path $verificationRoot "src/codex"
+try {
+  $null = Invoke-Git @(
+    "-c", "core.autocrlf=false",
+    "clone", "--quiet", "--depth", "1", "--branch", $Tag, "--single-branch",
+    $repositorySource, $checkout
+  )
+  $checkedOutCommit = (Invoke-Git @("-C", $checkout, "rev-parse", "HEAD") | Select-Object -First 1).Trim().ToLowerInvariant()
+  if ($checkedOutCommit -ne $Commit) {
+    throw "Checked out commit $checkedOutCommit does not match requested commit $Commit"
+  }
+
+  $latestInventoryName = [string]$contract.latest_inventory
+  $inventoryProperty = $contract.inventories.PSObject.Properties[$latestInventoryName]
+  if ($null -eq $inventoryProperty) {
+    throw "Vendoring contract latest_inventory is missing"
+  }
+  $inventoryName = $null
+  $inventory = $null
+  if (Test-InventoryAvailable $inventoryProperty.Value $checkout) {
+    $inventoryName = $latestInventoryName
+    $inventory = $inventoryProperty.Value
+  } else {
+    foreach ($candidate in $contract.inventories.PSObject.Properties) {
+      if (Test-InventoryAvailable $candidate.Value $checkout) {
+        $inventoryName = [string]$candidate.Name
+        $inventory = $candidate.Value
+        break
+      }
+    }
+  }
+  if ($null -eq $inventory) {
+    throw "Canonical tag $Tag does not satisfy any vendoring inventory"
+  }
+
+  $namespaceModules = @($contract.namespace_modules | ForEach-Object { [regex]::Escape([string]$_) })
+  $namespacePattern = "\bcrate::(" + ($namespaceModules -join "|") + ")\b"
+  $fileEntries = @()
+  foreach ($mapping in @($inventory.files)) {
+    $source = [string]$mapping.source
+    $target = [string]$mapping.target
+    $mode = [string]$mapping.mode
+    $sourcePath = Join-Path $checkout $source
+    $targetPath = Join-Path $verificationRoot $target
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetPath) | Out-Null
+
+    switch ($mode) {
+      "byte-copy" {
+        [System.IO.File]::WriteAllBytes($targetPath, [System.IO.File]::ReadAllBytes($sourcePath))
+      }
+      { $_ -in @("namespace-rebase", "legacy-overlay") } {
+        $sourceText = [System.IO.File]::ReadAllText($sourcePath, [System.Text.Encoding]::UTF8)
+        $targetText = [regex]::Replace($sourceText, $namespacePattern, 'crate::codex::$1')
+        [System.IO.File]::WriteAllText($targetPath, $targetText, $utf8NoBom)
+      }
+      default {
+        throw "Unsupported vendoring mode '$mode' for $source"
+      }
     }
 
-    let mut fields = line.split(',');
-    let first = fields.next()?.trim();
-    let second = fields.next()?.trim();
-    if fields.count() < 3 {
-        return None;
+    $fileEntries += [ordered]@{
+      source = $source
+      target = $target
+      mode = $mode
+      source_sha256 = Get-Sha256 $sourcePath
+      target_sha256 = Get-Sha256 $targetPath
     }
+  }
 
-    if second.eq_ignore_ascii_case("PID") || second.parse::<u32>().is_ok() {
-        Some(first)
-    } else {
-        None
-    }
-}
+  New-Item -ItemType Directory -Force -Path $verificationCodex | Out-Null
+  foreach ($adapter in @($contract.local_adapters)) {
+    $adapterSource = Join-Path $rootPath ([string]$adapter)
+    $adapterTarget = Join-Path $verificationRoot ([string]$adapter)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $adapterTarget) | Out-Null
+    [System.IO.File]::WriteAllBytes($adapterTarget, [System.IO.File]::ReadAllBytes($adapterSource))
+  }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+  $upstreamCommittedAt = (Invoke-Git @("-C", $checkout, "show", "-s", "--format=%cI", "HEAD") | Select-Object -First 1).Trim()
+  $manifest = [ordered]@{
+    schema_version = 2
+    sync_version = [int]$contract.sync_version
+    repository = $officialRepository
+    ref = $Tag
+    commit = $Commit
+    upstream_committed_at = $upstreamCommittedAt
+    strategy = [string]$inventory.strategy
+    inventory = $inventoryName
+    provenance = $provenance
+    contract_sha256 = Get-Sha256 $contractPath
+    files = $fileEntries
+    local_adapters = @($contract.local_adapters)
+  }
+  $manifestJson = ($manifest | ConvertTo-Json -Depth 8) + "`n"
+  [System.IO.File]::WriteAllText((Join-Path $verificationCodex "UPSTREAM.json"), $manifestJson, $utf8NoBom)
 
-    #[test]
-    fn tasklist_parser_detects_opencode_names_case_insensitively() {
-        let output = r#"
-"Image Name","PID","Session Name","Session#","Mem Usage"
-"OpenCode.exe","1234","Console","1","42,000 K"
-"opencode-cli.exe","2345","Console","1","10,000 K"
-"#;
+  & (Join-Path $PSScriptRoot "check-codex-rich-presence-upstream.ps1") -Root $verificationRoot -TestMode:$TestMode
+  if ($LASTEXITCODE -ne 0) {
+    throw "Vendored source integrity verification failed"
+  }
 
-        assert!(tasklist_has_opencode(output));
-    }
+  foreach ($mapping in @($inventory.files)) {
+    $target = [string]$mapping.target
+    $verifiedPath = Join-Path $verificationRoot $target
+    $destinationPath = Join-Path $rootPath $target
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destinationPath) | Out-Null
+    [System.IO.File]::WriteAllBytes($destinationPath, [System.IO.File]::ReadAllBytes($verifiedPath))
+  }
+  $manifestPath = Join-Path $codexDirectory "UPSTREAM.json"
+  $manifestTemporaryPath = "$manifestPath.tmp"
+  [System.IO.File]::WriteAllText($manifestTemporaryPath, $manifestJson, $utf8NoBom)
+  Move-Item -Force -LiteralPath $manifestTemporaryPath -Destination $manifestPath
 
-    #[test]
-    fn tasklist_parser_rejects_partial_names() {
-        let output = r#"
-"not-opencode.exe","1234","Console","1","42,000 K"
-"opencode-helper.exe","2345","Console","1","10,000 K"
-"#;
+  & (Join-Path $PSScriptRoot "check-codex-rich-presence-upstream.ps1") -Root $rootPath -TestMode:$TestMode
+  if ($LASTEXITCODE -ne 0) {
+    throw "Vendored source integrity verification failed after installation"
+  }
 
-        assert!(!tasklist_has_opencode(output));
-    }
-
-    #[test]
-    fn tasklist_parser_supports_table_output() {
-        let output = r#"
-Image Name                     PID Session Name        Session#    Mem Usage
-========================= ======== ================ =========== ============
-opencode.exe                  7777 Console                    1     12,000 K
-"#;
-
-        assert!(tasklist_has_opencode(output));
-    }
-}
-"@
-
-  $costPath = Join-Path $codexDir "cost.rs"
-  $costText = [System.IO.File]::ReadAllText($costPath, [System.Text.Encoding]::UTF8)
-  $costHelpers = @"
-
-pub fn is_fast_capable(model_id: &str) -> bool {
-    let key = normalize_model_key(model_id);
-    key.starts_with("gpt-5.5") || key.starts_with("gpt-5.4")
-}
-
-pub fn speed_multiplier(model_id: &str, fast: bool) -> f64 {
-    if !fast {
-        return 1.0;
-    }
-    let key = normalize_model_key(model_id);
-    if key.starts_with("gpt-5.5") {
-        2.5
-    } else if key.starts_with("gpt-5.4") {
-        2.0
-    } else {
-        1.0
-    }
-}
-"@
-  $costText = $costText -replace "`r?`n#\[cfg\(test\)\]`r?`nmod tests \{", ($costHelpers + "`n#[cfg(test)]`nmod tests {")
-  [System.IO.File]::WriteAllText($costPath, $costText, $utf8NoBom)
-
-  $manifest = @{
-    repository = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence"
-    branch = $Branch
-    commit = $after
-    synced_at = (Get-Date).ToUniversalTime().ToString("o")
-    strategy = "source-sync-with-pulse-compatibility-overlay"
-  } | ConvertTo-Json -Depth 3
-  Set-Content -LiteralPath $manifestPath -Value $manifest -Encoding utf8
-
-  cargo fmt --all
-  & (Join-Path $PSScriptRoot "check-codex-rich-presence-upstream.ps1") -Repository $Repository -Branch $Branch
-  cargo test --workspace --test codex_upstream_contract
-
-  Write-Output "Codex Discord Rich Presence source synced: $before -> $after"
+  Write-Output "Codex Rich Presence synced from $Tag at $Commit inventory=$inventoryName"
 } finally {
-  if (Test-Path $work) {
+  if (Test-Path -LiteralPath $work) {
     Remove-Item -LiteralPath $work -Recurse -Force
   }
 }

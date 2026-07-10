@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-07-09",
+  "review_after": "2026-08-09",
+  "framework": "Tauri 2.11.5",
+  "advisories": [
+    {
+      "id": "RUSTSEC-2024-0411",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0412",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0413",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0414",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0415",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0416",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0417",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0418",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0419",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0420",
+      "reason": "Tauri Linux requires the upstream GTK3 stack; this is an unmaintained-package notice, not a vulnerability."
+    },
+    {
+      "id": "RUSTSEC-2024-0429",
+      "reason": "Tauri Linux pins glib 0.18; Pulse never calls the affected VariantStrIter API."
+    },
+    {
+      "id": "RUSTSEC-2024-0370",
+      "reason": "The unmaintained proc-macro-error crate is build-time-only through Tauri's GTK3 bindings."
+    },
+    {
+      "id": "RUSTSEC-2025-0057",
+      "reason": "The unmaintained fxhash crate is transitive through Tauri's build-time HTML parser."
+    },
+    {
+      "id": "RUSTSEC-2025-0075",
+      "reason": "The unmaintained UNIC crate is transitive through Tauri's build-time HTML parser."
+    },
+    {
+      "id": "RUSTSEC-2025-0080",
+      "reason": "The unmaintained UNIC crate is transitive through Tauri's build-time HTML parser."
+    },
+    {
+      "id": "RUSTSEC-2025-0081",
+      "reason": "The unmaintained UNIC crate is transitive through Tauri's build-time HTML parser."
+    },
+    {
+      "id": "RUSTSEC-2025-0098",
+      "reason": "The unmaintained UNIC crate is transitive through Tauri's build-time HTML parser."
+    },
+    {
+      "id": "RUSTSEC-2025-0100",
+      "reason": "The unmaintained UNIC crate is transitive through Tauri's build-time HTML parser."
+    },
+    {
+      "id": "RUSTSEC-2026-0097",
+      "reason": "Tauri's build-time HTML parser pins rand 0.7; Pulse has no custom logger that accesses ThreadRng, so the advisory preconditions are absent."
+    }
+  ]
+}

@@ -6,85 +6,134 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  NODE_VERSION: "22"
+  NPM_VERSION: "11.10.1"
+  RUST_VERSION: "1.96.1"
 
 jobs:
+  preflight:
+    name: Preflight · Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Pin npm
+        shell: pwsh
+        run: |
+          npm install --global "npm@$env:NPM_VERSION"
+          if ((npm --version).Trim() -ne $env:NPM_VERSION) { throw "Unexpected npm version" }
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: . -> target
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: ./scripts/audit-rust.ps1
+
+      - name: Verify vendored Codex integrity
+        shell: pwsh
+        run: ./scripts/check-codex-rich-presence-upstream.ps1
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend · Svelte
+        working-directory: frontend
+        run: npm run check
+
+      - name: Test frontend
+        working-directory: frontend
+        run: npm run test
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Lint Rust
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --locked --workspace
+
+      - name: Build Rust workspace
+        run: cargo build --locked --workspace --all-targets
+
   rust:
     name: Rust · ${{ matrix.os }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
 
-      - name: Install Linux deps (Tauri)
+      - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
-          components: rustfmt, clippy
+          toolchain: ${{ env.RUST_VERSION }}
 
-      - name: Check Codex Rich Presence upstream pin
-        shell: pwsh
-        run: ./scripts/check-codex-rich-presence-upstream.ps1
-
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "22"
-          cache: "npm"
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Build frontend (required for Tauri compile)
+      - name: Pin npm
+        shell: pwsh
+        run: |
+          npm install --global "npm@$env:NPM_VERSION"
+          if ((npm --version).Trim() -ne $env:NPM_VERSION) { throw "Unexpected npm version" }
+
+      - name: Build frontend
         working-directory: frontend
         run: |
           npm ci
           npm run build
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: . -> target
+          key: ci-${{ matrix.os }}
 
-      - name: fmt
-        run: cargo fmt --all -- --check
-
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: build
-        run: cargo build --workspace
-
-      - name: test
-        run: cargo test --workspace
-
-  frontend:
-    name: Frontend · Svelte
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install
-        working-directory: frontend
-        run: npm ci
-      - name: Typecheck
-        working-directory: frontend
-        run: npm run check
-      - name: Test
-        working-directory: frontend
-        run: npm run test
-      - name: Build
-        working-directory: frontend
-        run: npm run build
+      - name: Test Rust on platform
+        run: cargo test --locked --workspace

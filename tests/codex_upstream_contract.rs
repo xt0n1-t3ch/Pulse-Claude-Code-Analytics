@@ -51,6 +51,11 @@ fn codex_upstream_contract_preserves_session_selection_boundary() {
 #[test]
 fn codex_process_probe_remains_pulse_compatibility_glue() {
     let _ = cc_discord_presence::codex::process::is_opencode_running();
+    let _ = cc_discord_presence::codex::process::is_codex_app_running();
+    let _ = cc_discord_presence::codex::process::is_desktop_surface_running();
+
+    let source = include_str!("../src/codex/process.rs");
+    assert!(source.contains("Codex.exe"));
 }
 
 #[test]
