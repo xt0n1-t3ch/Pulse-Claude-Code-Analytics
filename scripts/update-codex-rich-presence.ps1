@@ -28,6 +28,22 @@ function Get-Sha256 {
   (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-TargetSha256 {
+  param(
+    [Parameter(Mandatory)] [string]$Path,
+    [Parameter(Mandatory)] [string]$Mode
+  )
+
+  if ($Mode -eq "byte-copy") {
+    return Get-Sha256 $Path
+  }
+
+  $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+  $normalized = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+  $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($normalized)
+  [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
 function Format-RustFile {
   param([Parameter(Mandatory)] [string]$Path)
 
@@ -210,7 +226,7 @@ try {
       target = $target
       mode = $mode
       source_sha256 = Get-Sha256 $sourcePath
-      target_sha256 = Get-Sha256 $targetPath
+      target_sha256 = Get-TargetSha256 $targetPath $mode
     }
   }
 

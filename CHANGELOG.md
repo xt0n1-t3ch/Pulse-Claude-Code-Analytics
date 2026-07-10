@@ -2,6 +2,20 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.5.3] — 2026-07-10
+
+v1.5.3 is a Windows runtime-correctness patch for Pulse's existing Codex polling lane. No public Tauri command or persisted schema changed.
+
+### Fixed
+
+- The five-second Codex Git branch probes now use the shared Windows `CREATE_NO_WINDOW` launcher, preventing visible console flashes while Pulse refreshes live sessions.
+- Pulse vendors Codex Discord Rich Presence v1.7.6 by immutable tag, commit, and per-file hashes, preserving Pulse-owned adapters outside the mirror and carrying canonical cross-file source contracts as uncompiled inputs.
+
+### Validated
+
+- A red-green vendoring regression rejects the previous v1.7.5 pin and any raw `Command::new("git")` polling path.
+- Rust format, Clippy with warnings denied, workspace tests/build, Svelte check, frontend tests/build, RustSec audit, release contracts, Tauri packaging, and a repeated-poll Windows window trace.
+
 ## [1.5.2] — 2026-07-10
 
 v1.5.2 is a compatibility, provenance, and presentation-correctness patch for GPT-5.6 and the existing Codex lane. No public Tauri command was removed.
@@ -256,6 +270,7 @@ v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Win
 - **Local-first** — SQLite at `~/.claude/pulse-analytics.db`, zero telemetry.
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
+[1.5.3]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.3
 [1.5.2]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.2
 [1.5.1]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.1
 [1.5.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.0

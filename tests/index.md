@@ -12,7 +12,8 @@ Centralized tests for the whole app. Frontend logic/integration/component-render
 | Frontend (watch) | `npm --prefix frontend run test:watch` | Same, watch mode |
 | Backend | `cargo test --workspace` | Both Rust crates (`cc-discord-presence` daemon/core + `pulse` Tauri host): inline `#[cfg(test)]` modules + the `tests/*.rs` / `src-tauri/tests/*.rs` integration tests |
 | Types | `npm --prefix frontend run check` | svelte-check, 0 errors / 0 warnings |
-| Codex upstream freshness | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-rich-presence-upstream.ps1` | Verifies `src/codex/UPSTREAM.json` matches the latest `main` commit in `xt0n1-t3ch/Codex-Discord-Rich-Presence` |
+| Codex mirror integrity | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-rich-presence-upstream.ps1` | Verifies the pinned annotated tag, exact commit, inventory, adapters, and every vendored target hash in `src/codex/UPSTREAM.json`; the scheduled drift job tracks later upstream releases separately |
+| Windows polling consoles | `cargo test --locked --test release_scripts vendored_windows_polling_commands_use_silent_launcher -- --exact` | Rejects the old canonical pin and any five-second Git probe that bypasses the shared `CREATE_NO_WINDOW` launcher |
 
 Vitest config: [frontend/vitest.config.ts](../frontend/vitest.config.ts) (alias `@` → `frontend/src`,
 `fs.allow` widened to the repo root so the root-level spec tree resolves). Tauri IPC, the event/app/
