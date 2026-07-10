@@ -419,7 +419,7 @@ fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
         .expect("release workflow must validate the fetched tag");
     assert!(fetch_tag < validate_tag);
     assert!(release.contains(
-        "git fetch --force origin \"refs/tags/$env:GITHUB_REF_NAME:refs/tags/$env:GITHUB_REF_NAME\""
+        "git fetch --force origin \"refs/tags/${env:GITHUB_REF_NAME}:refs/tags/${env:GITHUB_REF_NAME}\""
     ));
     assert!(release.contains("check-codex-rich-presence-upstream.ps1"));
     assert!(release.contains("NPM_VERSION: \"11.10.1\""));
