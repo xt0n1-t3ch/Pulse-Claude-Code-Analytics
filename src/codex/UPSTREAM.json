@@ -2,14 +2,21 @@
   "schema_version": 2,
   "sync_version": 2,
   "repository": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
-  "ref": "v1.7.5",
-  "commit": "2b3c7f51cf320c9a0c0beced963254348202c8c1",
-  "upstream_committed_at": "2026-07-10T02:47:56-05:00",
-  "strategy": "namespace-rebase-v2",
-  "inventory": "model-catalog-v2",
+  "ref": "v1.7.6",
+  "commit": "ba3ce636ffdf5c84754489713b742bf2b3c61add",
+  "upstream_committed_at": "2026-07-10T06:23:45-05:00",
+  "strategy": "namespace-rebase-v3-source-contracts",
+  "inventory": "model-catalog-v3",
   "provenance": "official",
-  "contract_sha256": "e869842fbcb4a832efc44c383c33b0e53529376e6a28271c4d92dc3d52863ed3",
+  "contract_sha256": "7cfd9a6f1ab2cce958ac08fd9c2f28041bc06e00877c75fa70d8f99c7c98c58e",
   "files": [
+    {
+      "source": "src/app.rs",
+      "target": "src/codex/app.rs",
+      "mode": "namespace-rebase",
+      "source_sha256": "ddb45fe3560d49397d25869c3e4ea0f5dd57b5087fad54f33203aa4c68c93907",
+      "target_sha256": "247ac6a6e4efcf22096081c120e5661458c1cd7fdcb4101b5cf16800f3800392"
+    },
     {
       "source": "src/config.rs",
       "target": "src/codex/config.rs",
@@ -46,6 +53,13 @@
       "target_sha256": "037e199b23ca95d6ac0a99718b4f353e555f8eeae95637dce0e13485d81ba39a"
     },
     {
+      "source": "src/process_guard.rs",
+      "target": "src/codex/process_guard.rs",
+      "mode": "namespace-rebase",
+      "source_sha256": "920f9957cd57b995d0743220b402a9fe410fcc7babeaf634e4f87646e4c9f24c",
+      "target_sha256": "f5fa457d82c9b0f5ca857bc7d67c5d9d30c5fe0b66bc6079690d444a50bfdfc8"
+    },
+    {
       "source": "src/session.rs",
       "target": "src/codex/session.rs",
       "mode": "namespace-rebase",
@@ -56,8 +70,8 @@
       "source": "src/util.rs",
       "target": "src/codex/util.rs",
       "mode": "namespace-rebase",
-      "source_sha256": "58f05a423c0628fa93e434353ee2f2fe20208715ee92a58a1d1922318e199b77",
-      "target_sha256": "0e606a04585eaee441fc5f378613f4323e7d6202affe64638df563cc7bc1ee9f"
+      "source_sha256": "a61cb8db04bec0601423928753da2a5830087f83cf31eaa9cb69c604868acb35",
+      "target_sha256": "93f0ac945c9b18a9ca4e52a0bc5ac23188053822e27ac6c23fb1f8e633e21528"
     },
     {
       "source": "src/session/activity.rs",
@@ -70,8 +84,8 @@
       "source": "src/session/parser.rs",
       "target": "src/codex/session/parser.rs",
       "mode": "namespace-rebase",
-      "source_sha256": "fcc2e79ba653018378297e851b460eae08b14d8b4bb96bdd5862227164ca37ff",
-      "target_sha256": "3a09587470c7e8feb871afa9a36d77aa1aa1431798efeb2b08c51e0e765def39"
+      "source_sha256": "ce78a94fde39ccb0c5d2608e71582eaf9c246acda455aaf3767b434effe10cb0",
+      "target_sha256": "2e2c002dbed0e7c6c932dd76476a3ef014803db916a6d40ef4e5f10403a6b6fa"
     },
     {
       "source": "src/telemetry/limits.rs",

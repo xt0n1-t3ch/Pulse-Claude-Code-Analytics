@@ -17,12 +17,14 @@ const LEGACY_VENDORED_FILES: [&str; 10] = [
     "telemetry/plan.rs",
     "telemetry/service_tier.rs",
 ];
-const VENDORED_FILES: [&str; 12] = [
+const VENDORED_FILES: [&str; 14] = [
+    "app.rs",
     "config.rs",
     "cost.rs",
     "discord.rs",
     "model.rs",
     "model_catalog.json",
+    "process_guard.rs",
     "session.rs",
     "util.rs",
     "session/activity.rs",
@@ -107,10 +109,36 @@ fn vendoring_contract_versions_inventory_and_owns_exact_adapters() {
 
     assert!(contract.contains("\"legacy-v1\""));
     assert!(contract.contains("\"model-catalog-v2\""));
+    assert!(contract.contains("\"model-catalog-v3\""));
+    assert!(contract.contains("\"src/app.rs\""));
+    assert!(contract.contains("\"src/process_guard.rs\""));
     assert!(contract.contains("\"src/model_catalog.json\""));
     assert!(contract.contains("\"mode\": \"byte-copy\""));
     assert_eq!(contract.matches("src/codex/process.rs").count(), 1);
     assert_eq!(contract.matches("src/codex/mod.rs").count(), 1);
+}
+
+#[test]
+fn vendored_windows_polling_commands_use_silent_launcher() {
+    let root = repository_root();
+    let manifest = read(root.join("src/codex/UPSTREAM.json"));
+    let parser = read(root.join("src/codex/session/parser.rs"));
+
+    assert!(
+        manifest.contains(r#""ref": "v1.7.6""#),
+        "Pulse must pin the canonical Windows console-suppression release"
+    );
+    assert!(
+        !parser.contains(r#"Command::new("git")"#),
+        "the five-second Git branch probe must not create a visible Windows console"
+    );
+    assert_eq!(
+        parser
+            .matches(r#"crate::codex::util::silent_command("git")"#)
+            .count(),
+        2,
+        "both branch and detached-HEAD probes must use the shared silent launcher"
+    );
 }
 
 #[test]
@@ -167,8 +195,8 @@ fn updater_syncs_explicit_tag_and_commit_without_touching_pulse_adapters() {
     assert!(manifest.contains("\"schema_version\": 2"));
     assert!(manifest.contains("\"ref\": \"v1.7.2\""));
     assert!(manifest.contains(&commit));
-    assert_eq!(manifest.matches("\"source_sha256\"").count(), 12);
-    assert_eq!(manifest.matches("\"target_sha256\"").count(), 12);
+    assert_eq!(manifest.matches("\"source_sha256\"").count(), 14);
+    assert_eq!(manifest.matches("\"target_sha256\"").count(), 14);
     assert!(manifest.contains("\"local_adapters\""));
     assert!(manifest.contains("\"provenance\": \"test\""));
 
@@ -547,6 +575,7 @@ fn canonical_fixture_with_tag(annotated: bool) -> TempDir {
             }
             "model.rs" => "pub const MODEL_CATALOG: &str = include_str!(\"model_catalog.json\");\n",
             "model_catalog.json" => "{\"models\":[]}\n",
+            "process_guard.rs" => "pub struct WindowsLineEndings;\r\n",
             "session.rs" => {
                 "pub mod activity;\npub mod parser;\npub struct CodexSessionSnapshot;\n"
             }

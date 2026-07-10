@@ -38,7 +38,7 @@ contract:
 - `tests/codex_upstream_contract.rs` checks the Pulse-facing module boundary stays
   present after every sync.
 
-Pulse does not append pricing tables or Fast multipliers to vendored files. Model identity, pricing, context, and presentation stay owned by the canonical mirror; Pulse adapters translate the public DTOs into Tauri responses.
+Pulse does not append pricing tables or Fast multipliers to vendored files. Model identity, pricing, context, and presentation stay owned by the canonical mirror; Pulse adapters translate the public DTOs into Tauri responses. Inventory `model-catalog-v3` also mirrors `app.rs` and `process_guard.rs` as uncompiled source-contract inputs so canonical cross-file regression tests remain buildable without declaring a second Pulse runtime owner.
 
 All other mirrored code should come from upstream through the sync script.
 

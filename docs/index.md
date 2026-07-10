@@ -21,6 +21,13 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
+## v1.5.3 docs refresh
+
+- Pinned the Codex mirror to the immutable `v1.7.6` release and recorded its exact commit plus all canonical source/target hashes.
+- Routed both periodic Git branch probes through the shared Windows `CREATE_NO_WINDOW` launcher.
+- Added a vendoring regression that fails on the old pin, a raw Git launcher, or an incomplete detached-HEAD probe migration.
+- Kept the release as a SemVer patch because v1.5.3 corrects Windows polling behavior without changing Tauri commands, database schema, or user configuration.
+
 ## v1.5.2 docs refresh
 
 - Added the GPT-5.6 Sol / Terra / Luna catalog contract with official API rates, Codex credit rates, cache policy, local App context metadata, and explicit completeness/provenance states.
@@ -83,7 +90,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.5.2**
+- App release: **v1.5.3**
 - Schema: **Claude config v5 / Codex config v12 / Pulse analytics DB v4**
-- Last docs refresh: 2026-07-10 (GPT-5.6 factual catalog, provenance, Discord privacy, and dual-provider identity)
+- Last docs refresh: 2026-07-10 (Windows background polling, immutable Codex v1.7.6 sync, and console-suppression regression)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.
