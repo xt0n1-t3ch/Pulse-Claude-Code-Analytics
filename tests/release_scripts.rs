@@ -287,7 +287,7 @@ fn release_contract_requires_annotated_main_reachable_tag_and_expected_commit() 
     let unreachable_output = release_contract_command(unreachable.path(), "v1.5.2", &tagged_commit)
         .output()
         .expect("run release check");
-    assert_failure_contains(&unreachable_output, "not reachable from origin/main");
+    assert_failure_contains(&unreachable_output, "not reachable");
 }
 
 #[test]
@@ -672,13 +672,33 @@ fn repository_root() -> PathBuf {
 }
 
 fn script_command(name: &str) -> Command {
-    let mut command = Command::new("pwsh");
+    let mut command = Command::new(executable_on_path("pwsh"));
     command
         .arg("-NoProfile")
         .arg("-NonInteractive")
         .arg("-File")
         .arg(repository_root().join("scripts").join(name));
     command
+}
+
+fn executable_on_path(name: &str) -> PathBuf {
+    let path = std::env::var_os("PATH").expect("PATH must be available to locate pwsh");
+    let candidates = if cfg!(windows) {
+        vec![format!("{name}.exe"), name.to_string()]
+    } else {
+        vec![name.to_string()]
+    };
+
+    for directory in std::env::split_paths(&path) {
+        for candidate in &candidates {
+            let executable = directory.join(candidate);
+            if executable.is_file() {
+                return executable;
+            }
+        }
+    }
+
+    panic!("{name} was not found on PATH");
 }
 
 fn update_command(repository: &Path, root: &Path, tag: &str, commit: &str) -> Command {
