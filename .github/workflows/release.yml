@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: immutable-releases-${{ github.repository }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   NODE_VERSION: "22"
@@ -17,10 +21,15 @@ jobs:
   preflight:
     name: Preflight · Release contract
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
       - name: Install Linux dependencies
         run: |
@@ -49,13 +58,33 @@ jobs:
           workspaces: . -> target
           key: release-preflight
 
-      - name: Verify tag, versions, and changelog
+      - name: Validate annotated release target
         shell: pwsh
-        run: ./scripts/check-release-contract.ps1 -Tag "$env:GITHUB_REF_NAME"
+        run: ./scripts/check-release-contract.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA"
+
+      - name: Require green protected main CI for this commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $runs = @(gh run list --workflow ci.yml --commit "$env:GITHUB_SHA" --event push --limit 20 --json status,conclusion,headSha,url | ConvertFrom-Json)
+          $green = @($runs | Where-Object {
+            $_.headSha -eq $env:GITHUB_SHA -and
+            $_.status -eq "completed" -and
+            $_.conclusion -eq "success"
+          })
+          if ($green.Count -eq 0) { throw "No successful protected main CI run exists for $env:GITHUB_SHA" }
 
       - name: Verify vendored Codex integrity
         shell: pwsh
         run: ./scripts/check-codex-rich-presence-upstream.ps1
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: ./scripts/audit-rust.ps1
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -77,13 +106,13 @@ jobs:
         run: npm run build
 
       - name: Lint Rust
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test Rust
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Build Rust workspace
-        run: cargo build --workspace --all-targets
+        run: cargo build --locked --workspace --all-targets
 
   build:
     name: Build · ${{ matrix.label }}
@@ -111,6 +140,8 @@ jobs:
             tauri-args: ""
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -152,32 +183,28 @@ jobs:
           projectPath: src-tauri
           args: ${{ matrix.tauri-args }}
 
-      - name: Collect platform artifacts
-        shell: bash
+      - name: Collect complete platform artifact set
+        shell: pwsh
+        env:
+          PLATFORM: ${{ matrix.label }}
+          TARGET: ${{ matrix.target }}
         run: |
-          set -euo pipefail
-          mkdir -p dist
-          BUNDLE_DIR="target/${{ matrix.target }}/release/bundle"
-          [ -d "$BUNDLE_DIR" ] || BUNDLE_DIR="target/release/bundle"
-          [ -d "$BUNDLE_DIR" ] || BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
-          [ -d "$BUNDLE_DIR" ] || BUNDLE_DIR="src-tauri/target/release/bundle"
-          [ -d "$BUNDLE_DIR" ] || { echo "Tauri bundle directory not found" >&2; exit 1; }
-          find "$BUNDLE_DIR" -type f \( \
-            -name '*.exe' -o \
-            -name '*.msi' -o \
-            -name '*.dmg' -o \
-            -name '*.app.tar.gz' -o \
-            -name '*.deb' -o \
-            -name '*.rpm' -o \
-            -name '*.AppImage' \
-          \) -exec cp {} dist/ \;
-          test -n "$(find dist -maxdepth 1 -type f -print -quit)" || { echo "No release assets were produced" >&2; exit 1; }
+          $candidates = @(
+            "target/$env:TARGET/release/bundle",
+            "target/release/bundle",
+            "src-tauri/target/$env:TARGET/release/bundle",
+            "src-tauri/target/release/bundle"
+          )
+          $bundle = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -First 1
+          if (-not $bundle) { throw "No release assets bundle directory found for $env:PLATFORM" }
+          ./scripts/release-platform-assets.ps1 -InputDirectory $bundle -OutputDirectory dist -Platform $env:PLATFORM
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pulse-${{ matrix.label }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     name: Publish immutable release
@@ -189,14 +216,23 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: artifacts
 
-      - name: Prepare release assets and checksums
+      - name: Prepare complete release assets and checksums
         shell: pwsh
         run: ./scripts/release-assets.ps1 -ArtifactsDirectory artifacts -OutputDirectory release-assets
+
+      - name: Verify checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 10
+          test "$(wc -l < release-assets/SHA256SUMS.txt)" -eq 9
+          (cd release-assets && sha256sum --check SHA256SUMS.txt)
 
       - name: Extract curated release notes
         shell: bash
@@ -220,12 +256,13 @@ jobs:
             exit 1
           fi
 
+          finalized=false
           cleanup_draft() {
-            if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)" == "true" ]]; then
+            if [[ "$finalized" != "true" ]] && [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)" == "true" ]]; then
               gh release delete "$TAG" --yes
             fi
           }
-          trap cleanup_draft ERR
+          trap cleanup_draft EXIT INT TERM
 
           release_flags=(--draft --verify-tag --title "Pulse $TAG" --notes-file release-body.md)
           if [[ "$TAG" == *-* ]]; then
@@ -243,6 +280,18 @@ jobs:
           mkdir verified-assets
           gh release download "$TAG" --dir verified-assets
           (cd verified-assets && sha256sum --check SHA256SUMS.txt)
+
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" --paginate \
+            --jq '.[] | [.name, .digest] | @tsv' | sort > remote-assets.tsv
+          while IFS= read -r local_path; do
+            asset_name="$(basename "$local_path")"
+            expected_digest="sha256:$(sha256sum "$local_path" | cut -d' ' -f1)"
+            actual_digest="$(awk -F '\t' -v name="$asset_name" '$1 == name { print $2 }' remote-assets.tsv)"
+            test "$actual_digest" = "$expected_digest"
+          done < <(find release-assets -maxdepth 1 -type f | sort)
+
           gh release edit "$TAG" --draft=false
-          trap - ERR
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "false"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .immutable)" = "true"
+          finalized=true

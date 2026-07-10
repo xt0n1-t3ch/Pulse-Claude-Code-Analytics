@@ -52,6 +52,13 @@ jobs:
         with:
           workspaces: . -> target
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit Rust dependencies
+        shell: pwsh
+        run: ./scripts/audit-rust.ps1
+
       - name: Verify vendored Codex integrity
         shell: pwsh
         run: ./scripts/check-codex-rich-presence-upstream.ps1
@@ -63,7 +70,7 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Check Svelte and TypeScript
+      - name: Frontend · Svelte
         working-directory: frontend
         run: npm run check
 
@@ -76,13 +83,13 @@ jobs:
         run: npm run build
 
       - name: Lint Rust
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test Rust
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Build Rust workspace
-        run: cargo build --workspace --all-targets
+        run: cargo build --locked --workspace --all-targets
 
   rust:
     name: Rust · ${{ matrix.os }}
@@ -128,5 +135,5 @@ jobs:
           workspaces: . -> target
           key: ci-${{ matrix.os }}
 
-      - name: Compile tests on platform
-        run: cargo test --workspace --no-run
+      - name: Test Rust on platform
+        run: cargo test --locked --workspace

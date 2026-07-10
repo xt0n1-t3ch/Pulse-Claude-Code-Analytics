@@ -1,7 +1,88 @@
 {
-  "branch": "main",
-  "strategy": "source-sync-with-pulse-compatibility-overlay",
-  "synced_at": "2026-07-06T04:57:08.3856321Z",
+  "schema_version": 2,
+  "sync_version": 2,
   "repository": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
-  "commit": "736faa3be62362c3f859ad0f1bfe2966b6cd9893"
+  "ref": "v1.7.0",
+  "commit": "736faa3be62362c3f859ad0f1bfe2966b6cd9893",
+  "upstream_committed_at": "2026-07-05T23:53:28-05:00",
+  "strategy": "legacy-overlay-v1",
+  "inventory": "legacy-v1",
+  "provenance": "official",
+  "contract_sha256": "e869842fbcb4a832efc44c383c33b0e53529376e6a28271c4d92dc3d52863ed3",
+  "files": [
+    {
+      "source": "src/config.rs",
+      "target": "src/codex/config.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "2bb57617e58c817f670b55b90ce0a6a46c4746ec5bb313746fe2d87a29849bae",
+      "target_sha256": "962afc6c91f0f5a4537dfe149ca959805ed60040b1d41f085eda8608c2c463f2"
+    },
+    {
+      "source": "src/cost.rs",
+      "target": "src/codex/cost.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "deeead7f9039b266fa17affcd1347c901c3110855d5a93d582870380a44f6b41",
+      "target_sha256": "cf5a9784b7ce3bae4a01997c2aa5815b88a1777b579b2272fc66a0eaa1186039"
+    },
+    {
+      "source": "src/discord.rs",
+      "target": "src/codex/discord.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "e3fb0f6082e60cc2ceac2a2b26930e223bcdfad1771fd290045bff4978ce0c87",
+      "target_sha256": "552013d7a6ed7ccdb148891d180d407fba23d3b01c27aa0d0d9cafed62d19857"
+    },
+    {
+      "source": "src/session.rs",
+      "target": "src/codex/session.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "579e54f3e9f3c0166332bd35a03e453cf224d1714177e9066c81c1d2d43c4f6b",
+      "target_sha256": "9f708c8a8ae32ef12ba60317a1a2b7f71c75a6ba940dc724ce066e93358e493b"
+    },
+    {
+      "source": "src/util.rs",
+      "target": "src/codex/util.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "c231ef1ff87b3ade6041c2887ed8d3bc57b99ef75fab9e808601ff8d95a01dda",
+      "target_sha256": "a1eaa7beefef76729ddeb0c43fecdf25ad21c968cd610759ebc1e2e7fa5647eb"
+    },
+    {
+      "source": "src/session/activity.rs",
+      "target": "src/codex/session/activity.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "7d56b30b2f294cd4ad323612c8bd6d4154524db5eed7ac24ae71e56fafb4a72e",
+      "target_sha256": "3b0a0da193de842c3083a867d39f9fc0edfa5d2e6c682927a9dfa4a03a135e53"
+    },
+    {
+      "source": "src/session/parser.rs",
+      "target": "src/codex/session/parser.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "6b0622c2152706c04fb970b5a16b476a8e99a13a6c6176e1cd724b28f48254dc",
+      "target_sha256": "5308db4b623763dd857e4f10dc927cc604f1ac5d408136f68220ae9b301bb7f8"
+    },
+    {
+      "source": "src/telemetry/limits.rs",
+      "target": "src/codex/telemetry/limits.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "ae6af06eb79324171dd361b3de8fdf1c28035ace6211755470511e9ec1dcce91",
+      "target_sha256": "ae6af06eb79324171dd361b3de8fdf1c28035ace6211755470511e9ec1dcce91"
+    },
+    {
+      "source": "src/telemetry/plan.rs",
+      "target": "src/codex/telemetry/plan.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "24650595521d75bf5b11d41462a3f19904c5a4234e5e8cfb20a8032491392bc1",
+      "target_sha256": "ee06c455d34b2fbd31690ba41c4db1cd364db14cc9f853a6498afc1355cabe50"
+    },
+    {
+      "source": "src/telemetry/service_tier.rs",
+      "target": "src/codex/telemetry/service_tier.rs",
+      "mode": "legacy-overlay",
+      "source_sha256": "951c1b9b21ea20dc2607757e7d9c1248bf664ac36acabf83b8fcbac3343b52ba",
+      "target_sha256": "3317c66235c4423c97be0b37b95b854df4b98d5016ffb64660050d5d875e04bc"
+    }
+  ],
+  "local_adapters": [
+    "src/codex/mod.rs",
+    "src/codex/process.rs"
+  ]
 }

@@ -1,0 +1,73 @@
+{
+  "schema_version": 2,
+  "sync_version": 2,
+  "official_repository": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
+  "latest_inventory": "model-catalog-v2",
+  "namespace_modules": [
+    "config",
+    "cost",
+    "discord",
+    "metrics",
+    "model",
+    "opencode",
+    "process_guard",
+    "session",
+    "telemetry",
+    "util"
+  ],
+  "local_adapters": [
+    "src/codex/mod.rs",
+    "src/codex/process.rs"
+  ],
+  "inventories": {
+    "legacy-v1": {
+      "strategy": "legacy-overlay-v1",
+      "required_module_declarations": [
+        "pub mod config;",
+        "pub mod cost;",
+        "pub mod discord;",
+        "pub mod process;",
+        "pub mod session;",
+        "pub mod util;"
+      ],
+      "files": [
+        { "source": "src/config.rs", "target": "src/codex/config.rs", "mode": "legacy-overlay" },
+        { "source": "src/cost.rs", "target": "src/codex/cost.rs", "mode": "legacy-overlay" },
+        { "source": "src/discord.rs", "target": "src/codex/discord.rs", "mode": "legacy-overlay" },
+        { "source": "src/session.rs", "target": "src/codex/session.rs", "mode": "legacy-overlay" },
+        { "source": "src/util.rs", "target": "src/codex/util.rs", "mode": "legacy-overlay" },
+        { "source": "src/session/activity.rs", "target": "src/codex/session/activity.rs", "mode": "legacy-overlay" },
+        { "source": "src/session/parser.rs", "target": "src/codex/session/parser.rs", "mode": "legacy-overlay" },
+        { "source": "src/telemetry/limits.rs", "target": "src/codex/telemetry/limits.rs", "mode": "legacy-overlay" },
+        { "source": "src/telemetry/plan.rs", "target": "src/codex/telemetry/plan.rs", "mode": "legacy-overlay" },
+        { "source": "src/telemetry/service_tier.rs", "target": "src/codex/telemetry/service_tier.rs", "mode": "legacy-overlay" }
+      ]
+    },
+    "model-catalog-v2": {
+      "strategy": "namespace-rebase-v2",
+      "required_module_declarations": [
+        "pub mod config;",
+        "pub mod cost;",
+        "pub mod discord;",
+        "pub mod model;",
+        "pub mod process;",
+        "pub mod session;",
+        "pub mod util;"
+      ],
+      "files": [
+        { "source": "src/config.rs", "target": "src/codex/config.rs", "mode": "namespace-rebase" },
+        { "source": "src/cost.rs", "target": "src/codex/cost.rs", "mode": "namespace-rebase" },
+        { "source": "src/discord.rs", "target": "src/codex/discord.rs", "mode": "namespace-rebase" },
+        { "source": "src/model.rs", "target": "src/codex/model.rs", "mode": "namespace-rebase" },
+        { "source": "src/model_catalog.json", "target": "src/codex/model_catalog.json", "mode": "byte-copy" },
+        { "source": "src/session.rs", "target": "src/codex/session.rs", "mode": "namespace-rebase" },
+        { "source": "src/util.rs", "target": "src/codex/util.rs", "mode": "namespace-rebase" },
+        { "source": "src/session/activity.rs", "target": "src/codex/session/activity.rs", "mode": "namespace-rebase" },
+        { "source": "src/session/parser.rs", "target": "src/codex/session/parser.rs", "mode": "namespace-rebase" },
+        { "source": "src/telemetry/limits.rs", "target": "src/codex/telemetry/limits.rs", "mode": "namespace-rebase" },
+        { "source": "src/telemetry/plan.rs", "target": "src/codex/telemetry/plan.rs", "mode": "namespace-rebase" },
+        { "source": "src/telemetry/service_tier.rs", "target": "src/codex/telemetry/service_tier.rs", "mode": "namespace-rebase" }
+      ]
+    }
+  }
+}
