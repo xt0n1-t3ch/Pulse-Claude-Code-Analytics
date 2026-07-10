@@ -31,6 +31,10 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
+      - name: Fetch annotated release tag
+        shell: pwsh
+        run: git fetch --force origin "refs/tags/$env:GITHUB_REF_NAME:refs/tags/$env:GITHUB_REF_NAME"
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update

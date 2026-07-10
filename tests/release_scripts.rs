@@ -411,6 +411,16 @@ fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
     assert!(audit.contains(r#"@("audit", "--deny", "warnings")"#));
     assert!(audit.contains("rustsec-accepted-warnings.json"));
     assert!(release.contains("check-release-contract.ps1"));
+    let fetch_tag = release
+        .find("Fetch annotated release tag")
+        .expect("release workflow must fetch the remote tag object");
+    let validate_tag = release
+        .find("Validate annotated release target")
+        .expect("release workflow must validate the fetched tag");
+    assert!(fetch_tag < validate_tag);
+    assert!(release.contains(
+        "git fetch --force origin \"refs/tags/$env:GITHUB_REF_NAME:refs/tags/$env:GITHUB_REF_NAME\""
+    ));
     assert!(release.contains("check-codex-rich-presence-upstream.ps1"));
     assert!(release.contains("NPM_VERSION: \"11.10.1\""));
     assert!(release.contains("No release assets"));
