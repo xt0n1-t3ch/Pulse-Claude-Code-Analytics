@@ -285,7 +285,7 @@ jobs:
           gh release download "$TAG" --dir verified-assets
           (cd verified-assets && sha256sum --check SHA256SUMS.txt)
 
-          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .id)"
+          release_id="$(gh release view "$TAG" --json databaseId --jq .databaseId)"
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" --paginate \
             --jq '.[] | [.name, .digest] | @tsv' | sort > remote-assets.tsv
           while IFS= read -r local_path; do
