@@ -121,8 +121,6 @@
     const out: CtxAdvice[] = [];
     const profile = $providerProfile;
     const product = profile.productName;
-    const memoryFile = profile.instructionFile;
-    const home = profile.homeDir;
     const usedPctValue = (ctx.used_tokens / ctx.context_window) * 100;
     const freePctValue = (ctx.free_space / ctx.context_window) * 100;
 
@@ -156,58 +154,13 @@
       const heavy = heaviest(ctx.memory_files, 3);
       out.push({
         id: "memory-heavy",
-        severity: "warning",
-        title: `Memory files use ${fmtTokens(ctx.memory_total)} tokens`,
-        description:
-          `${memoryFile} + rules get re-read every turn. Heaviest: ${describeList(heavy)}. ` +
-          "Trimming them pays back on every single message.",
-        fix_prompt:
-          `My memory files (${ctx.memory_files.map((f) => f.name).join(", ")}) currently total ` +
-          `${ctx.memory_total} tokens. Read them, identify which sections are generic boilerplate, ` +
-          "duplicated, or rarely-triggered, and suggest concrete edits that cut token count without losing the rules I actually rely on.",
-      });
-    }
-
-    if (ctx.skills_total > 30_000) {
-      const heavy = heaviest(ctx.skills, 5);
-      out.push({
-        id: "skills-bloat",
-        severity: "warning",
-        title: `${ctx.skills.length} skills loaded, ${fmtTokens(ctx.skills_total)} tokens`,
-        description:
-          `Top-5 by size: ${describeList(heavy)}. Skills sit in context whether you use them or not — ` +
-          "disabling unused ones buys headroom on every turn.",
-        fix_prompt:
-          `I have ${ctx.skills.length} skills loaded consuming ${ctx.skills_total} tokens total. ` +
-          `The heaviest are: ${describeList(heavy)}. Help me audit which of these I actually need for my current work ` +
-          `and which I can disable — check ${home}/skills/<name>/SKILL.md descriptions to decide.`,
-      });
-    } else if (ctx.skills_total > 15_000) {
-      out.push({
-        id: "skills-warm",
         severity: "info",
-        title: `${fmtTokens(ctx.skills_total)} tokens of skills loaded`,
+        title: `Instruction inventory is about ${fmtTokens(ctx.memory_total)}`,
         description:
-          "Not critical, but skills eat context. If any aren't relevant to today's work, temporarily disabling them frees tokens.",
+          `This is an on-disk estimate, not observed context usage. Heaviest files: ${describeList(heavy)}.`,
         fix_prompt:
-          `I have ${ctx.skills.length} skills loaded (${ctx.skills_total} tokens). ` +
-          "List them with one-line summaries of what each is for — then I can decide which to keep for this session.",
-      });
-    }
-
-    if (ctx.mcp_total > 15_000) {
-      const heavy = heaviest(ctx.mcp_tools, 5);
-      out.push({
-        id: "mcp-heavy",
-        severity: "warning",
-        title: `MCP tools use ${fmtTokens(ctx.mcp_total)} tokens`,
-        description:
-          `Top: ${describeList(heavy)}. Each MCP server adds tool definitions to context. ` +
-          "Unused servers are silent token drag.",
-        fix_prompt:
-          `My MCP servers (${ctx.mcp_tools.map((t) => t.name).join(", ")}) consume ${ctx.mcp_total} tokens. ` +
-          `Read ${home}/settings.json (or the equivalent MCP config) and tell me which servers I can disable for typical coding work — ` +
-          "keep essentials (like context7 for docs) and flag the ones that are rarely useful.",
+          `My instruction files (${ctx.memory_files.map((f) => f.name).join(", ")}) have an estimated on-disk size of ` +
+          `${ctx.memory_total} tokens. Read them and identify duplicated or generic sections without assuming every file was loaded in this session.`,
       });
     }
 
@@ -223,13 +176,13 @@
       });
     }
 
-    if (freePctValue >= 50 && ctx.memory_total < 5_000 && ctx.skills_total < 15_000) {
+    if (freePctValue >= 50) {
       out.push({
         id: "context-healthy",
         severity: "positive",
         title: "Context is in great shape",
         description:
-          `${fmtPct(freePctValue)} free space, memory + skills under budget. Nothing to do — keep it this lean.`,
+          `${fmtPct(freePctValue)} free space based on observed session telemetry.`,
         fix_prompt: "",
       });
     }
@@ -257,21 +210,13 @@
   interface CatItem { label: string; tokens: number; pct: number; icon: string; color: string }
 
   let categories = $derived<CatItem[]>(ctx ? [
-    { label: "System prompt", tokens: ctx.system_prompt, pct: (ctx.system_prompt / ctx.context_window) * 100, icon: "filled", color: "var(--info)" },
-    { label: "System tools", tokens: ctx.system_tools, pct: (ctx.system_tools / ctx.context_window) * 100, icon: "filled", color: "var(--chart-3)" },
-    { label: "Memory files", tokens: ctx.memory_total, pct: (ctx.memory_total / ctx.context_window) * 100, icon: "filled", color: "var(--warning)" },
-    { label: "Skills", tokens: ctx.skills_total, pct: (ctx.skills_total / ctx.context_window) * 100, icon: "filled", color: "var(--success)" },
-    { label: "Messages", tokens: ctx.messages, pct: (ctx.messages / ctx.context_window) * 100, icon: "filled", color: "#7cb9e8" },
+    { label: "Observed session usage", tokens: ctx.used_tokens, pct: usedPct, icon: "filled", color: "#7cb9e8" },
     { label: "Free space", tokens: ctx.free_space, pct: freePct, icon: "hollow", color: "var(--text-muted)" },
     { label: "Autocompact buffer", tokens: ctx.autocompact_buffer, pct: autocompactPct, icon: "cross", color: "var(--text-muted)" },
   ].filter((c) => c.tokens > 0 || c.icon !== "filled") : []);
 
   let barSegs = $derived<{ pct: number; color: string }[]>(ctx ? [
-    { pct: (ctx.system_prompt / ctx.context_window) * 100, color: "var(--info)" },
-    { pct: (ctx.system_tools / ctx.context_window) * 100, color: "var(--chart-3)" },
-    { pct: (ctx.memory_total / ctx.context_window) * 100, color: "var(--warning)" },
-    { pct: (ctx.skills_total / ctx.context_window) * 100, color: "var(--success)" },
-    { pct: (ctx.messages / ctx.context_window) * 100, color: "#7cb9e8" },
+    { pct: usedPct, color: "#7cb9e8" },
   ] : []);
 
   let usedBarPct = $derived(barSegs.reduce((s, b) => s + b.pct, 0));
@@ -373,7 +318,9 @@
       <div class="hero-sub">
         <span class="hero-free">{fmtTokens(ctx.free_space)} free</span>
         <span class="hero-sep-sm">·</span>
-        <span class="hero-buffer">{fmtTokens(ctx.autocompact_buffer)} autocompact buffer</span>
+        {#if ctx.autocompact_buffer > 0}
+          <span class="hero-buffer">{fmtTokens(ctx.autocompact_buffer)} autocompact buffer</span>
+        {/if}
       </div>
 
       <div class="cat-grid">
@@ -466,9 +413,9 @@
       {#if ctx.mcp_tools.length > 0}
         <div class="sub-card">
           <button class="sub-header" onclick={() => showMcp = !showMcp}>
-            <span class="sub-title">MCP tools</span>
+            <span class="sub-title">Configured MCP inventory</span>
             <span class="sub-count">{ctx.mcp_tools.length}</span>
-            <span class="sub-tokens">{fmtTokens(ctx.mcp_total)}</span>
+            <span class="sub-tokens">~{fmtTokens(ctx.mcp_total)}</span>
             <span class="chevron" class:open={showMcp}></span>
           </button>
           {#if showMcp}
@@ -487,9 +434,9 @@
       {#if ctx.memory_files.length > 0}
         <div class="sub-card">
           <button class="sub-header" onclick={() => showMemory = !showMemory}>
-            <span class="sub-title">Memory files</span>
+            <span class="sub-title">Instruction inventory</span>
             <span class="sub-count">{ctx.memory_files.length}</span>
-            <span class="sub-tokens">{fmtTokens(ctx.memory_total)}</span>
+            <span class="sub-tokens">~{fmtTokens(ctx.memory_total)}</span>
             <span class="chevron" class:open={showMemory}></span>
           </button>
           {#if showMemory}
@@ -508,9 +455,9 @@
       {#if ctx.skills.length > 0}
         <div class="sub-card">
           <button class="sub-header" onclick={() => showSkills = !showSkills}>
-            <span class="sub-title">Skills</span>
+            <span class="sub-title">Installed skill inventory</span>
             <span class="sub-count">{ctx.skills.length}</span>
-            <span class="sub-tokens">{fmtTokens(ctx.skills_total)}</span>
+            <span class="sub-tokens">~{fmtTokens(ctx.skills_total)}</span>
             <span class="chevron" class:open={showSkills}></span>
           </button>
           {#if showSkills}

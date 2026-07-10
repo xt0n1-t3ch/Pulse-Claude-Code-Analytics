@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import type { ReportsBundle } from "@/lib/api";
+import { provider } from "@/lib/provider";
 
 function makeBundle(): ReportsBundle {
   return {
     provider: "claude",
+    capabilities: { cache_health: true, model_routing: true, extra_usage: true },
     days: 30,
     total_sessions: 3,
     recommendations: [
@@ -102,10 +104,11 @@ function makeBundle(): ReportsBundle {
 }
 
 let resolvers: Array<() => void> = [];
+let activeBundle = makeBundle();
 const getReportsBundle = vi.fn(
   () =>
     new Promise<ReportsBundle>((resolve) => {
-      resolvers.push(() => resolve(makeBundle()));
+      resolvers.push(() => resolve(activeBundle));
     }),
 );
 
@@ -126,6 +129,33 @@ describe("Reports.svelte", () => {
   beforeEach(() => {
     getReportsBundle.mockClear();
     resolvers = [];
+    activeBundle = makeBundle();
+    provider.set("claude");
+  });
+
+  it("shows Codex cache health without exposing Claude-only model routing", async () => {
+    provider.set("codex");
+    activeBundle = {
+      ...makeBundle(),
+      provider: "codex",
+      capabilities: { cache_health: true, model_routing: false, extra_usage: false },
+      trace_overview: {
+        ...makeBundle().trace_overview,
+        provider: "codex",
+        provider_display: "Codex",
+        instruction_file: "AGENTS.md",
+        fix_button_label: "Fix with Codex",
+      },
+      model_routing: null,
+    };
+    const Reports = (await import("@/views/Reports.svelte")).default;
+    const { findByText, queryByText } = render(Reports);
+
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    flushAll();
+
+    expect(await findByText("Cache is doing its job.")).toBeTruthy();
+    expect(queryByText("Model Routing")).toBeNull();
   });
 
   it("populates sections from a single bundle call", async () => {

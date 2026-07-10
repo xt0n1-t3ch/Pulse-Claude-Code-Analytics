@@ -2,15 +2,15 @@
 
 > Open-source native desktop app that reads Claude Code and OpenAI Codex usage transcripts locally and turns them into cost, token, cache-health and context-window analytics, plus a Discord Rich Presence daemon that shows your live coding session. 100% local, zero telemetry. Built with Rust + Tauri 2 + Svelte 5. Apache-2.0.
 
-Pulse answers the question "where did every Claude Code dollar actually go?" without sending a single byte off your machine.
+Pulse answers the question "where did my Claude Code and Codex usage actually go?" without sending session data off your machine.
 
 ## What
 
-Pulse reads the JSONL transcripts that Claude Code and Codex already write to disk (zero-config — install and launch) and surfaces the metrics that move the needle on a paid plan: per-session cost and tokens, an A–F cache-health letter grade, model-routing mix, cost-inflection alerts, per-session context-window usage with compaction hints, and live plan-usage limits (session, weekly, Sonnet-only, Extra Usage). Every recommendation ships a one-click "Fix with Claude Code" prompt. A companion daemon pushes Discord Rich Presence showing the live project, model, reasoning effort and fast-mode marker.
+Pulse reads the JSONL transcripts and runtime metadata that Claude Code and Codex already write to disk (zero-config — install and launch) and surfaces provider-capable metrics: per-session cost and tokens, cache health, cost-inflection alerts, context-window usage, and live plan limits. Provider-specific analyzers stay gated to the data that actually exists. Every recommendation ships a one-click fix prompt labeled for Claude Code or Codex. A companion daemon pushes Discord Rich Presence showing the live project, model, reasoning effort, and speed.
 
 Pulse prices every Claude model correctly, including Claude Opus 4.8 with its fast mode (priority speed at 2x the standard per-token rate, detected per-turn from the transcript's `usage.speed` field), 1M-context GA pricing, and the inflated-tokenizer correction for Opus 4.7+. The headline cost mirrors Claude Code's own statusline total; per-category breakdowns are reconciled to it.
 
-Pulse also prices the full OpenAI Codex GPT-5 family from OpenAI's API rates — including GPT-5.5 ($5 / $30 per million tokens) — and surfaces Codex Fast mode (the `/fast` priority tier): GPT-5.5 bills at 2.5x and GPT-5.4 at 2x the standard rate, marked with a fast indicator in Sessions and Discord presence. Switch between Claude Code and Codex with one toggle.
+Pulse consumes the immutable Codex Discord Rich Presence catalog for OpenAI Codex. It includes GPT-5.6 Sol, Terra, and Luna labels and sourced rates; 372,000 raw / 353,400 usable context from the local App catalog; independent reasoning and Standard/Fast display; and exact, partial, or unavailable cost status. Missing cache-write telemetry and unpublished GPT-5.6 Fast economics remain explicit instead of becoming guessed multipliers. Switch between Claude Code and Codex with one toggle.
 
 ## Stack
 
@@ -46,4 +46,4 @@ Pulse also prices the full OpenAI Codex GPT-5 family from OpenAI's API rates —
 
 ## Keywords
 
-Claude Code analytics, Claude Code cost tracker, Claude Code usage dashboard, Claude Opus 4.8, fast mode pricing, Anthropic token cost, cache hit ratio, prompt caching, 1M context window, context window usage, model routing, Opus Sonnet Haiku, OpenAI Codex usage, Codex analytics, GPT-5.5, GPT-5 family, Codex fast mode, /fast, gpt-5.5 pricing, Discord Rich Presence, reasoning effort, Claude Pro, Claude Max, Claude Teams, ChatGPT Plus Pro Business, plan usage limits, Extra Usage, JSONL transcript, local-first, zero telemetry, open source, Rust, Tauri, Svelte, Windows, macOS, Linux desktop app
+Claude Code analytics, Claude Code cost tracker, Claude Code usage dashboard, Claude Opus 4.8, fast mode pricing, Anthropic token cost, cache hit ratio, prompt caching, 1M context window, context window usage, model routing, Opus Sonnet Haiku, OpenAI Codex usage, Codex analytics, ChatGPT App analytics, GPT-5.6, GPT-5 family, Codex fast mode, Discord Rich Presence, reasoning effort, Claude Pro, Claude Max, Claude Teams, ChatGPT Plus Pro Business, plan usage limits, Extra Usage, JSONL transcript, local-first, zero telemetry, open source, Rust, Tauri, Svelte, Windows, macOS, Linux desktop app

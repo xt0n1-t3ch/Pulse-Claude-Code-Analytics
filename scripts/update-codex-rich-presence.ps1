@@ -28,6 +28,15 @@ function Get-Sha256 {
   (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Format-RustFile {
+  param([Parameter(Mandatory)] [string]$Path)
+
+  $output = @(& rustfmt --edition 2024 --config skip_children=true $Path 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "rustfmt failed for $Path`: $($output -join [Environment]::NewLine)"
+  }
+}
+
 function Assert-PulseAdapters {
   param([Parameter(Mandatory)] [string]$CodexDirectory)
 
@@ -190,6 +199,10 @@ try {
       default {
         throw "Unsupported vendoring mode '$mode' for $source"
       }
+    }
+
+    if ([System.IO.Path]::GetExtension($targetPath) -eq ".rs") {
+      Format-RustFile $targetPath
     }
 
     $fileEntries += [ordered]@{

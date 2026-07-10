@@ -71,25 +71,6 @@ body {
 .report-shell { max-width: 1240px; margin: 0 auto; }
 a { color: inherit; }
 
-.theme-toggle {
-  position: fixed; top: 16px; right: 16px; z-index: 100;
-  width: 36px; height: 36px;
-  background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  display: inline-flex; align-items: center; justify-content: center;
-  cursor: pointer; color: var(--text-secondary);
-  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease);
-}
-.theme-toggle:hover { background: var(--bg-card-hover); border-color: var(--border-hover); color: var(--text-primary); }
-.theme-toggle svg { width: 16px; height: 16px; display: block; }
-.theme-toggle .icon-sun { display: none; }
-[data-theme="light"] .theme-toggle .icon-sun { display: block; }
-[data-theme="light"] .theme-toggle .icon-moon { display: none; }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .theme-toggle .icon-sun { display: block; }
-  :root:not([data-theme]) .theme-toggle .icon-moon { display: none; }
-}
-
 .kicker,.summary-label,.info-label,.metric .label,.heat-label,.routing-share {
   font-family: var(--font-mono); font-size: 10px; font-weight: 600;
   letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted);
@@ -374,7 +355,7 @@ tr:last-child td { border-bottom: none; }
 .meta-k { color: var(--text-muted); letter-spacing: 0.10em; text-transform: uppercase; }
 .meta-v { color: var(--text-secondary); }
 .meta-v.accent { color: var(--text-primary); font-weight: 600; }
-.rec-fix {
+.rec-fix summary {
   margin-top: 12px; padding: 7px 14px;
   background: var(--bg-elevated); border: 1px solid var(--border-hover);
   border-radius: var(--radius-xs);
@@ -382,9 +363,16 @@ tr:last-child td { border-bottom: none; }
   font-family: var(--font-mono); font-size: 10px; font-weight: 600;
   letter-spacing: 0.12em; text-transform: uppercase;
   cursor: pointer; transition: all .15s var(--ease);
+  display: inline-flex;
 }
-.rec-fix:hover { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
-.rec-fix.copied { background: var(--success); color: #ffffff; border-color: var(--success); }
+.rec-fix summary:hover { background: var(--text-primary); color: var(--bg); border-color: var(--text-primary); }
+.rec-fix-prompt {
+  margin: 10px 0 0; padding: 12px 14px;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-md); color: var(--text-secondary);
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
 
 .footer {
   margin-top: 48px; padding: 22px 0; border-top: 1px solid var(--border);
@@ -399,8 +387,6 @@ tr:last-child td { border-bottom: none; }
 }
 .footer-meta b { color: var(--text-primary); font-weight: 600; }
 .footer-links { opacity: .85; }
-.footer a { color: var(--text-primary); text-decoration: none; border-bottom: 1px solid var(--border-hover); transition: border-color .15s var(--ease); }
-.footer a:hover { border-bottom-color: var(--text-primary); }
 
 @media (max-width: 1100px) {
   .summary-grid, .info-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -423,31 +409,31 @@ tr:last-child td { border-bottom: none; }
     --text-primary: #0a0a0a; --text-secondary: #333; --text-muted: #666;
   }
   body { padding: 0; }
-  .anchor-nav, .rec-fix, .theme-toggle, .screen-only { display: none !important; }
+  .anchor-nav, .screen-only { display: none !important; }
   .section { break-inside: avoid; }
   .hero { border-top: 2px solid #000; padding-top: 16px; }
 }"##;
+
+pub const REPORT_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
 
 pub const REPORT_HEAD: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="PULSE_REPORT_CSP">
 <title>Pulse Analytics Report</title>
 <style>
 PULSE_REPORT_CSS
 </style>
-<script>(function(){try{var t=localStorage.getItem('pulse-report-theme');if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
 </head>
 <body>
-<button class="theme-toggle screen-only" onclick="(function(){var r=document.documentElement;var next=(r.getAttribute('data-theme')==='light')?'dark':(r.getAttribute('data-theme')==='dark')?'light':(matchMedia('(prefers-color-scheme: light)').matches?'dark':'light');r.setAttribute('data-theme',next);try{localStorage.setItem('pulse-report-theme',next);}catch(e){}})()" aria-label="Toggle theme" title="Toggle dark/light theme">
-  <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-  <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-</button>
 <div class="report-shell">"##;
 
-pub const REPORT_TAIL: &str = r##"<script>function pulseCopy(text){if(navigator.clipboard&&window.isSecureContext){return navigator.clipboard.writeText(text);}return new Promise((resolve,reject)=>{try{const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';document.body.appendChild(ta);ta.select();ta.setSelectionRange(0,ta.value.length);const ok=document.execCommand('copy');document.body.removeChild(ta);ok?resolve():reject(new Error('execCommand copy failed'));}catch(e){reject(e);}});}document.querySelectorAll('.rec-fix').forEach((btn)=>{btn.addEventListener('click',async()=>{const prompt=btn.getAttribute('data-prompt')||'';const original=btn.textContent;try{await pulseCopy(prompt);btn.classList.add('copied');btn.textContent='Copied prompt';}catch(err){btn.classList.add('copy-failed');btn.textContent='Copy failed - select manually';console.error('clipboard copy failed',err);}setTimeout(()=>{btn.classList.remove('copied','copy-failed');btn.textContent=original;},2000);});});</script></body></html>"##;
+pub const REPORT_TAIL: &str = "</body></html>";
 
 pub fn report_head() -> String {
-    REPORT_HEAD.replace("PULSE_REPORT_CSS", REPORT_CSS)
+    REPORT_HEAD
+        .replace("PULSE_REPORT_CSP", REPORT_CSP)
+        .replace("PULSE_REPORT_CSS", REPORT_CSS)
 }

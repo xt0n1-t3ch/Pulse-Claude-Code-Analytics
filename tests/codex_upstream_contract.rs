@@ -1,7 +1,10 @@
 use std::time::{Duration, SystemTime};
 
 use cc_discord_presence::codex::config::PresenceConfig;
-use cc_discord_presence::codex::cost::{self, PricingSource, TokenCostBreakdown};
+use cc_discord_presence::codex::cost::{
+    self, CostAttribution, PricingSource, PricingStatus, TokenCostBreakdown,
+};
+use cc_discord_presence::codex::model::SessionSpeed;
 use cc_discord_presence::codex::session::{
     CodexSessionSnapshot, SessionActivityKind, SessionActivitySnapshot, preferred_active_session,
 };
@@ -22,7 +25,7 @@ fn codex_upstream_contract_exposes_pulse_facing_modules() {
     let display = cc_discord_presence::codex::util::format_model_display(model, None, true);
 
     assert!(config.effective_client_id().is_some());
-    assert_eq!(cost::default_model_context_window(model), Some(400_000));
+    assert_eq!(cost::default_model_context_window(model), Some(258_400));
     assert!(cost::speed_multiplier(model, fast_tier.is_fast()) > 1.0);
     assert!(display.contains("GPT-5.5"), "display: {display}");
     assert!(
@@ -62,7 +65,7 @@ fn codex_process_probe_remains_pulse_compatibility_glue() {
 fn codex_wsl_probe_commands_use_hidden_windows_launcher() {
     let source = include_str!("../src/codex/config.rs");
     let direct_spawn = ["Command::new(", "\"wsl.exe\"", ")"].concat();
-    let hidden_spawn = ["crate::util::silent_command(", "\"wsl.exe\"", ")"].concat();
+    let hidden_spawn = ["crate::codex::util::silent_command(", "\"wsl.exe\"", ")"].concat();
 
     assert!(
         !source.contains(&direct_spawn),
@@ -110,6 +113,7 @@ fn snapshot(
         source: None,
         model: Some("gpt-5.5".to_string()),
         reasoning_effort: None,
+        speed: SessionSpeed::default(),
         approval_policy: None,
         sandbox_policy: None,
         session_total_tokens: None,
@@ -122,8 +126,12 @@ fn snapshot(
         last_cached_input_tokens: None,
         last_output_tokens: None,
         total_cost_usd: 0.0,
+        known_cost_usd: None,
         cost_breakdown: TokenCostBreakdown::default(),
         pricing_source: PricingSource::Fallback,
+        pricing_status: PricingStatus::Unavailable,
+        cost_attribution: CostAttribution::SingleModel,
+        cost_breakdown_reconciled: false,
         context_window: None,
         limits: RateLimits::default(),
         rate_limit_envelopes: Vec::new(),
@@ -135,6 +143,5 @@ fn snapshot(
         last_token_event_at: None,
         last_activity,
         source_file: std::env::temp_dir().join(format!("{session_id}.jsonl")),
-        is_subagent: false,
     }
 }

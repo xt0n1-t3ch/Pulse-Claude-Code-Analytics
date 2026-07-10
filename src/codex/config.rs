@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::codex::util::write_json_pretty_atomic;
 
@@ -15,16 +16,17 @@ const DEFAULT_STALE_SECONDS: u64 = 90;
 const DEFAULT_POLL_SECONDS: u64 = 2;
 const DEFAULT_ACTIVE_STICKY_SECONDS: u64 = 3600;
 const MIN_ACTIVE_STICKY_SECONDS: u64 = 60;
-const CONFIG_SCHEMA_VERSION: u32 = 9;
+const CONFIG_SCHEMA_VERSION: u32 = 12;
 pub const DEFAULT_DISCORD_CLIENT_ID: &str = "1470480085453770854";
 pub const DEFAULT_DISCORD_DESKTOP_CLIENT_ID: &str = "1478395304624652345";
 pub const DEFAULT_DISCORD_PUBLIC_KEY: &str =
     "29e563eeb755ae71d940c1b11d49dd3282a8886cd8b8cab829b2a14fcedad247";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PresenceConfig {
     pub schema_version: u32,
+    pub presence_enabled: bool,
     pub discord_client_id: Option<String>,
     pub discord_client_id_desktop: Option<String>,
     pub discord_public_key: Option<String>,
@@ -34,7 +36,7 @@ pub struct PresenceConfig {
     pub openai_plan: OpenAiPlanDisplayConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PrivacyConfig {
     pub enabled: bool,
@@ -50,7 +52,91 @@ pub struct PrivacyConfig {
     pub show_systems: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivacyField {
+    ProjectName,
+    GitBranch,
+    Model,
+    Activity,
+    TokenCount,
+    Cost,
+    SessionLimits,
+    ContextUsage,
+    Systems,
+}
+
+impl PrivacyField {
+    pub const ALL: [Self; 9] = [
+        Self::ProjectName,
+        Self::GitBranch,
+        Self::Model,
+        Self::Activity,
+        Self::TokenCount,
+        Self::Cost,
+        Self::SessionLimits,
+        Self::ContextUsage,
+        Self::Systems,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ProjectName => "Project name",
+            Self::GitBranch => "Git branch",
+            Self::Model => "Model",
+            Self::Activity => "Activity",
+            Self::TokenCount => "Token count",
+            Self::Cost => "Cost",
+            Self::SessionLimits => "Session limits",
+            Self::ContextUsage => "Context usage",
+            Self::Systems => "Systems",
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::ProjectName => "Repository or folder name",
+            Self::GitBranch => "Current checked-out ref",
+            Self::Model => "Model, reasoning, speed, and plan",
+            Self::Activity => "Current Codex activity",
+            Self::TokenCount => "Cumulative session tokens",
+            Self::Cost => "Known session subtotal",
+            Self::SessionLimits => "5-hour and weekly remaining",
+            Self::ContextUsage => "Current context-window percentage",
+            Self::Systems => "Activity icon and workflow signal",
+        }
+    }
+
+    pub const fn is_enabled(self, privacy: &PrivacyConfig) -> bool {
+        match self {
+            Self::ProjectName => privacy.show_project_name,
+            Self::GitBranch => privacy.show_git_branch,
+            Self::Model => privacy.show_model,
+            Self::Activity => privacy.show_activity,
+            Self::TokenCount => privacy.show_tokens,
+            Self::Cost => privacy.show_cost,
+            Self::SessionLimits => privacy.show_limits,
+            Self::ContextUsage => privacy.show_context,
+            Self::Systems => privacy.show_systems,
+        }
+    }
+
+    pub fn toggle(self, privacy: &mut PrivacyConfig) {
+        let value = !self.is_enabled(privacy);
+        match self {
+            Self::ProjectName => privacy.show_project_name = value,
+            Self::GitBranch => privacy.show_git_branch = value,
+            Self::Model => privacy.show_model = value,
+            Self::Activity => privacy.show_activity = value,
+            Self::TokenCount => privacy.show_tokens = value,
+            Self::Cost => privacy.show_cost = value,
+            Self::SessionLimits => privacy.show_limits = value,
+            Self::ContextUsage => privacy.show_context = value,
+            Self::Systems => privacy.show_systems = value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct PricingConfig {
     pub aliases: BTreeMap<String, String>,
@@ -65,8 +151,24 @@ pub enum OpenAiPlanTier {
     Plus,
     Business,
     Enterprise,
+    #[serde(
+        rename = "pro_5x",
+        alias = "pro5x",
+        alias = "pro-5x",
+        alias = "pro_100",
+        alias = "pro-100"
+    )]
+    Pro5x,
     #[default]
-    Pro,
+    #[serde(
+        rename = "pro_20x",
+        alias = "pro",
+        alias = "pro20x",
+        alias = "pro-20x",
+        alias = "pro_200",
+        alias = "pro-200"
+    )]
+    Pro20x,
 }
 
 impl OpenAiPlanTier {
@@ -77,7 +179,8 @@ impl OpenAiPlanTier {
             Self::Plus => "Plus",
             Self::Business => "Business",
             Self::Enterprise => "Enterprise",
-            Self::Pro => "Pro",
+            Self::Pro5x => "Pro 5x",
+            Self::Pro20x => "Pro 20x",
         }
     }
 
@@ -86,7 +189,8 @@ impl OpenAiPlanTier {
             Self::Free => Some(0),
             Self::Go => Some(8),
             Self::Plus => Some(20),
-            Self::Pro => Some(200),
+            Self::Pro5x => Some(100),
+            Self::Pro20x => Some(200),
             Self::Business | Self::Enterprise => None,
         }
     }
@@ -127,7 +231,7 @@ pub struct PlanPreset {
     pub label: &'static str,
 }
 
-const PLAN_PRESETS: [PlanPreset; 7] = [
+const PLAN_PRESETS: [PlanPreset; 8] = [
     PlanPreset {
         mode: OpenAiPlanMode::Auto,
         tier: None,
@@ -150,8 +254,13 @@ const PLAN_PRESETS: [PlanPreset; 7] = [
     },
     PlanPreset {
         mode: OpenAiPlanMode::Manual,
-        tier: Some(OpenAiPlanTier::Pro),
-        label: "Pro",
+        tier: Some(OpenAiPlanTier::Pro5x),
+        label: "Pro 5x ($100/month)",
+    },
+    PlanPreset {
+        mode: OpenAiPlanMode::Manual,
+        tier: Some(OpenAiPlanTier::Pro20x),
+        label: "Pro 20x ($200/month)",
     },
     PlanPreset {
         mode: OpenAiPlanMode::Manual,
@@ -179,7 +288,7 @@ pub fn plan_preset_index(plan: &OpenAiPlanDisplayConfig) -> usize {
         .position(|preset| {
             matches!(preset.mode, OpenAiPlanMode::Manual) && preset.tier == Some(plan.tier)
         })
-        .unwrap_or(4)
+        .unwrap_or(5)
 }
 
 pub fn apply_plan_preset(plan: &mut OpenAiPlanDisplayConfig, preset_index: usize) {
@@ -197,7 +306,7 @@ impl Default for OpenAiPlanDisplayConfig {
     fn default() -> Self {
         Self {
             mode: OpenAiPlanMode::Auto,
-            tier: OpenAiPlanTier::Pro,
+            tier: OpenAiPlanTier::Pro20x,
             show_price: true,
         }
     }
@@ -222,13 +331,79 @@ pub enum TerminalLogoMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresenceSurface {
-    Default,
+    Cli,
+    VsCode,
     Desktop,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl PresenceSurface {
+    pub fn detect(originator: Option<&str>, source: Option<&str>) -> Option<Self> {
+        originator
+            .and_then(classify_surface_signal)
+            .or_else(|| source.and_then(classify_surface_signal))
+    }
+
+    pub const fn label(self, desktop_design: DesktopPresenceDesign) -> &'static str {
+        match self {
+            Self::Cli => "Codex CLI",
+            Self::VsCode => "Codex VS Code Extension",
+            Self::Desktop => desktop_design.label(),
+        }
+    }
+}
+
+fn classify_surface_signal(value: &str) -> Option<PresenceSurface> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.contains("codex desktop")
+        || normalized.contains("openai.codex")
+        || normalized.contains("opencode")
+        || normalized == "desktop"
+    {
+        return Some(PresenceSurface::Desktop);
+    }
+    if normalized.contains("vscode") || normalized.contains("visual studio code") {
+        return Some(PresenceSurface::VsCode);
+    }
+    if normalized.contains("codex-tui")
+        || normalized.contains("codex cli")
+        || matches!(normalized.as_str(), "cli" | "terminal")
+    {
+        return Some(PresenceSurface::Cli);
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopPresenceDesign {
+    #[default]
+    CodexApp,
+    ChatGptApp,
+}
+
+impl DesktopPresenceDesign {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CodexApp => "Codex App",
+            Self::ChatGptApp => "ChatGPT App",
+        }
+    }
+
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::CodexApp => Self::ChatGptApp,
+            Self::ChatGptApp => Self::CodexApp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DisplayConfig {
+    pub desktop_presence_design: DesktopPresenceDesign,
     pub large_image_key: String,
     pub large_text: String,
     pub desktop_large_image_key: String,
@@ -240,7 +415,7 @@ pub struct DisplayConfig {
     pub terminal_logo_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct ActivitySmallImageKeys {
     pub thinking: Option<String>,
@@ -262,6 +437,7 @@ impl Default for PresenceConfig {
     fn default() -> Self {
         Self {
             schema_version: CONFIG_SCHEMA_VERSION,
+            presence_enabled: true,
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
             discord_client_id_desktop: Some(DEFAULT_DISCORD_DESKTOP_CLIENT_ID.to_string()),
             discord_public_key: Some(DEFAULT_DISCORD_PUBLIC_KEY.to_string()),
@@ -304,6 +480,7 @@ impl Default for ModelPricingOverride {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
+            desktop_presence_design: DesktopPresenceDesign::CodexApp,
             large_image_key: "codex-logo".to_string(),
             large_text: "Codex".to_string(),
             desktop_large_image_key: "codex-app".to_string(),
@@ -313,24 +490,6 @@ impl Default for DisplayConfig {
             activity_small_image_keys: ActivitySmallImageKeys::default(),
             terminal_logo_mode: TerminalLogoMode::Auto,
             terminal_logo_path: None,
-        }
-    }
-}
-
-impl Default for PricingConfig {
-    fn default() -> Self {
-        let mut aliases = BTreeMap::new();
-        aliases.insert(
-            "gpt-5.3-codex-spark".to_string(),
-            "gpt-5.3-codex".to_string(),
-        );
-        aliases.insert(
-            "gpt-5.3-codex-spark-latest".to_string(),
-            "gpt-5.3-codex".to_string(),
-        );
-        Self {
-            aliases,
-            overrides: BTreeMap::new(),
         }
     }
 }
@@ -345,14 +504,7 @@ impl PresenceConfig {
         }
 
         if cfg_path.exists() {
-            let raw = fs::read_to_string(&cfg_path)
-                .with_context(|| format!("failed to read {}", cfg_path.display()))?;
-            let mut parsed: PresenceConfig = serde_json::from_str(&raw)
-                .with_context(|| format!("invalid JSON in {}", cfg_path.display()))?;
-            if parsed.normalize_for_runtime() {
-                parsed.save()?;
-            }
-            Ok(parsed)
+            Self::load_from_path(&cfg_path)
         } else {
             let cfg = PresenceConfig::default();
             cfg.save()?;
@@ -362,17 +514,64 @@ impl PresenceConfig {
 
     pub fn save(&self) -> Result<()> {
         let path = config_path();
-        write_json_pretty_atomic(&path, self)
+        self.save_to_path(&path)
+    }
+
+    pub fn reload_from_disk(&mut self) -> bool {
+        self.reload_from_path(&config_path())
+    }
+
+    pub fn reload_from_path(&mut self, path: &Path) -> bool {
+        match Self::load_from_path(path) {
+            Ok(reloaded) => {
+                let changed = *self != reloaded;
+                *self = reloaded;
+                changed
+            }
+            Err(error) => {
+                warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "presence config reload failed; keeping the last valid configuration"
+                );
+                false
+            }
+        }
+    }
+
+    pub fn toggle_presence(&mut self) -> Result<()> {
+        self.toggle_presence_at_path(&config_path())
+    }
+
+    pub fn toggle_presence_at_path(&mut self, path: &Path) -> Result<()> {
+        self.reload_from_path(path);
+        self.presence_enabled = !self.presence_enabled;
+        self.save_to_path(path)
+    }
+
+    fn load_from_path(path: &Path) -> Result<Self> {
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let mut parsed: PresenceConfig = serde_json::from_str(&raw)
+            .with_context(|| format!("invalid JSON in {}", path.display()))?;
+        if parsed.normalize_for_runtime() {
+            parsed.save_to_path(path)?;
+        }
+        Ok(parsed)
+    }
+
+    fn save_to_path(&self, path: &Path) -> Result<()> {
+        write_json_pretty_atomic(path, self)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
 
     pub fn effective_client_id(&self) -> Option<String> {
-        self.effective_client_id_for_surface(PresenceSurface::Default)
+        self.effective_client_id_for_surface(PresenceSurface::Cli)
     }
 
     pub fn effective_client_id_for_surface(&self, surface: PresenceSurface) -> Option<String> {
-        Some(codex_client_id_for_surface(surface).to_string())
+        Some(codex_client_id_for_surface(surface, self.display.desktop_presence_design).to_string())
     }
 
     pub fn normalize_for_runtime(&mut self) -> bool {
@@ -382,15 +581,9 @@ impl PresenceConfig {
     fn normalize_and_migrate(&mut self) -> bool {
         let mut changed = false;
         let default_display = DisplayConfig::default();
-        let previous_version = self.schema_version;
 
         if self.schema_version < CONFIG_SCHEMA_VERSION {
             self.schema_version = CONFIG_SCHEMA_VERSION;
-            changed = true;
-        }
-
-        if previous_version < 9 {
-            self.privacy.show_systems = true;
             changed = true;
         }
 
@@ -463,10 +656,18 @@ impl PresenceConfig {
     }
 }
 
-fn codex_client_id_for_surface(surface: PresenceSurface) -> &'static str {
-    match surface {
-        PresenceSurface::Default => DEFAULT_DISCORD_CLIENT_ID,
-        PresenceSurface::Desktop => DEFAULT_DISCORD_DESKTOP_CLIENT_ID,
+fn codex_client_id_for_surface(
+    surface: PresenceSurface,
+    desktop_design: DesktopPresenceDesign,
+) -> &'static str {
+    match (surface, desktop_design) {
+        (PresenceSurface::Desktop, DesktopPresenceDesign::CodexApp) => {
+            DEFAULT_DISCORD_DESKTOP_CLIENT_ID
+        }
+        (PresenceSurface::Cli | PresenceSurface::VsCode, _)
+        | (PresenceSurface::Desktop, DesktopPresenceDesign::ChatGptApp) => {
+            DEFAULT_DISCORD_CLIENT_ID
+        }
     }
 }
 
@@ -640,7 +841,7 @@ fn normalize_pricing_config(pricing: &mut PricingConfig) -> bool {
     let mut normalized_aliases: BTreeMap<String, String> = BTreeMap::new();
     for (raw_key, raw_target) in pricing.aliases.iter() {
         let key = raw_key.trim().to_ascii_lowercase();
-        let mut target = raw_target.trim().to_ascii_lowercase();
+        let target = raw_target.trim().to_ascii_lowercase();
         if matches!(key.as_str(), "gpt-5.3-codex" | "gpt-5.3-codex-latest")
             && target == "gpt-5.2-codex"
         {
@@ -650,10 +851,10 @@ fn normalize_pricing_config(pricing: &mut PricingConfig) -> bool {
         if matches!(
             key.as_str(),
             "gpt-5.3-codex-spark" | "gpt-5.3-codex-spark-latest"
-        ) && target == "gpt-5.2-codex"
+        ) && matches!(target.as_str(), "gpt-5.2-codex" | "gpt-5.3-codex")
         {
-            target = "gpt-5.3-codex".to_string();
             changed = true;
+            continue;
         }
         if key.is_empty() || target.is_empty() || key == target {
             if !raw_key.trim().is_empty() || !raw_target.trim().is_empty() {
@@ -785,7 +986,7 @@ fn include_wsl_session_roots() -> bool {
         || parse_bool_flag(env::var("CC_PRESENCE_INCLUDE_WSL").ok().as_deref())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn parse_bool_flag(value: Option<&str>) -> bool {
     matches!(
         value.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
@@ -819,7 +1020,7 @@ fn windows_wsl_sessions_candidates() -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn windows_wsl_distro_names() -> Vec<String> {
-    let output = crate::util::silent_command("wsl.exe")
+    let output = crate::codex::util::silent_command("wsl.exe")
         .args(["-l", "-q"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -841,7 +1042,7 @@ fn windows_wsl_distro_names() -> Vec<String> {
 
 #[cfg(windows)]
 fn wsl_home_for_distro(distro: &str) -> Option<String> {
-    let output = crate::util::silent_command("wsl.exe")
+    let output = crate::codex::util::silent_command("wsl.exe")
         .args(["-d", distro, "--", "sh", "-lc", "printf %s \"$HOME\""])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -915,6 +1116,7 @@ mod tests {
     fn migration_sets_default_client_id_when_missing() {
         let mut cfg = PresenceConfig {
             schema_version: 2,
+            presence_enabled: true,
             discord_client_id: None,
             discord_client_id_desktop: None,
             discord_public_key: None,
@@ -927,7 +1129,8 @@ mod tests {
         let changed = cfg.normalize_and_migrate();
 
         assert!(changed);
-        assert_eq!(cfg.schema_version, 9);
+        assert_eq!(cfg.schema_version, 12);
+        assert!(cfg.presence_enabled);
         assert_eq!(
             cfg.discord_client_id.as_deref(),
             Some(DEFAULT_DISCORD_CLIENT_ID)
@@ -941,8 +1144,42 @@ mod tests {
             Some(DEFAULT_DISCORD_PUBLIC_KEY)
         );
         assert_eq!(cfg.openai_plan.mode, OpenAiPlanMode::Auto);
-        assert_eq!(cfg.openai_plan.tier, OpenAiPlanTier::Pro);
+        assert_eq!(cfg.openai_plan.tier, OpenAiPlanTier::Pro20x);
         assert!(cfg.openai_plan.show_price);
+    }
+
+    #[test]
+    fn privacy_defaults_cover_every_user_visible_presence_field() {
+        let privacy = PrivacyConfig::default();
+
+        assert!(privacy.show_project_name);
+        assert!(privacy.show_git_branch);
+        assert!(privacy.show_model);
+        assert!(privacy.show_activity);
+        assert!(privacy.show_tokens);
+        assert!(privacy.show_cost);
+        assert!(privacy.show_limits);
+        assert!(privacy.show_context);
+        assert!(privacy.show_systems);
+    }
+
+    #[test]
+    fn privacy_fields_toggle_through_one_canonical_contract() {
+        let mut privacy = PrivacyConfig::default();
+
+        for field in PrivacyField::ALL {
+            assert!(
+                field.is_enabled(&privacy),
+                "{} should default on",
+                field.label()
+            );
+            field.toggle(&mut privacy);
+            assert!(
+                !field.is_enabled(&privacy),
+                "{} should toggle off",
+                field.label()
+            );
+        }
     }
 
     #[test]
@@ -950,35 +1187,77 @@ mod tests {
         let cfg = PresenceConfig::default();
         assert_eq!(cfg.display.terminal_logo_mode, TerminalLogoMode::Auto);
         assert_eq!(cfg.display.terminal_logo_path, None);
+        assert_eq!(
+            cfg.display.desktop_presence_design,
+            DesktopPresenceDesign::CodexApp
+        );
         assert_eq!(cfg.display.desktop_large_image_key, "codex-app");
         assert_eq!(cfg.display.desktop_large_text, "Codex App");
     }
 
     #[test]
+    fn desktop_presence_design_toggles_between_codex_and_chatgpt() {
+        let mut design = DesktopPresenceDesign::CodexApp;
+        assert_eq!(design.label(), "Codex App");
+        design = design.toggled();
+        assert_eq!(design, DesktopPresenceDesign::ChatGptApp);
+        assert_eq!(design.label(), "ChatGPT App");
+        assert_eq!(design.toggled(), DesktopPresenceDesign::CodexApp);
+    }
+
+    #[test]
+    fn desktop_presence_design_survives_json_and_schema_migration() {
+        let mut cfg = PresenceConfig {
+            schema_version: 9,
+            ..PresenceConfig::default()
+        };
+        cfg.display.desktop_presence_design = DesktopPresenceDesign::ChatGptApp;
+
+        let json = serde_json::to_string(&cfg).expect("serialize config");
+        let mut restored: PresenceConfig = serde_json::from_str(&json).expect("deserialize config");
+        assert!(restored.normalize_and_migrate());
+        assert_eq!(restored.schema_version, CONFIG_SCHEMA_VERSION);
+        assert_eq!(
+            restored.display.desktop_presence_design,
+            DesktopPresenceDesign::ChatGptApp
+        );
+    }
+
+    #[test]
     fn desktop_surface_client_id_uses_codex_app_default() {
-        let cfg = PresenceConfig {
+        let mut cfg = PresenceConfig {
             discord_client_id: Some("default-id".to_string()),
             discord_client_id_desktop: Some("desktop-id".to_string()),
             ..PresenceConfig::default()
         };
         assert_eq!(
+            cfg.effective_client_id_for_surface(PresenceSurface::Cli)
+                .as_deref(),
+            Some(DEFAULT_DISCORD_CLIENT_ID)
+        );
+        assert_eq!(
+            cfg.effective_client_id_for_surface(PresenceSurface::VsCode)
+                .as_deref(),
+            Some(DEFAULT_DISCORD_CLIENT_ID)
+        );
+        assert_eq!(
             cfg.effective_client_id_for_surface(PresenceSurface::Desktop)
                 .as_deref(),
             Some(DEFAULT_DISCORD_DESKTOP_CLIENT_ID)
         );
+
+        cfg.display.desktop_presence_design = DesktopPresenceDesign::ChatGptApp;
+        assert_eq!(
+            cfg.effective_client_id_for_surface(PresenceSurface::Desktop)
+                .as_deref(),
+            Some(DEFAULT_DISCORD_CLIENT_ID)
+        );
     }
 
     #[test]
-    fn pricing_defaults_include_gpt_5_3_spark_aliases() {
+    fn pricing_defaults_leave_builtin_aliases_to_model_catalog() {
         let cfg = PresenceConfig::default();
-        assert_eq!(
-            cfg.pricing
-                .aliases
-                .get("gpt-5.3-codex-spark")
-                .map(String::as_str),
-            Some("gpt-5.3-codex")
-        );
-        assert!(!cfg.pricing.aliases.contains_key("gpt-5.3-codex"));
+        assert!(cfg.pricing.aliases.is_empty());
     }
 
     #[test]
@@ -1005,23 +1284,44 @@ mod tests {
         let changed = cfg.normalize_and_migrate();
         assert!(changed);
         assert!(!cfg.pricing.aliases.contains_key("gpt-5.3-codex"));
-        assert_eq!(
-            cfg.pricing
-                .aliases
-                .get("gpt-5.3-codex-spark")
-                .map(String::as_str),
-            Some("gpt-5.3-codex")
-        );
+        assert!(!cfg.pricing.aliases.contains_key("gpt-5.3-codex-spark"));
         assert!(cfg.pricing.overrides.contains_key("gpt-5.2-codex"));
     }
 
     #[test]
-    fn default_openai_plan_is_pro_with_price() {
+    fn default_openai_plan_is_pro_20x_with_price() {
         let cfg = PresenceConfig::default();
         assert_eq!(cfg.openai_plan.mode, OpenAiPlanMode::Auto);
-        assert_eq!(cfg.openai_plan.tier, OpenAiPlanTier::Pro);
+        assert_eq!(cfg.openai_plan.tier, OpenAiPlanTier::Pro20x);
         assert!(cfg.openai_plan.show_price);
-        assert_eq!(cfg.openai_plan.label(), "Pro ($200/month)");
+        assert_eq!(cfg.openai_plan.label(), "Pro 20x ($200/month)");
+    }
+
+    #[test]
+    fn plan_presets_include_distinct_pro_usage_tiers() {
+        let labels: Vec<&str> = plan_presets().iter().map(|preset| preset.label).collect();
+
+        assert!(labels.contains(&"Pro 5x ($100/month)"));
+        assert!(labels.contains(&"Pro 20x ($200/month)"));
+        assert_eq!(
+            plan_presets()
+                .iter()
+                .filter(|preset| matches!(
+                    preset.tier,
+                    Some(OpenAiPlanTier::Pro5x | OpenAiPlanTier::Pro20x)
+                ))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn legacy_pro_plan_deserializes_to_pro_20x() {
+        let raw = r#"{"mode":"manual","tier":"pro","show_price":true}"#;
+        let plan: OpenAiPlanDisplayConfig = serde_json::from_str(raw).expect("plan");
+
+        assert_eq!(plan.tier, OpenAiPlanTier::Pro20x);
+        assert_eq!(plan.label(), "Pro 20x ($200/month)");
     }
 
     #[test]
@@ -1042,7 +1342,7 @@ mod tests {
             tier: OpenAiPlanTier::Business,
             show_price: true,
         };
-        assert_eq!(plan_preset_index(&plan), 5);
+        assert_eq!(plan_preset_index(&plan), 6);
     }
 
     #[test]
@@ -1055,5 +1355,40 @@ mod tests {
         apply_plan_preset(&mut plan, 0);
         assert_eq!(plan.mode, OpenAiPlanMode::Auto);
         assert_eq!(plan.tier, OpenAiPlanTier::Plus);
+    }
+
+    #[test]
+    fn windows_wsl_probe_commands_use_hidden_launcher() {
+        let source = include_str!("config.rs");
+        let direct_spawn = ["Command::new(", "\"wsl.exe\"", ")"].concat();
+        let hidden_spawn = ["crate::codex::util::silent_command(", "\"wsl.exe\"", ")"].concat();
+
+        assert!(
+            !source.contains(&direct_spawn),
+            "WSL probes must not use visible Windows subprocess launches"
+        );
+        assert_eq!(
+            source.matches(&hidden_spawn).count(),
+            2,
+            "both WSL discovery probes must use the hidden command helper"
+        );
+    }
+
+    #[test]
+    fn windows_wsl_roots_are_explicit_opt_in() {
+        let source = include_str!("config.rs");
+
+        assert!(!parse_bool_flag(None));
+        assert!(!parse_bool_flag(Some("")));
+        assert!(!parse_bool_flag(Some("0")));
+        assert!(!parse_bool_flag(Some("false")));
+        assert!(parse_bool_flag(Some("1")));
+        assert!(parse_bool_flag(Some("true")));
+        assert!(parse_bool_flag(Some("yes")));
+        assert!(parse_bool_flag(Some("on")));
+        assert!(
+            source.contains("if include_wsl_session_roots()"),
+            "Windows WSL session scanning must stay opt-in before invoking wsl.exe"
+        );
     }
 }

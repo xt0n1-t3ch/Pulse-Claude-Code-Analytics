@@ -90,26 +90,29 @@ When statusline data is present, its `total_cost_usd` stays **authoritative** fo
 
 See [opus-4-8.md](opus-4-8.md) for the model that introduced fast mode. Fable 5 and Mythos 5 are not fast-capable unless Anthropic documents a fast tier later.
 
-## Codex (OpenAI) Pricing & Fast Mode
+## Codex (OpenAI) Pricing, Completeness, and Speed
 
-Pulse prices OpenAI Codex sessions from OpenAI's published per-million-token API rates (`src/codex/cost.rs` → `default_model_pricing()`), resolved by normalized model id with alias and override support:
+`src/codex/model_catalog.json` is the only Codex pricing owner. `src/codex/model.rs` normalizes aliases and returns catalog capabilities; `src/codex/cost.rs` performs arithmetic and explicit user overrides.
 
-| Model | Input | Cached Input | Output |
-|-------|-------|--------------|--------|
-| GPT-5.5 | $5.00 | $0.50 | $30.00 |
-| GPT-5.4 | $2.50 | $0.25 | $15.00 |
-| GPT-5.3-Codex / 5.2 | $1.75 | $0.175 | $14.00 |
-| GPT-5.1 / 5 (+ codex / max) | $1.25 | $0.125 | $10.00 |
-| GPT-5-mini / 5.1-codex-mini | $0.25 | $0.025 | $2.00 |
-| GPT-5-nano | $0.05 | $0.005 | $0.40 |
+| Model | Input | Cache write | Cache read | Output |
+| --- | ---: | ---: | ---: | ---: |
+| GPT-5.6 Sol | $5.00 | $6.25 | $0.50 | $30.00 |
+| GPT-5.6 Terra | $2.50 | $3.125 | $0.25 | $15.00 |
+| GPT-5.6 Luna | $1.00 | $1.25 | $0.10 | $6.00 |
 
-Unknown model ids fall back to the GPT-5 base rate while preserving the real id, so a new model is never silently relabeled.
+All rates are USD per million API tokens. OpenAI publishes GPT-5.6 cache writes at 1.25x input and cache reads at a 90% discount. The Codex rate card separately publishes plan-credit rates for input, cache-read, and output. It does not publish cache-write credits, so Pulse does not invent them.
 
-Codex **Fast mode** (`/fast on`, persisted as `service_tier = "fast"`) raises generation speed at a higher credit rate. Only GPT-5.5 and GPT-5.4 expose a Fast tier: GPT-5.5 bills at **2.5x** and GPT-5.4 at **2x** the standard rate (`codex::cost::speed_multiplier`). Unlike Claude's per-turn `usage.speed`, the Codex tier is a **global** setting resolved once from the Codex global-state file, so the multiplier applies to the whole session cost — applied in `build_codex_session_infos` against the resolved `fast_mode` flag.
+Cost completeness is explicit:
 
-Codex draws down ChatGPT-plan **credits**, not a USD invoice; Pulse's dollar figure is the API-rate equivalent, with the Fast multiplier surfacing the higher burn. With an API key (not a ChatGPT login) Fast mode is unavailable and standard API rates apply.
+- `exact`: every observed token component has a sourced rate;
+- `partial`: Pulse displays the known subtotal and counts the incomplete session;
+- `unavailable`: the normalized model or required rate is unknown.
 
-Source: <https://developers.openai.com/codex/speed> and <https://openai.com/api/pricing/>
+An unknown model never inherits GPT-5.1 or another model's pricing. Historical Codex rows without provenance are marked `legacy/unknown`.
+
+Codex speed is independent from model and reasoning. `Standard` or `Fast` comes from observed session/config state and can be displayed in Discord. The GPT-5.6 announcement and rate card say supported Fast modes consume credits differently, but they do not publish a GPT-5.6 multiplier. Pulse therefore records speed without multiplying GPT-5.6 USD or credit totals by a guessed constant.
+
+See [codex-model-catalog.md](codex-model-catalog.md) for model labels, context, credit rates, cache policy, and provenance.
 
 ## Cache Efficiency Metrics
 
@@ -137,10 +140,13 @@ This uses actual API call duration (not wall-clock time), so idle/reading/editin
 
 ## Data Sources
 
-1. **Statusline data** (`~/.claude/discord-presence-data.json`): Most accurate for cost/duration. Provides `total_cost_usd` directly from Claude Code's own calculation, plus `total_api_duration_ms`.
-2. **JSONL parsing** (`~/.claude/projects/<path>/*.jsonl`): Zero-config fallback. Parses session transcripts and calculates cost locally using the pricing table above.
+1. **Claude statusline data** (`~/.claude/discord-presence-data.json`): authoritative Claude headline cost/duration when present.
+2. **Claude JSONL** (`~/.claude/projects/<path>/*.jsonl`): granular tokens, cache components, model, activity, and fallback cost.
+3. **Codex JSONL** (`~/.codex/sessions/**/*.jsonl`): observed tokens, cache reads, model changes, reasoning, speed, context, and activity.
+4. **Codex App inventory** (`~/.codex/models_cache.json`): context/capability fallback when session JSONL does not carry the field.
+5. **Vendored Codex catalog** (`src/codex/model_catalog.json`): included last-resort model metadata and sourced rates.
 
-When both sources are available, statusline wins for cost/model/totals while JSONL provides granular token breakdowns and activity tracking.
+Each persisted Codex value keeps its source and completeness status. Observed session facts outrank local inventory, which outranks the included catalog.
 
 ## Source Code References
 
@@ -156,9 +162,10 @@ When both sources are available, statusline wins for cost/model/totals while JSO
 | `src/cost.rs` | `is_ga_1m_context()` | Checks if model is GA (no surcharge) |
 | `src/cost.rs` | `model_pricing_at()` | Clock-injected pricing lookup; resolves Sonnet 5's introductory vs. standard rate against a given instant |
 | `src/cost.rs` | `active_intro_pricing()` | The model's currently-active introductory-pricing window, if any — `None` once the promo closes, no caller-side expiry check |
-| `src/codex/cost.rs` | `default_model_pricing()` | OpenAI Codex per-model API pricing (incl. GPT-5.5) |
-| `src/codex/cost.rs` | `speed_multiplier()` | Codex fast multiplier (2.5x GPT-5.5 / 2x GPT-5.4) |
-| `src-tauri/src/commands.rs` | `build_codex_session_infos()` | Applies the Codex fast multiplier to session cost |
+| `src/codex/model_catalog.json` | catalog document | Codex model identity, capabilities, context, rates, and sources |
+| `src/codex/model.rs` | catalog API | Normalization, aliases, reasoning/speed support, pricing and context lookup |
+| `src/codex/cost.rs` | cost arithmetic | Exact/partial/unavailable component math and explicit overrides |
+| `src-tauri/src/commands.rs` | `build_codex_session_infos()` | Preserves observed speed and catalog provenance without applying a guessed multiplier |
 | `src-tauri/src/commands.rs` | `get_metrics()` | Aggregates cost breakdown across sessions |
 | `src-tauri/src/commands.rs` | `get_live_sessions()` | Per-session cost breakdown |
 

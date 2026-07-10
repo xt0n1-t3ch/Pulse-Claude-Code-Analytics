@@ -17,6 +17,7 @@ const helpers = vi.hoisted(() => {
   ]);
   const emptyReportsBundle = {
     provider: "claude",
+    capabilities: { cache_health: true, model_routing: true, extra_usage: true },
     days: 30,
     total_sessions: 0,
     recommendations: [],

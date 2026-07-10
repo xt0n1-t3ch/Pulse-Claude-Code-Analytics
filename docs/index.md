@@ -16,9 +16,18 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [opus-4-8.md](opus-4-8.md) | Opus 4.8 — fast mode (priority speed) + billing impact |
 | [analyzers.md](analyzers.md) | How the cchubber-style analyzers work + how to add new recommendations |
 | [cost-calculation.md](cost-calculation.md) | Pricing tiers, cache math, 1M-context GA/beta handling + fast-mode rules |
+| [codex-model-catalog.md](codex-model-catalog.md) | GPT-5.6 labels, aliases, reasoning, context, pricing, cache policy, provenance, and completeness rules |
 | [codex-rich-presence-upstream.md](codex-rich-presence-upstream.md) | Codex Rich Presence source-of-truth repo, sync scripts, CI freshness gate, compatibility overlay |
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
+
+## v1.5.2 docs refresh
+
+- Added the GPT-5.6 Sol / Terra / Luna catalog contract with official API rates, Codex credit rates, cache policy, local App context metadata, and explicit completeness/provenance states.
+- Documented the immutable Codex Discord Rich Presence v1.7.5 pin, schema-12 enablement control, and the presentation contract shared by the live broadcaster and Pulse preview.
+- Replaced the stale GPT-5.4/GPT-5.5 Fast multiplier prose with observed Standard/Fast display and fail-closed cost semantics.
+- Documented SQLite v4 provenance, session-derived daily analytics, full Discord privacy controls, and the dual Claude Code + Codex product identity.
+- Kept the release as a SemVer patch because v1.5.2 corrects and hardens existing Codex/Pulse behavior without removing a public command.
 
 ## v1.5.1 docs refresh
 
@@ -74,7 +83,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.5.1**
-- Schema: **Claude config v5 / Codex config v9** (DB remains v3)
-- Last docs refresh: 2026-07-06 (Codex WSL opt-in safety + upstream sync contract)
+- App release: **v1.5.2**
+- Schema: **Claude config v5 / Codex config v12 / Pulse analytics DB v4**
+- Last docs refresh: 2026-07-10 (GPT-5.6 factual catalog, provenance, Discord privacy, and dual-provider identity)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

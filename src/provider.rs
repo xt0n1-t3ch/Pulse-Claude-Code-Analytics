@@ -12,6 +12,13 @@ pub enum Provider {
     Codex,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCapabilities {
+    pub cache_health: bool,
+    pub model_routing: bool,
+    pub extra_usage: bool,
+}
+
 impl Provider {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -73,6 +80,21 @@ impl Provider {
         self.display_name()
     }
 
+    pub const fn capabilities(self) -> ProviderCapabilities {
+        match self {
+            Self::Claude => ProviderCapabilities {
+                cache_health: true,
+                model_routing: true,
+                extra_usage: true,
+            },
+            Self::Codex => ProviderCapabilities {
+                cache_health: true,
+                model_routing: false,
+                extra_usage: false,
+            },
+        }
+    }
+
     pub fn home_path(self) -> PathBuf {
         match self {
             Self::Claude => crate::config::claude_home(),
@@ -129,4 +151,22 @@ pub fn save_active_provider(provider: Provider) -> Result<()> {
     fs::write(&path, payload)
         .with_context(|| format!("failed to write provider state {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::Provider;
+
+    #[test]
+    fn provider_capabilities_match_observed_analytics_contracts() {
+        let claude = Provider::Claude.capabilities();
+        assert!(claude.cache_health);
+        assert!(claude.model_routing);
+        assert!(claude.extra_usage);
+
+        let codex = Provider::Codex.capabilities();
+        assert!(codex.cache_health);
+        assert!(!codex.model_routing);
+        assert!(!codex.extra_usage);
+    }
 }

@@ -1,4 +1,5 @@
 target/
+.build/
 src-tauri/target/
 src-tauri/target-tauri-build/
 src-tauri/tauri-build.log

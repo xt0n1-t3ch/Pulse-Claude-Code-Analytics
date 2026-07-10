@@ -37,18 +37,14 @@ the square `"large"` portal asset instead.
 
 ### Codex apps
 
-Codex broadcasts from two separate Discord applications by surface, each of which
-needs its own upload. Live verification on 2026-06-30 showed both Codex app
-asset lists still empty, so Codex live presence has no reliable large image
-until those uploads exist. The in-app preview is unaffected — see below.
+Codex uses two Discord applications for the selectable desktop designs. Surface detection remains separate: Pulse labels CLI, VS Code Extension, Codex App, and OpenCode from observed runtime metadata, while the desktop design chooses the application name/artwork shown for a desktop session.
 
-| Application      | Client ID            | Portal                                                                                          | Asset key     | Source file                                            |
-| ---------------- | -------------------- | ----------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------ |
-| Codex CLI / VS Code | `1470480085453770854` | <https://discord.com/developers/applications/1470480085453770854/rich-presence/assets> | `codex-logo`  | the Codex mark (e.g. `assets/branding/codex-app.png`)  |
-| Codex App / OpenCode | `1478395304624652345` | <https://discord.com/developers/applications/1478395304624652345/rich-presence/assets> | `codex-app`   | `assets/branding/codex-app.png`                        |
+| Design | Client ID | Portal | Asset key | Artwork |
+| --- | --- | --- | --- | --- |
+| ChatGPT App | `1470480085453770854` | <https://discord.com/developers/applications/1470480085453770854/rich-presence/assets> | `codex-logo` | black ChatGPT knot used by Codex CLI / VS Code Extension |
+| Codex App | `1478395304624652345` | <https://discord.com/developers/applications/1478395304624652345/rich-presence/assets> | `codex-app` | blue Codex App artwork |
 
-The Codex service tier (Fast mode) and surface (App vs CLI) are detected from the
-local Codex state — see [plan-detection.md](plan-detection.md).
+Reasoning, Standard/Fast speed, and surface are resolved independently from local Codex session/config state. The Discord application title itself must be `ChatGPT App` or `Codex App`; it is not reconstructed as a details line. See [plan-detection.md](plan-detection.md).
 
 ## In-app Live Preview art
 

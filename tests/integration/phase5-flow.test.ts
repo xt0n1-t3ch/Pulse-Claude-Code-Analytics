@@ -43,6 +43,7 @@ const usage: SessionContextUsage[] = [
 
 const minimalBundle: ReportsBundle = {
   provider: "claude",
+  capabilities: { cache_health: true, model_routing: true, extra_usage: true },
   days: 30,
   total_sessions: 1,
   recommendations: [

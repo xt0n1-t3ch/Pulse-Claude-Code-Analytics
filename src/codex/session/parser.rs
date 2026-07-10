@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
+use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -8,12 +9,12 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::codex::config::PricingConfig;
-use crate::codex::cost;
+use crate::codex::model;
 
 use super::activity::SessionAccumulator;
 use super::{
-    CachedSessionEntry, CodexSessionSnapshot, ContextWindowSnapshot, ContextWindowSource,
-    GitBranchCache, ReasoningEffort, SessionParseCache,
+    CachedSessionEntry, CodexSessionSnapshot, ContextWindowSnapshot, GitBranchCache,
+    ReasoningEffort, SessionParseCache,
 };
 
 #[cfg(test)]
@@ -184,32 +185,21 @@ pub(super) fn last_output_tokens_from_info(payload: &Value) -> Option<u64> {
     uint_at(payload, &["info", "last_token_usage", "output_tokens"])
 }
 
-pub(super) fn active_context_tokens_from_info(payload: &Value) -> Option<u64> {
-    let input = last_input_tokens_from_info(payload)?;
-    let output = last_output_tokens_from_info(payload).unwrap_or(0);
-    let cached = last_cached_input_tokens_from_info(payload).unwrap_or(0);
-    Some(input.saturating_sub(cached).saturating_add(output))
-}
-
 pub(super) fn build_context_window_snapshot(
     model_id: Option<&str>,
     event_window_tokens: Option<u64>,
-    active_context_tokens: Option<u64>,
+    last_turn_tokens: Option<u64>,
     session_total_tokens: Option<u64>,
 ) -> Option<ContextWindowSnapshot> {
-    let (window_tokens, source) = if let Some(window_tokens) = event_window_tokens {
-        (window_tokens, ContextWindowSource::Event)
-    } else {
-        let fallback_window = cost::default_model_context_window(model_id.unwrap_or(""))?;
-        (fallback_window, ContextWindowSource::Catalog)
-    };
+    let resolved = model::resolve_context_window(model_id.unwrap_or(""), event_window_tokens)?;
+    let window_tokens = resolved.effective_tokens;
     if window_tokens == 0 {
         return None;
     }
     // Context usage must track active-turn usage first; session totals are cumulative and can
     // greatly exceed context windows in long sessions.
-    let used_tokens = if let Some(active_context_tokens) = active_context_tokens {
-        active_context_tokens
+    let used_tokens = if let Some(last_turn_tokens) = last_turn_tokens {
+        last_turn_tokens
     } else {
         session_total_tokens.filter(|tokens| *tokens <= window_tokens)?
     }
@@ -219,11 +209,14 @@ pub(super) fn build_context_window_snapshot(
     let remaining_percent =
         ((remaining_tokens as f64 / window_tokens as f64) * 100.0).clamp(0.0, 100.0);
     Some(ContextWindowSnapshot {
+        raw_window_tokens: resolved.raw_tokens,
         window_tokens,
+        effective_percent: resolved.effective_percent,
         used_tokens,
         remaining_tokens,
         remaining_percent,
-        source,
+        source: resolved.source,
+        raw_source: resolved.raw_source,
     })
 }
 
@@ -246,7 +239,7 @@ pub(super) fn parse_utc_timestamp(text: String) -> Option<DateTime<Utc>> {
 }
 
 pub(super) fn fetch_git_branch(project_path: &Path) -> Option<String> {
-    let output = crate::util::silent_command("git")
+    let output = Command::new("git")
         .arg("-C")
         .arg(project_path)
         .arg("rev-parse")
@@ -261,7 +254,7 @@ pub(super) fn fetch_git_branch(project_path: &Path) -> Option<String> {
 
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if branch == "HEAD" {
-        let output = crate::util::silent_command("git")
+        let output = Command::new("git")
             .arg("-C")
             .arg(project_path)
             .arg("rev-parse")
