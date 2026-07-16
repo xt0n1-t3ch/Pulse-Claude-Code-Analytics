@@ -39,18 +39,13 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          package-manager-cache: false
 
       - name: Pin npm
         shell: pwsh
         run: |
           npm install --global "npm@$env:NPM_VERSION"
           if ((npm --version).Trim() -ne $env:NPM_VERSION) { throw "Unexpected npm version" }
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          workspaces: . -> target
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
@@ -115,8 +110,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          package-manager-cache: false
 
       - name: Pin npm
         shell: pwsh
@@ -129,11 +123,6 @@ jobs:
         run: |
           npm ci
           npm run build
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          workspaces: . -> target
-          key: ci-${{ matrix.os }}
 
       - name: Test Rust on platform
         run: cargo test --locked --workspace
