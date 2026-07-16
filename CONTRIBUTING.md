@@ -85,7 +85,11 @@ npm --prefix frontend run build
 
 ## Release process
 
-Releases are tag-driven. Maintainers bump `version` together in `Cargo.toml`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `frontend/package.json`, and the root `package.json`; add a `CHANGELOG.md` section; commit `chore(release): vX.Y.Z`; then push a `vX.Y.Z` tag. The Release workflow builds the Windows, macOS, and Linux bundles, generates SHA-256 checksums, composes release notes from the CHANGELOG section (git-cliff fallback), and publishes the GitHub release.
+Releases are tag-driven. Maintainers bump `version` together in `Cargo.toml`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `frontend/package.json`, `frontend/package-lock.json`, the root `package.json`, and `scripts/release-contract.json`; add a `CHANGELOG.md` section; commit `chore(release): vX.Y.Z`; then push an annotated `vX.Y.Z` tag only after explicit promotion approval.
+
+The canonical `codex-presence-core` dependency must be a Git dependency pinned with a full 40-character `rev`, never a release-time `path` dependency or moving tag/branch. Its version and SHA must match the canonical manifest exactly. The Release workflow rejects drift, validates config and database migrations, builds Windows/macOS/Linux bundles, validates the Windows SPDX SBOM, generates SHA-256 checksums, composes curated release notes, and publishes an immutable release.
+
+Before promotion, attach Dark/Light native screenshots, real Discord proof where affected, schema-migration results, and measured performance. Local development stops before tag, push, PR, or release creation until the maintainer approves.
 
 Pre-release tags (`vX.Y.Z-rc.N`) follow the same flow and are marked as pre-release.
 

@@ -4,8 +4,6 @@
   let { data = [] }: { data: HourlyActivity[] } = $props();
 
   const CELL = 18;
-  const GAP = 2;
-  const LABEL_W = 28;
   const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
   let maxCount = $derived(Math.max(...data.map(d => d.session_count), 1));
@@ -18,9 +16,9 @@
 
   function cellColor(val: number): string {
     if (val === 0) return "var(--bg-elevated)";
-    if (val < 0.25) return "rgba(var(--accent-rgb, 217,119,87), 0.25)";
-    if (val < 0.5) return "rgba(var(--accent-rgb, 217,119,87), 0.5)";
-    if (val < 0.75) return "rgba(var(--accent-rgb, 217,119,87), 0.75)";
+    if (val < 0.25) return "color-mix(in srgb, var(--accent) 25%, transparent)";
+    if (val < 0.5) return "color-mix(in srgb, var(--accent) 50%, transparent)";
+    if (val < 0.75) return "color-mix(in srgb, var(--accent) 75%, transparent)";
     return "var(--accent)";
   }
 
@@ -41,14 +39,14 @@
     {#each HOURS as h}
       <div
         class="heatmap-cell"
-        style="background:{cellColor(intensity(h))};width:{CELL}px;height:{CELL}px"
+        style="background:{cellColor(intensity(h))};height:{CELL}px"
         title="{hourLabel(h)}: {sessionCount(h)} sessions"
       ></div>
     {/each}
   </div>
   <div class="heatmap-labels">
     {#each [0, 6, 12, 18] as h}
-      <span class="heatmap-label" style="left:{h * (CELL + GAP)}px">{hourLabel(h)}</span>
+      <span class="heatmap-label">{hourLabel(h)}</span>
     {/each}
   </div>
   <div class="heatmap-legend">
@@ -61,11 +59,11 @@
 </div>
 
 <style>
-  .heatmap { display: flex; flex-direction: column; gap: 6px; }
-  .heatmap-grid { display: flex; gap: 2px; flex-wrap: wrap; }
+  .heatmap { display: flex; flex-direction: column; gap: 6px; max-width: 100%; min-width: 0; }
+  .heatmap-grid { display: grid; grid-template-columns: repeat(24, minmax(4px, 1fr)); gap: 2px; }
   .heatmap-cell { border-radius: 3px; transition: background 0.2s ease; cursor: default; }
-  .heatmap-labels { display: flex; position: relative; height: 14px; }
-  .heatmap-label { position: absolute; font-size: 9px; color: var(--text-muted); font-weight: 500; }
+  .heatmap-labels { display: flex; justify-content: space-between; height: 14px; }
+  .heatmap-label { font-size: 9px; color: var(--text-muted); font-weight: 500; }
   .heatmap-legend { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
   .legend-text { font-size: 9px; color: var(--text-muted); }
   .legend-cell { width: 10px; height: 10px; border-radius: 2px; }

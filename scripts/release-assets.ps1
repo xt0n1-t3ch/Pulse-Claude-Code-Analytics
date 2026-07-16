@@ -11,6 +11,7 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $requirements = @(
   [pscustomobject]@{ Prefix = "pulse-windows-x64-"; Suffix = ".exe" },
   [pscustomobject]@{ Prefix = "pulse-windows-x64-"; Suffix = ".msi" },
+  [pscustomobject]@{ Prefix = "pulse-windows-x64"; Suffix = ".spdx.json" },
   [pscustomobject]@{ Prefix = "pulse-macos-arm64-"; Suffix = ".app.tar.gz" },
   [pscustomobject]@{ Prefix = "pulse-macos-arm64-"; Suffix = ".dmg" },
   [pscustomobject]@{ Prefix = "pulse-macos-x64-"; Suffix = ".app.tar.gz" },

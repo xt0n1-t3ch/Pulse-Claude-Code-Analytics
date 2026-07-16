@@ -61,14 +61,13 @@ fn create_or_show_tray(app: &tauri::AppHandle) {
 }
 
 fn main() {
-    commands::start_background_poller();
-    commands::refresh_usage();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            commands::start_background_poller(app.handle().clone());
+            commands::refresh_usage();
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_title("Pulse");
                 let _ = win.set_icon(pulse_icon());
@@ -77,6 +76,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_health,
+            commands::get_app_snapshot,
             commands::get_metrics,
             commands::get_live_sessions,
             commands::get_discord_preview,
@@ -86,6 +86,7 @@ fn main() {
             commands::get_discord_user,
             commands::set_discord_enabled,
             commands::set_discord_display_prefs,
+            commands::set_discord_field_order,
             commands::set_codex_desktop_design,
             commands::get_plan_info,
             commands::set_plan_override,

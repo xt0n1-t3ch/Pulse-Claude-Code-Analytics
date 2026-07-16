@@ -54,6 +54,67 @@ function Get-CargoManifestVersion {
   $match.Groups["version"].Value
 }
 
+function Assert-RepositoryReleaseContract {
+  param(
+    [Parameter(Mandatory)] [string]$RootPath,
+    [Parameter(Mandatory)] [string]$Version
+  )
+
+  $contractPath = Join-Path $RootPath "scripts/release-contract.json"
+  if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf)) { return }
+  try { $contract = Get-Content -Raw -LiteralPath $contractPath | ConvertFrom-Json }
+  catch { throw "scripts/release-contract.json is not valid JSON: $($_.Exception.Message)" }
+  if ([int]$contract.schema_version -ne 1) { throw "scripts/release-contract.json schema_version must be 1" }
+  if ([string]$contract.product.version -ne $Version) {
+    throw "Release contract product version '$($contract.product.version)' does not match '$Version'"
+  }
+
+  $cargoSource = Get-Content -Raw -LiteralPath (Join-Path $RootPath "Cargo.toml")
+  $dependencyPattern = '(?m)^codex-presence-core\s*=\s*\{(?<body>[^\r\n]+)\}'
+  $dependency = [regex]::Match($cargoSource, $dependencyPattern)
+  if (-not $dependency.Success) { throw "Cargo.toml does not declare codex-presence-core" }
+  $body = $dependency.Groups["body"].Value
+  if ($body -match '\bpath\s*=' -or $body -notmatch '\bgit\s*=') {
+    throw "Pulse releases require codex-presence-core as an immutable Git dependency, not a path dependency"
+  }
+  $revision = [regex]::Match($body, '\brev\s*=\s*"(?<sha>[0-9a-fA-F]{40})"')
+  if (-not $revision.Success) { throw "codex-presence-core must use a full 40-character Git rev" }
+  if ($body -notmatch ('\bversion\s*=\s*"' + [regex]::Escape([string]$contract.core.version) + '"')) {
+    throw "codex-presence-core dependency version does not match $($contract.core.version)"
+  }
+
+  $canonicalManifest = Get-Content -Raw -LiteralPath (Join-Path $RootPath ([string]$contract.core.manifest)) | ConvertFrom-Json
+  $manifestCommit = if ($canonicalManifest.PSObject.Properties.Name -contains "canonical_commit") {
+    [string]$canonicalManifest.canonical_commit
+  } elseif ($canonicalManifest.PSObject.Properties.Name -contains "core" -and $null -ne $canonicalManifest.core.commit) {
+    [string]$canonicalManifest.core.commit
+  } else {
+    [string]$canonicalManifest.commit
+  }
+  $manifestVersion = if ($canonicalManifest.PSObject.Properties.Name -contains "integration") {
+    [string]$canonicalManifest.integration.version
+  } elseif ($canonicalManifest.PSObject.Properties.Name -contains "core" -and $null -ne $canonicalManifest.core.version) {
+    [string]$canonicalManifest.core.version
+  } elseif ($canonicalManifest.PSObject.Properties.Name -contains "core_version") {
+    [string]$canonicalManifest.core_version
+  } else { $null }
+  if ($manifestCommit.ToLowerInvariant() -ne $revision.Groups["sha"].Value.ToLowerInvariant()) {
+    throw "Canonical core manifest SHA does not match the Cargo Git rev"
+  }
+  if ([string]::IsNullOrWhiteSpace($manifestVersion) -or $manifestVersion -ne [string]$contract.core.version) {
+    throw "Canonical core manifest version does not match $($contract.core.version)"
+  }
+
+  foreach ($schema in @($contract.configuration, $contract.database)) {
+    $source = Get-Content -Raw -LiteralPath (Join-Path $RootPath ([string]$schema.source))
+    $pattern = '(?:CONFIG_)?SCHEMA_VERSION\s*:\s*(?:u32|i64)\s*=\s*' + [regex]::Escape([string]$schema.schema_version) + '\s*;'
+    if ($source -notmatch $pattern) { throw "$($schema.source) does not declare schema $($schema.schema_version)" }
+  }
+  if ([string]$contract.release.windows_sbom -notmatch '\.spdx\.json$' -or [string]$contract.release.checksum_manifest -ne 'SHA256SUMS.txt') {
+    throw "Release integrity contract must require an SPDX JSON SBOM and SHA256SUMS.txt"
+  }
+}
+
 if ($Tag -notmatch $tagPattern) {
   throw "Tag must be a semantic version tag such as v1.5.2 or v1.5.3-rc.1"
 }
@@ -86,6 +147,7 @@ foreach ($surface in $versionSurfaces.GetEnumerator()) {
     throw "Release version mismatch: tag=$version $($surface.Key)=$($surface.Value)"
   }
 }
+Assert-RepositoryReleaseContract -RootPath $rootPath -Version $version
 
 foreach ($documentationSurface in @("README.md", "docs/index.md")) {
   $content = Get-Content -Raw -LiteralPath (Join-Path $rootPath $documentationSurface)

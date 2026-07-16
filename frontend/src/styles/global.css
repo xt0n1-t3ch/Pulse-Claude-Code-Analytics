@@ -1,7 +1,5 @@
 /* Pulse design system — ultra-black monochrome (space.com · xai.com · grok.com · Duolingo)
    Orange is GONE. Semantic colors (success/warning/danger) for numeric values only. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
 :root {
   color-scheme: dark;
   /* ── DARK (default) — ultra-black #000 */
@@ -14,9 +12,9 @@
   --bg-overlay: rgba(0, 0, 0, 0.85);
 
   --text-primary: #f5f5f5;
-  --text-secondary: #a3a3a3;
-  --text-muted: #6b6b6b;
-  --text-placeholder: #3d3d3d;
+  --text-secondary: #b8b8b8;
+  --text-muted: #8a8a8a;
+  --text-placeholder: #666666;
 
   --accent: #ffffff;
   --accent-hover: #e6e6e6;
@@ -34,6 +32,8 @@
   --danger: #ef4444;
   --danger-glow: rgba(239, 68, 68, 0.22);
   --danger-dim: rgba(239, 68, 68, 0.10);
+  --on-danger: #ffffff;
+  --modal-backdrop: rgba(0, 0, 0, 0.62);
   --info: #7cb9e8;
   --info-glow: rgba(124, 185, 232, 0.22);
   --info-dim: rgba(124, 185, 232, 0.10);
@@ -44,6 +44,20 @@
   --chart-4: #22c55e;
   --chart-5: #7cb9e8;
   --chart-6: #fbbf24;
+  --token-output: var(--info);
+  --token-cache-write: #77dd77;
+  --token-cache-read: #c3b1e1;
+  --token-cache-read-dim: rgba(195, 177, 225, 0.12);
+
+  /* Discord preview is a themed simulation, not a permanently dark island. */
+  --preview-bg: #1e1f22;
+  --preview-surface: #2b2d31;
+  --preview-surface-raised: #313338;
+  --preview-text: #f2f3f5;
+  --preview-muted: #b5bac1;
+  --preview-faint: #80848e;
+  --preview-border: rgba(255, 255, 255, 0.065);
+  --preview-shadow: 0 20px 56px rgba(0, 0, 0, 0.6);
 
   --border: #1f1f1f;
   --border-strong: #2a2a2a;
@@ -82,8 +96,8 @@
   --letter-wide: 0.02em;
   --letter-wider: 0.06em;
 
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Cascadia Code', 'Cascadia Mono', Consolas, monospace;
 
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -94,11 +108,14 @@
   --content-max: 1280px;
 
   font-family: var(--font-sans);
+  font-kerning: normal;
+  font-optical-sizing: auto;
+  font-synthesis: style;
   font-size: var(--fs-base);
   line-height: var(--lh-normal);
   color: var(--text-primary);
   background: var(--bg-primary);
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  font-feature-settings: 'calt' 1, 'liga' 1, 'kern' 1, 'cv02' 1, 'cv03' 1, 'cv04' 1, 'cv11' 1;
 }
 
 [data-theme="light"] {
@@ -112,9 +129,9 @@
   --bg-overlay: rgba(255, 255, 255, 0.85);
 
   --text-primary: #0a0a0a;
-  --text-secondary: #525252;
-  --text-muted: #8a8a8a;
-  --text-placeholder: #c5c5c5;
+  --text-secondary: #444444;
+  --text-muted: #666666;
+  --text-placeholder: #8a8a8a;
 
   --accent: #0a0a0a;
   --accent-hover: #1a1a1a;
@@ -132,6 +149,8 @@
   --danger: #dc2626;
   --danger-dim: rgba(220, 38, 38, 0.08);
   --danger-glow: rgba(220, 38, 38, 0.18);
+  --on-danger: #ffffff;
+  --modal-backdrop: rgba(0, 0, 0, 0.48);
   --info: #2563eb;
   --info-dim: rgba(37, 99, 235, 0.08);
   --info-glow: rgba(37, 99, 235, 0.18);
@@ -142,6 +161,19 @@
   --chart-4: #16a34a;
   --chart-5: #2563eb;
   --chart-6: #d97706;
+  --token-output: var(--info);
+  --token-cache-write: #15803d;
+  --token-cache-read: #7c3aed;
+  --token-cache-read-dim: rgba(124, 58, 237, 0.10);
+
+  --preview-bg: #f4f4f5;
+  --preview-surface: #ffffff;
+  --preview-surface-raised: #ededf0;
+  --preview-text: #18181b;
+  --preview-muted: #52525b;
+  --preview-faint: #71717a;
+  --preview-border: rgba(0, 0, 0, 0.10);
+  --preview-shadow: 0 20px 56px rgba(0, 0, 0, 0.14);
 
   --border: #e5e5e5;
   --border-strong: #d4d4d4;
@@ -169,6 +201,9 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
+
+html, body, #app { min-width: 0; min-height: 100%; }
+#app { overflow: hidden; }
 
 * { scrollbar-width: thin; scrollbar-color: transparent transparent; }
 *:hover { scrollbar-color: var(--border-strong) transparent; }
@@ -487,3 +522,20 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 .bar-fill.is-warning { background: var(--warning); }
 .bar-fill.is-danger  { background: var(--danger); }
 .bar-fill.is-info    { background: var(--info); }
+
+@media (max-width: 800px) {
+  :root {
+    --fs-display: 36px;
+    --fs-3xl: 28px;
+    --fs-2xl: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

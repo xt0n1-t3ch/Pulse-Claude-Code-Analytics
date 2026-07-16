@@ -26,6 +26,34 @@ body:
         - Linux (other / AppImage)
     validations:
       required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options:
+        - Codex
+        - Claude
+        - Both
+        - Not provider-specific
+    validations:
+      required: true
+  - type: dropdown
+    id: theme
+    attributes:
+      label: Theme
+      options:
+        - Dark
+        - Light
+        - Both
+        - Not visual
+    validations:
+      required: true
+  - type: input
+    id: viewport
+    attributes:
+      label: Window size
+      description: For layout issues, include width × height in logical pixels.
+      placeholder: "720 × 560"
   - type: textarea
     id: what-happened
     attributes:
@@ -53,3 +81,12 @@ body:
       label: Relevant logs
       description: "Debug log lives at `~/.claude/cc-discord-presence-debug.log`. Redact anything sensitive."
       render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Preflight
+      options:
+        - label: I reproduced this on the latest published release.
+          required: true
+        - label: I removed project names, prompts, paths, and credentials from evidence.
+          required: true

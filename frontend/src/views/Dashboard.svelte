@@ -7,7 +7,7 @@
   import Heatmap from "../components/Heatmap.svelte";
   import { health, metrics, sessions, rateLimits, planInfo } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
-  import { fmtTokens, fmtCost, fmtDuration, fmtPct, fmtTps, formatResetRelative, formatResetWeekly } from "../lib/utils";
+  import { fmtTokens, fmtCost, fmtDuration, fmtPct, fmtTps, formatResetDateTime } from "../lib/utils";
   import {
     getAnalyticsSummary, getSessionHistory, getCostForecast,
     getHourlyActivity, getDailyStats, getProjectStats, refreshUsage,
@@ -22,6 +22,40 @@
   let dailyStats = $state<DailyStat[]>([]);
   let projectStats = $state<ProjectStat[]>([]);
   let refreshing = $state(false);
+
+  function windowLabel(minutes: number): string {
+    if (minutes === 300) return "5h";
+    if (minutes === 1440) return "24h";
+    if (minutes === 10080) return "7d";
+    if (minutes > 0 && minutes % 1440 === 0) return `${minutes / 1440}d`;
+    if (minutes > 0 && minutes % 60 === 0) return `${minutes / 60}h`;
+    return `${minutes}m`;
+  }
+
+  function limitLabel(minutes: number): string {
+    if (minutes === 300) return "5h Limit";
+    if (minutes === 10080) return "Weekly Limit";
+    return `${windowLabel(minutes)} Limit`;
+  }
+
+  function limitContext(name: string | null, id: string | null, kind: string): string {
+    if (kind === "global") return "All models";
+    if (name) return name;
+    if (id) return id.replace(/^codex_/, "").replaceAll("_", "-");
+    if (kind === "model") return "Model-specific";
+    return "Account usage";
+  }
+
+  function sourceLabel(source: string): string {
+    return source.startsWith("Codex JSONL") ? "Codex local telemetry" : source;
+  }
+
+  function creditsDisplay(balance: string | null, unlimited: boolean): string {
+    if (unlimited) return "Unlimited";
+    if (balance == null) return "Unavailable";
+    const numeric = Number(balance);
+    return Number.isFinite(numeric) ? numeric.toLocaleString() : balance;
+  }
 
   async function handleRefresh(): Promise<void> {
     if (refreshing) return;
@@ -53,7 +87,7 @@
     ]);
   }
 
-  onMount(() => { refresh(); const iv = setInterval(refresh, 15000); return () => clearInterval(iv); });
+  onMount(() => { void refresh(); });
 
   let hasSessions = $derived(($metrics?.session_count ?? 0) > 0);
   let totalCost = $derived(hasSessions ? $metrics!.total_cost : (summary?.total_cost ?? 0));
@@ -122,9 +156,9 @@
     if (showCacheR + showInput <= 0) return { letter: "—", color: "var(--text-muted)" };
     const ratio = showCacheHit;
     if (ratio >= 80) return { letter: "A", color: "var(--success)" };
-    if (ratio >= 65) return { letter: "B", color: "#77dd77" };
+    if (ratio >= 65) return { letter: "B", color: "var(--token-cache-write)" };
     if (ratio >= 50) return { letter: "C", color: "var(--warning)" };
-    if (ratio >= 30) return { letter: "D", color: "#e8a838" };
+    if (ratio >= 30) return { letter: "D", color: "var(--warning)" };
     return { letter: "F", color: "var(--danger)" };
   });
 
@@ -143,10 +177,10 @@
       {#snippet extra()}<Sparkline data={sparkCost} color="var(--accent)" />{/snippet}
     </StatCard>
     <StatCard label="Total Tokens" value={fmtTokens(totalTokens)}>
-      {#snippet extra()}<Sparkline data={sparkTokens} color="#7cb9e8" />{/snippet}
+      {#snippet extra()}<Sparkline data={sparkTokens} color="var(--info)" />{/snippet}
     </StatCard>
     <StatCard label="Sessions" value={String(sessionCount)}>
-      {#snippet extra()}<Sparkline data={sparkSessions} color="#77dd77" />{/snippet}
+      {#snippet extra()}<Sparkline data={sparkSessions} color="var(--success)" />{/snippet}
     </StatCard>
     <StatCard label="Avg Duration" value={summary ? fmtDuration(summary.avg_duration_secs) : "—"}>
       {#snippet extra()}
@@ -212,33 +246,41 @@
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
         </button>
       </div>
-      <div class="usage-section">
-        <div class="usage-group">
-          <div class="usage-group-label">{$providerProfile.id === "claude" ? "5-hour window" : "Live quotas"}</div>
-          {#if $rateLimits && $rateLimits.five_hour_resets !== "N/A"}
-            <ProgressBar label={$rateLimits.five_hour_label} pct={$rateLimits.five_hour_pct} meta={formatResetRelative($rateLimits.five_hour_resets)} />
-          {:else if $rateLimits}
-            <div class="empty-hint">{$rateLimits.source}</div>
-          {:else}
-            <div class="empty-hint">Waiting for usage data...</div>
+      {#if $rateLimits?.usage && ($rateLimits.usage.scopes.length > 0 || $rateLimits.usage.credits)}
+        <div class="quota-list">
+          {#each $rateLimits.usage.scopes as scope (`${scope.kind}:${scope.id ?? scope.name ?? "default"}`)}
+            {#each scope.windows as window (`${window.window_minutes}:${window.resets_at ?? "none"}`)}
+              <section class="quota-row">
+                <ProgressBar
+                  label={limitLabel(window.window_minutes)}
+                  sublabel={limitContext(scope.name, scope.id, scope.kind)}
+                  pct={window.used_percent}
+                  meta={window.resets_at ? formatResetDateTime(window.resets_at) : `${window.remaining_percent.toFixed(0)}% remaining`}
+                />
+              </section>
+            {/each}
+          {/each}
+          {#if $rateLimits.usage.credits}
+            <section class="credits-row">
+              <div class="credits-copy">
+                <span class="credits-title">Credits Available</span>
+                <span class="credits-meta">{#if $rateLimits.usage.credits.unlimited}No metered balance{:else if $rateLimits.usage.credits.has_credits}Available beyond plan limits{:else}Explicit account balance{/if}</span>
+              </div>
+              <strong class="credits-value">{creditsDisplay($rateLimits.usage.credits.balance, $rateLimits.usage.credits.unlimited)}</strong>
+            </section>
           {/if}
         </div>
-        <div class="usage-divider"></div>
-        <div class="usage-group">
-          <div class="usage-group-label">{$providerProfile.id === "claude" ? "Weekly limits" : "Longer windows"}</div>
-          {#if $rateLimits && $rateLimits.seven_day_resets !== "N/A"}
-            <ProgressBar label={$rateLimits.seven_day_label} pct={$rateLimits.seven_day_pct} meta={formatResetWeekly($rateLimits.seven_day_resets)} />
-            {#if $providerProfile.id === "claude" && $rateLimits.sonnet_pct != null}
-              <ProgressBar label="Sonnet Only" pct={$rateLimits.sonnet_pct} meta={$rateLimits.sonnet_resets ? formatResetWeekly($rateLimits.sonnet_resets) : ""} />
-            {/if}
-          {:else if $rateLimits}
-            <div class="empty-hint">{$rateLimits.source}</div>
+        <div class="usage-footer">
+          <span class="source-dot" aria-hidden="true"></span>
+          <span>{sourceLabel($rateLimits.usage.source)}</span>
+          {#if $rateLimits.usage.observed_at}
+            <span class="source-separator" aria-hidden="true">·</span>
+            <span>Updated {new Date($rateLimits.usage.observed_at).toLocaleString()}</span>
           {/if}
         </div>
-        {#if $rateLimits?.source}
-          <div class="usage-footer">Source: {$rateLimits.source}</div>
-        {/if}
-      </div>
+      {:else}
+        <div class="empty-hint">{$rateLimits?.source ?? "Waiting for usage data..."}</div>
+      {/if}
       {#if $rateLimits && $providerProfile.supportsExtraUsage}
         <div class="extra-usage">
           <div class="extra-header">
@@ -277,9 +319,9 @@
       {#if showCostTotal > 0}
         <div class="breakdown-table">
           <div class="bd-row"><span class="bd-dot" style="background:var(--info)"></span><span class="bd-label">Input</span><span class="bd-val">{fmtCost(showInputCost)}</span></div>
-          <div class="bd-row"><span class="bd-dot" style="background:#7cb9e8"></span><span class="bd-label">Output</span><span class="bd-val">{fmtCost(showOutputCost)}</span></div>
-          <div class="bd-row"><span class="bd-dot" style="background:#77dd77"></span><span class="bd-label">Cache Write</span><span class="bd-val">{fmtCost(showCacheWCost)}</span></div>
-          <div class="bd-row"><span class="bd-dot" style="background:#c3b1e1"></span><span class="bd-label">Cache Read</span><span class="bd-val">{fmtCost(showCacheRCost)}</span></div>
+          <div class="bd-row"><span class="bd-dot" style="background:var(--token-output)"></span><span class="bd-label">Output</span><span class="bd-val">{fmtCost(showOutputCost)}</span></div>
+          <div class="bd-row"><span class="bd-dot" style="background:var(--token-cache-write)"></span><span class="bd-label">Cache Write</span><span class="bd-val">{fmtCost(showCacheWCost)}</span></div>
+          <div class="bd-row"><span class="bd-dot" style="background:var(--token-cache-read)"></span><span class="bd-label">Cache Read</span><span class="bd-val">{fmtCost(showCacheRCost)}</span></div>
           <div class="bd-divider"></div>
           <div class="bd-row total"><span class="bd-dot" style="background:transparent"></span><span class="bd-label">Estimated Total</span><span class="bd-val">{fmtCost(showCostTotal)}</span></div>
         </div>
@@ -309,18 +351,18 @@
             <span class="cons-val">{fmtTokens(showInput)}</span>
           </div>
           <div class="cons-row">
-            <span class="cons-label"><span class="cons-dot" style="background:#7cb9e8"></span>Output</span>
-            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showOutput / showTokenTotal) * 100}%; background:#7cb9e8"></div></div>
+            <span class="cons-label"><span class="cons-dot" style="background:var(--token-output)"></span>Output</span>
+            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showOutput / showTokenTotal) * 100}%; background:var(--token-output)"></div></div>
             <span class="cons-val">{fmtTokens(showOutput)}</span>
           </div>
           <div class="cons-row">
-            <span class="cons-label"><span class="cons-dot" style="background:#77dd77"></span>Cache Write</span>
-            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showCacheW / showTokenTotal) * 100}%; background:#77dd77"></div></div>
+            <span class="cons-label"><span class="cons-dot" style="background:var(--token-cache-write)"></span>Cache Write</span>
+            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showCacheW / showTokenTotal) * 100}%; background:var(--token-cache-write)"></div></div>
             <span class="cons-val">{fmtTokens(showCacheW)}</span>
           </div>
           <div class="cons-row">
-            <span class="cons-label"><span class="cons-dot" style="background:#c3b1e1"></span>Cache Read</span>
-            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showCacheR / showTokenTotal) * 100}%; background:#c3b1e1"></div></div>
+            <span class="cons-label"><span class="cons-dot" style="background:var(--token-cache-read)"></span>Cache Read</span>
+            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showCacheR / showTokenTotal) * 100}%; background:var(--token-cache-read)"></div></div>
             <span class="cons-val">{fmtTokens(showCacheR)}</span>
           </div>
         </div>
@@ -467,11 +509,50 @@
     animation: spin 0.9s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .usage-section { display: flex; flex-direction: column; gap: 8px; }
-  .usage-group { display: flex; flex-direction: column; gap: 4px; }
-  .usage-group-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 2px; }
-  .usage-divider { height: 1px; background: var(--border); margin: 6px 0; }
-  .usage-footer { margin-top: 8px; font-size: 11px; color: var(--text-muted); }
+  .usage-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: center;
+    letter-spacing: 0.01em;
+  }
+  .source-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-dim); }
+  .source-separator { color: var(--border-hover); }
+  .quota-list {
+    display: flex;
+    flex-direction: column;
+  }
+  .quota-row {
+    min-width: 0;
+    padding: 8px 2px 13px;
+    border-bottom: 1px solid var(--border);
+  }
+  .quota-row:first-child { padding-top: 0; }
+  .credits-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 14px 2px 5px;
+  }
+  .credits-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .credits-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .credits-value {
+    flex-shrink: 0;
+    font-size: clamp(22px, 3vw, 28px);
+    line-height: 1;
+    letter-spacing: var(--letter-tighter);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+  .credits-meta { color: var(--text-muted); font-size: var(--fs-sm); }
 
   .extra-usage {
     margin-top: 16px;
@@ -583,4 +664,21 @@
   .rt-col.project { text-align: left; font-weight: 500; color: var(--text-primary); }
   .rt-col.model { text-align: left; }
   .rt-col.cost { font-weight: 700; color: var(--accent); }
+
+  .card { min-width: 0; }
+  .project-table, .recent-table { overflow-x: auto; overscroll-behavior-inline: contain; }
+  .project-table > *, .recent-table > * { min-width: 610px; }
+
+  @media (max-width: 1050px) {
+    .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .charts-row { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 620px) {
+    .stats-row { grid-template-columns: 1fr; }
+    .card { padding: 14px; }
+    .insight-row { grid-template-columns: 1fr; }
+    .extra-grid { grid-template-columns: 1fr; }
+    .bd-metrics { flex-wrap: wrap; gap: 8px 14px; }
+  }
 </style>

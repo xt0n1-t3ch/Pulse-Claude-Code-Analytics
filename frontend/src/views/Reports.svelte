@@ -261,9 +261,9 @@
           <div class="routing-bars">
             {#each [
               { label: "Opus", stats: routing.opus, color: "var(--accent)" },
-              { label: "Sonnet", stats: routing.sonnet, color: "#7cb9e8" },
-              { label: "Haiku", stats: routing.haiku, color: "#77dd77" },
-              { label: "Other", stats: routing.other, color: "#c3b1e1" },
+      { label: "Sonnet", stats: routing.sonnet, color: "var(--info)" },
+      { label: "Haiku", stats: routing.haiku, color: "var(--success)" },
+      { label: "Other", stats: routing.other, color: "var(--token-cache-read)" },
             ] as row}
               {#if row.stats.sessions > 0}
                 <div class="bar-row">
@@ -596,7 +596,7 @@
   .count-pill {
     font-size: 10px;
     font-weight: 700;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--bg-elevated);
     padding: 1px 6px;
     border-radius: 99px;
   }
@@ -617,7 +617,7 @@
 
   .btn-primary {
     background: var(--accent);
-    color: #1a1a1a;
+    color: var(--accent-fg);
     border-color: var(--accent);
   }
   .btn-primary:hover {
@@ -1013,7 +1013,7 @@
 
   .btn-fix:hover {
     background: var(--accent);
-    color: #1a1a1a;
+    color: var(--accent-fg);
   }
 
   .report-body {
@@ -1095,11 +1095,11 @@
 
   .health-hero { display: flex; align-items: baseline; gap: 14px; margin: 6px 0 10px; }
   .health-grade { font-size: 34px; font-weight: 800; letter-spacing: 0.02em; line-height: 1; padding: 6px 14px; border-radius: var(--radius-md); background: var(--bg-elevated); color: var(--text-primary); }
-  .health-grade.grade-a { color: #77dd77; background: rgba(119,221,119,0.10); }
-  .health-grade.grade-b { color: #c6e377; background: rgba(198,227,119,0.10); }
-  .health-grade.grade-c { color: #e7c76a; background: rgba(231,199,106,0.12); }
-  .health-grade.grade-d { color: #e89a64; background: rgba(232,154,100,0.12); }
-  .health-grade.grade-f { color: #e06c6c; background: rgba(224,108,108,0.12); }
+  .health-grade.grade-a { color: var(--success); background: var(--success-dim); }
+  .health-grade.grade-b { color: var(--token-cache-write); background: var(--success-dim); }
+  .health-grade.grade-c { color: var(--warning); background: var(--warning-dim); }
+  .health-grade.grade-d { color: var(--warning); background: var(--warning-dim); }
+  .health-grade.grade-f { color: var(--danger); background: var(--danger-dim); }
   .health-score { font-size: 28px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
   .health-score-sub { font-size: 14px; font-weight: 500; color: var(--text-muted); margin-left: 2px; }
 

@@ -9,6 +9,7 @@ import {
   classifyActivity,
   fmtClock,
   fmtPromoEndDate,
+  formatResetDateTime,
 } from "@/lib/utils";
 
 describe("fmtTokens", () => {
@@ -83,5 +84,16 @@ describe("fmtPromoEndDate", () => {
 
   it("falls back to the raw string on an unparseable date", () => {
     expect(fmtPromoEndDate("not-a-date")).toBe("not-a-date");
+  });
+});
+
+describe("formatResetDateTime", () => {
+  it("renders the reset instant as an absolute local date and time", () => {
+    const localReset = new Date(2026, 6, 22, 23, 16);
+    expect(formatResetDateTime(localReset.toISOString())).toBe("Resets Jul 22, 2026 11:16 PM");
+  });
+
+  it("falls back to the raw value when the reset timestamp is invalid", () => {
+    expect(formatResetDateTime("not-a-date")).toBe("not-a-date");
   });
 });

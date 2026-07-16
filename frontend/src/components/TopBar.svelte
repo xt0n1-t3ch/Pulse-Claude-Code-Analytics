@@ -161,7 +161,19 @@
   }
 
   .win-close:hover {
-    color: #fff;
+    color: var(--on-danger);
     background: var(--danger);
+  }
+
+  @media (max-width: 800px) {
+    .topbar { padding-left: 10px; gap: 6px; }
+    .topbar-right { gap: 4px; min-width: 0; }
+    .action-cluster { gap: 3px; padding-right: 3px; }
+    .badge.version { display: none; }
+    .badge.plan { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
+
+  @media (max-width: 680px) {
+    .badge.plan { display: none; }
   }
 </style>

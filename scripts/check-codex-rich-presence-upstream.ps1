@@ -103,6 +103,65 @@ try {
 }
 
 $schemaVersionProperty = $manifest.PSObject.Properties["schema_version"]
+$officialRepository = Get-RequiredString $contract "official_repository" '^https://github\.com/'
+$repository = Get-RequiredString $manifest "repository" '^https://github\.com/'
+if ($repository -ne $officialRepository) {
+  throw "src/codex/UPSTREAM.json repository must be $officialRepository"
+}
+
+if ($null -ne $schemaVersionProperty -and $schemaVersionProperty.Value -eq 3) {
+  $release = Get-RequiredString $manifest "canonical_release" '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$'
+  $integrationProperty = $manifest.PSObject.Properties["integration"]
+  $compatibilityProperty = $manifest.PSObject.Properties["compatibility"]
+  if ($null -eq $integrationProperty -or $null -eq $compatibilityProperty) {
+    throw "src/codex/UPSTREAM.json schema 3 requires integration and compatibility objects"
+  }
+  $mode = Get-RequiredString $manifest.integration "mode" '^(local-path|git-rev)$'
+  $package = Get-RequiredString $manifest.integration "package" '^codex-presence-core$'
+  $version = Get-RequiredString $manifest.integration "version" '^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$'
+  $promotionMode = Get-RequiredString $manifest.integration "promotion_mode" '^git-rev$'
+  $null = $package
+  $null = $promotionMode
+  if ([string]$manifest.compatibility.pulse -notmatch '^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$') {
+    throw "src/codex/UPSTREAM.json has an invalid compatibility pulse version"
+  }
+  if ([int]$manifest.compatibility.presence_config_schema -lt 1 -or [int]$manifest.compatibility.usage_snapshot_revision -lt 1 -or [int]$manifest.compatibility.app_snapshot_revision -lt 1) {
+    throw "src/codex/UPSTREAM.json compatibility revisions must be positive"
+  }
+  $contracts = Get-ExactStringSet @($manifest.shared_contracts) "Shared core contracts"
+  foreach ($required in @("presence-composer", "presence-field-layout", "semantic-quota-windows", "usage-snapshot", "credit-balance")) {
+    if ($contracts -notcontains $required) { throw "Shared core contracts are missing $required" }
+  }
+  $adapters = Get-ExactStringSet @($manifest.local_adapters) "Local adapters"
+  foreach ($adapter in $adapters) {
+    $adapterPath = Get-ContainedPath $rootPath $adapter "src/codex/"
+    if (-not (Test-Path -LiteralPath $adapterPath -PathType Leaf)) { throw "Pulse adapter is missing: $adapter" }
+  }
+
+  $cargo = Get-Content -Raw -LiteralPath (Join-Path $rootPath "Cargo.toml")
+  $dependency = [regex]::Match($cargo, '(?m)^codex-presence-core\s*=\s*\{(?<body>[^\r\n]+)\}')
+  if (-not $dependency.Success) { throw "Cargo.toml does not declare codex-presence-core" }
+  $body = $dependency.Groups["body"].Value
+  if ($body -notmatch ('\bversion\s*=\s*"' + [regex]::Escape($version) + '"')) {
+    throw "Cargo core version does not match src/codex/UPSTREAM.json"
+  }
+  if ($mode -eq "local-path") {
+    if ($manifest.PSObject.Properties["canonical_commit"].Value -ne $null) { throw "Local-path integration must not claim a canonical commit" }
+    $path = Get-RequiredString $manifest.integration "path" '^[^\r\n"]+$'
+    if ($body -notmatch ('\bpath\s*=\s*"' + [regex]::Escape($path) + '"')) { throw "Cargo core path does not match src/codex/UPSTREAM.json" }
+    if ([string]$manifest.integration.promotion_status -ne "pending-local-validation") { throw "Local-path integration must remain pending-local-validation" }
+  } else {
+    $commit = Get-RequiredString $manifest "canonical_commit" '^[0-9a-fA-F]{40}$'
+    $rev = Get-RequiredString $manifest.integration "rev" '^[0-9a-fA-F]{40}$'
+    if ($commit.ToLowerInvariant() -ne $rev.ToLowerInvariant()) { throw "Canonical commit does not match integration rev" }
+    if ($body -notmatch ('\brev\s*=\s*"' + [regex]::Escape($rev) + '"') -or $body -notmatch '\bgit\s*=') {
+      throw "Cargo core Git rev does not match src/codex/UPSTREAM.json"
+    }
+  }
+  Write-Output "Codex presence core contract verified: mode=$mode release=$release version=$version adapters=$($adapters.Count)"
+  return
+}
+
 $syncVersionProperty = $manifest.PSObject.Properties["sync_version"]
 if (
   $null -eq $schemaVersionProperty -or
@@ -113,11 +172,6 @@ if (
   throw "src/codex/UPSTREAM.json must use schema_version 2 and sync_version $($contract.sync_version)"
 }
 
-$officialRepository = Get-RequiredString $contract "official_repository" '^https://github\.com/'
-$repository = Get-RequiredString $manifest "repository" '^https://github\.com/'
-if ($repository -ne $officialRepository) {
-  throw "src/codex/UPSTREAM.json repository must be $officialRepository"
-}
 $null = Get-RequiredString $manifest "ref" '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$'
 $commit = Get-RequiredString $manifest "commit" '^[0-9a-fA-F]{40}$'
 $inventoryName = Get-RequiredString $manifest "inventory" '^[a-z0-9][a-z0-9-]*$'

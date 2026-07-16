@@ -2,6 +2,44 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.6.0]
+
+Unreleased local candidate. No tag, pull request, GitHub release, or published artifact exists yet.
+
+### Added
+
+- Versioned `get_app_snapshot()` hydration and `pulse://snapshot` change events shared by live UI, Discord, and persistence consumers.
+- Semantic Codex quota scopes/windows and real account Credits, including global and model-specific surfaces without invented provider parity.
+- A ten-field Rich Presence compositor with Credits, presets, per-field visibility, persistent order, compact/descriptive output, keyboard reordering, and backend-owned preview text.
+- Release gates for product/core/config/database version synchronization, an immutable canonical core Git SHA, Windows SPDX SBOM validation, and schema migrations.
+
+### Changed
+
+- Pulse consumes the canonical UI-free `codex-presence-core` instead of maintaining a second telemetry/composition owner.
+- Backend polling is consolidated around one content-fingerprinted snapshot; unchanged sessions no longer force recurring SQLite upserts.
+- Dashboard quota cards adapt to the scopes actually present. Codex shows Credits while Claude retains Extra Usage when available.
+- Dark and Light themes now drive native Tauri chrome, previews, charts, heatmaps, overlays, focus states, and scrollbars through semantic tokens.
+- Discord settings and the remaining views use responsive layouts down to 720×560, system fonts, reduced-motion behavior, and keyboard-accessible controls.
+- Repository release governance now requires Conventional Commits, provider/runtime proof, Dark/Light viewport evidence, performance measurements, and an exact canonical core pin.
+
+### Fixed
+
+- A weekly-only 10,080-minute Codex quota no longer appears as a false five-hour limit.
+- `⚡ Fast` is derived from active-session evidence before fallbacks and is presented consistently in Pulse, preview, and Discord.
+- Light mode no longer leaves the Discord preview and secondary UI surfaces on hardcoded dark colors.
+- Parser tests no longer read the developer's real model cache.
+
+### Performance
+
+- Idle snapshot delivery is content-addressed, frontend recurring invokes are removed, and session persistence skips unchanged fingerprints.
+- Historical provider/time queries gain a schema-5 index and controlled WAL maintenance.
+
+### Validation pending before promotion
+
+- Rust, Svelte, Vitest, bundle, migration, accessibility, and six-viewport visual gates.
+- Real Windows Fast, weekly-only quota, Credits, presence persistence/publication, native Light mode, and 720×560 resize proof.
+- Before/after startup, idle CPU/memory, Tauri invokes, JSONL reads, SQLite writes/query plans, and gzip measurements.
+
 ## [1.5.3] — 2026-07-10
 
 v1.5.3 is a Windows runtime-correctness patch for Pulse's existing Codex polling lane. No public Tauri command or persisted schema changed.
@@ -271,6 +309,7 @@ v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Win
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
 [1.5.3]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.3
+[1.6.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/compare/v1.5.3...HEAD
 [1.5.2]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.2
 [1.5.1]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.1
 [1.5.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.0

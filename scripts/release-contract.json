@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "product": {
+    "name": "pulse",
+    "version": "1.6.0"
+  },
+  "core": {
+    "package": "codex-presence-core",
+    "version": "1.0.0",
+    "repository": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
+    "pin": "git-rev",
+    "manifest": "src/codex/UPSTREAM.json"
+  },
+  "configuration": {
+    "schema_version": 13,
+    "source": "src/codex/config.rs"
+  },
+  "database": {
+    "schema_version": 5,
+    "source": "src-tauri/src/db.rs"
+  },
+  "release": {
+    "tag_prefix": "v",
+    "annotated_tag": true,
+    "immutable": true,
+    "windows_sbom": "pulse-windows-x64.spdx.json",
+    "checksum_manifest": "SHA256SUMS.txt"
+  }
+}

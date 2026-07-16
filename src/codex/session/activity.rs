@@ -367,13 +367,25 @@ impl SessionAccumulator {
                         self.model_context_window = Some(context_window);
                     }
 
-                    if let Some(parsed_limit) =
+                    if let Some(mut parsed_limit) =
                         parse_rate_limit_envelope(payload.get("rate_limits"), event_timestamp)
                     {
                         let key = parsed_limit
                             .limit_id
                             .clone()
+                            .or_else(|| parsed_limit.limit_name.clone())
                             .unwrap_or_else(|| format!("scope:{}", parsed_limit.scope.as_slug()));
+                        if let Some(previous) = self.rate_limit_envelopes.get(&key) {
+                            if parsed_limit.limits.primary.is_none() {
+                                parsed_limit.limits.primary = previous.limits.primary.clone();
+                            }
+                            if parsed_limit.limits.secondary.is_none() {
+                                parsed_limit.limits.secondary = previous.limits.secondary.clone();
+                            }
+                            if parsed_limit.credits.is_none() {
+                                parsed_limit.credits = previous.credits.clone();
+                            }
+                        }
                         self.rate_limit_envelopes.insert(key, parsed_limit);
 
                         let envelopes: Vec<RateLimitEnvelope> =

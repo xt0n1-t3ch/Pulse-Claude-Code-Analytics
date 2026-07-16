@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicehash/tauri/refs/heads/dev/.schema/config.schema.json",
   "productName": "Pulse",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "identifier": "com.xt0n1.pulse",
   "build": {
     "frontendDist": "../frontend/dist"
@@ -13,8 +13,8 @@
         "title": "Pulse",
         "width": 1280,
         "height": 860,
-        "minWidth": 900,
-        "minHeight": 600,
+        "minWidth": 720,
+        "minHeight": 560,
         "resizable": true,
         "decorations": false,
         "transparent": false,

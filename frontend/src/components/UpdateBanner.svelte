@@ -6,7 +6,6 @@
   const SKIP_KEY = "pulse-update-skipped-version";
   const CHECK_EVENT = "pulse:check-updates";
   const FAKE_PARAM = "fakeUpdate";
-  const POLL_MS = 6 * 60 * 60 * 1000;
   const RELEASE_TAG_BASE =
     "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/";
 
@@ -82,14 +81,12 @@
   }
 
   onMount(() => {
-    runCheck(false);
-    const interval = setInterval(() => runCheck(false), POLL_MS);
+    void runCheck(false);
     const onForce = (): void => {
       runCheck(true);
     };
     window.addEventListener(CHECK_EVENT, onForce);
     return () => {
-      clearInterval(interval);
       window.removeEventListener(CHECK_EVENT, onForce);
     };
   });

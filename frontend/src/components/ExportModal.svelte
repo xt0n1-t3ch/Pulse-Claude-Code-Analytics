@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fly } from "svelte/transition";
+  import { tick } from "svelte";
   import {
     type ExportColumn,
     type ExportFormat,
@@ -24,12 +25,47 @@
   let format = $state<ExportFormat>("csv");
   let dateConfig = $state<ExportDateConfig>(defaultDateConfig());
   let localColumns = $state<ExportColumn[]>([]);
+  let modalElement = $state<HTMLDivElement>();
+  let previouslyFocused: HTMLElement | null = null;
+  let wasOpen = false;
 
   $effect(() => {
     if (open) {
       localColumns = columns.map((c) => ({ ...c }));
     }
   });
+
+  $effect(() => {
+    if (open && !wasOpen) {
+      previouslyFocused = document.activeElement as HTMLElement | null;
+      void tick().then(() => modalElement?.querySelector<HTMLElement>("button, input, select, [tabindex]:not([tabindex='-1'])")?.focus());
+    } else if (!open && wasOpen) {
+      previouslyFocused?.focus();
+      previouslyFocused = null;
+    }
+    wasOpen = open;
+  });
+
+  function handleModalKey(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onclose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    if (!modalElement) return;
+    const focusable = [...modalElement.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])")];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 
   let previewRows = $derived(rows.slice(0, 3));
   let previewText = $derived(
@@ -50,10 +86,10 @@
 
 {#if open}
   <div class="modal-backdrop" role="button" tabindex="-1" onclick={onclose} onkeydown={(e) => e.key === "Escape" && onclose()} transition:fly={{ duration: 150 }}>
-    <div class="modal" role="dialog" tabindex="-1" aria-modal="true" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} transition:fly={{ y: 20, duration: 200 }}>
+    <div bind:this={modalElement} class="modal" role="dialog" tabindex="-1" aria-modal="true" aria-labelledby="export-modal-title" onclick={(e) => e.stopPropagation()} onkeydown={(e) => { e.stopPropagation(); handleModalKey(e); }} transition:fly={{ y: 20, duration: 200 }}>
       <div class="modal-header">
-        <h3>{title}</h3>
-        <button class="close-btn" onclick={onclose}>✕</button>
+        <h3 id="export-modal-title">{title}</h3>
+        <button class="close-btn" aria-label="Close export dialog" onclick={onclose}>✕</button>
       </div>
 
       <div class="modal-body">
@@ -138,11 +174,11 @@
 {/if}
 
 <style>
-  .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(4px); }
-  .modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); width: 520px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+  .modal-backdrop { position: fixed; inset: 0; background: var(--modal-backdrop); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(4px); }
+  .modal { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); width: min(520px, calc(100vw - 24px)); max-height: min(80vh, calc(100vh - 24px)); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
   .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--border); }
   .modal-header h3 { font-size: 14px; font-weight: 700; }
-  .close-btn { font-size: 14px; color: var(--text-muted); padding: 4px 8px; border-radius: var(--radius-sm); transition: all 0.15s ease; }
+  .close-btn { width: 36px; height: 36px; font-size: 14px; color: var(--text-muted); border-radius: var(--radius-sm); transition: all 0.15s ease; }
   .close-btn:hover { color: var(--text-primary); background: var(--bg-elevated); }
   .modal-body { padding: 16px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
   .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border); }
@@ -168,11 +204,15 @@
 
   .columns-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
 
-  .preview { font-family: 'JetBrains Mono', monospace; font-size: 10px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; overflow-x: auto; color: var(--text-secondary); max-height: 120px; white-space: pre; line-height: 1.5; }
+  .preview { font-family: var(--font-mono); font-size: 10px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; overflow-x: auto; color: var(--text-secondary); max-height: 120px; white-space: pre; line-height: 1.5; }
 
-  .btn { font-size: 12px; font-weight: 600; padding: 8px 16px; border-radius: var(--radius-sm); transition: all 0.15s ease; }
+  .btn { min-height: 38px; font-size: 12px; font-weight: 600; padding: 8px 16px; border-radius: var(--radius-sm); transition: all 0.15s ease; }
   .btn.secondary { color: var(--text-secondary); background: var(--bg-elevated); }
   .btn.secondary:hover { background: var(--bg-input); color: var(--text-primary); }
-  .btn.primary { color: #fff; background: var(--accent); }
+  .btn.primary { color: var(--accent-fg); background: var(--accent); }
   .btn.primary:hover { background: var(--accent-hover); }
+  @media (max-width: 560px) {
+    .modal-header, .modal-body, .modal-footer { padding-left: 14px; padding-right: 14px; }
+    .columns-grid { grid-template-columns: 1fr; }
+  }
 </style>

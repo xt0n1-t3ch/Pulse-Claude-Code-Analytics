@@ -1,5 +1,6 @@
 pub mod activity_target;
 pub mod app;
+pub use codex_presence_core as presence_core;
 pub mod chrome_session;
 pub mod cli;
 pub mod codex;

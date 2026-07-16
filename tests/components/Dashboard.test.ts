@@ -121,11 +121,28 @@ vi.mock("@/lib/api", async (importOriginal) => {
 describe("Dashboard.svelte", () => {
   beforeEach(async () => {
     const { metrics, sessions, planInfo, rateLimits } = await import("@/lib/stores");
+    const { provider } = await import("@/lib/provider");
+    provider.set("claude");
     metrics.set(metricsFixture);
     sessions.set([]);
-    planInfo.set({ provider: "claude", plan_name: "Max 20x ($200/mo)", detected: true });
+    planInfo.set({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x ($200/mo)", detected: true });
     rateLimits.set({
       provider: "claude",
+      usage: {
+        provider: "claude",
+        scopes: [{
+          id: "global",
+          name: "Claude account",
+          kind: "other",
+          windows: [
+            { window_minutes: 300, used_percent: 40, remaining_percent: 60, resets_at: "2026-05-28T18:00:00Z" },
+            { window_minutes: 10080, used_percent: 55, remaining_percent: 45, resets_at: "2026-06-01T00:00:00Z" },
+          ],
+        }],
+        credits: null,
+        observed_at: "2026-05-28T12:00:00Z",
+        source: "Anthropic usage API",
+      },
       five_hour_pct: 40,
       five_hour_resets: "2026-05-28T18:00:00Z",
       five_hour_label: "5-hour window",
@@ -170,6 +187,7 @@ describe("Dashboard.svelte", () => {
 
   it("shows the plan usage limits and model distribution from the store + history", async () => {
     const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { formatResetDateTime } = await import("@/lib/utils");
     const { container, getByText } = render(Dashboard);
     await tick();
 
@@ -178,5 +196,44 @@ describe("Dashboard.svelte", () => {
     const modelNames = [...container.querySelectorAll(".model-list .model-name")].map((e) => e.textContent?.trim());
     expect(modelNames).toContain("Claude Opus 4.8");
     expect(modelNames).toContain("Claude Sonnet 4.6");
+    expect(getByText(formatResetDateTime("2026-05-28T18:00:00Z"))).toBeTruthy();
+  });
+
+  it("renders weekly-only Codex quota and credits without inventing a five-hour window", async () => {
+    const { provider } = await import("@/lib/provider");
+    const { rateLimits, planInfo } = await import("@/lib/stores");
+    provider.set("codex");
+    planInfo.set({ provider: "codex", plan_key: "pro_20x", plan_name: "Pro 20x", detected: true });
+    rateLimits.set({
+      provider: "codex",
+      usage: {
+        provider: "codex",
+        scopes: [{
+          id: "codex",
+          name: null,
+          kind: "global",
+          windows: [{ window_minutes: 10080, used_percent: 4, remaining_percent: 96, resets_at: null }],
+        }],
+        credits: { balance: "2500", has_credits: true, unlimited: false },
+        observed_at: "2026-07-16T00:00:00Z",
+        source: "Codex JSONL telemetry",
+      },
+      five_hour_pct: 0, five_hour_resets: "N/A", five_hour_label: "", five_hour_window_minutes: null,
+      seven_day_pct: 4, seven_day_resets: "N/A", seven_day_label: "7d", seven_day_window_minutes: 10080,
+      sonnet_pct: null, sonnet_resets: null, extra_enabled: false, extra_limit: null, extra_used: null, extra_pct: null,
+      source: "Codex JSONL telemetry",
+    });
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container, getByText } = render(Dashboard);
+    await tick();
+
+    expect(getByText("Weekly Limit")).toBeTruthy();
+    expect(getByText("All models")).toBeTruthy();
+    expect(getByText("Credits Available")).toBeTruthy();
+    expect(getByText("2,500")).toBeTruthy();
+    expect(container.textContent).not.toContain("5h Limit");
+    expect(container.textContent).not.toContain("Global account");
+    expect(container.querySelector(".usage-footer")?.textContent).toContain("Codex local telemetry");
   });
 });

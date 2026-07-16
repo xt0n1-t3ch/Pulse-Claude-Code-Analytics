@@ -13,11 +13,28 @@
   let canvas: HTMLCanvasElement;
   let chart: Chart | null = null;
 
+  function syncChartTheme(): void {
+    const styles = getComputedStyle(document.documentElement);
+    const text = styles.getPropertyValue("--text-muted").trim();
+    const border = styles.getPropertyValue("--border").trim();
+    Chart.defaults.color = text;
+    Chart.defaults.borderColor = border;
+    if (chart) {
+      chart.options.color = text;
+      chart.options.borderColor = border;
+      chart.update("none");
+    }
+  }
+
   onMount(() => {
-    Chart.defaults.color = "#9b9696";
-    Chart.defaults.borderColor = "rgba(74,70,70,0.3)";
+    syncChartTheme();
     chart = new Chart(canvas, config);
-    return () => chart?.destroy();
+    const observer = new MutationObserver(syncChartTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => {
+      observer.disconnect();
+      chart?.destroy();
+    };
   });
 
   $effect(() => {

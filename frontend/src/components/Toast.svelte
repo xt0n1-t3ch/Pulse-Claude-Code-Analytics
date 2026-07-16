@@ -51,18 +51,18 @@
   }
 
   .toast.danger {
-    border-color: rgba(239, 83, 80, 0.3);
-    background: linear-gradient(135deg, var(--bg-card), rgba(239, 83, 80, 0.08));
+    border-color: var(--danger);
+    background: linear-gradient(135deg, var(--bg-card), var(--danger-dim));
   }
 
   .toast.warning {
-    border-color: rgba(255, 183, 77, 0.3);
-    background: linear-gradient(135deg, var(--bg-card), rgba(255, 183, 77, 0.08));
+    border-color: var(--warning);
+    background: linear-gradient(135deg, var(--bg-card), var(--warning-dim));
   }
 
   .toast.success {
-    border-color: rgba(76, 175, 80, 0.3);
-    background: linear-gradient(135deg, var(--bg-card), rgba(76, 175, 80, 0.08));
+    border-color: var(--success);
+    background: linear-gradient(135deg, var(--bg-card), var(--success-dim));
   }
 
   .toast-icon {
