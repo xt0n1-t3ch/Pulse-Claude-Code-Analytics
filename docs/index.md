@@ -21,6 +21,14 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
+## v1.6.0 docs refresh
+
+- Documented the versioned snapshot/event transport that keeps the frontend, Discord publisher, and SQLite persistence on one semantic state.
+- Added semantic Codex quota scopes, Credits, absolute local reset timestamps, and the exact canonical `codex-presence-core` v1.8.0 Git revision.
+- Updated the responsive Dark/Light UI, Discord field-order contract, config-schema 13 migration, analytics-schema 5 migration, and performance evidence.
+- Hardened releases with exact version surfaces, protected-main ancestry, Windows SPDX SBOM validation, complete platform assets, and immutable publication.
+- Kept the release as a SemVer minor because v1.6.0 adds public snapshot semantics and substantial UI capabilities without removing an existing command.
+
 ## v1.5.3 docs refresh
 
 - Pinned the Codex mirror to the immutable `v1.7.6` release and recorded its exact commit plus all canonical source/target hashes.
@@ -90,7 +98,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.5.3**
-- Schema: **Claude config v5 / Codex config v12 / Pulse analytics DB v4**
-- Last docs refresh: 2026-07-10 (Windows background polling, immutable Codex v1.7.6 sync, and console-suppression regression)
+- App release: **v1.6.0**
+- Schema: **Claude config v5 / Codex config v13 / Pulse analytics DB v5**
+- Last docs refresh: 2026-07-16 (event-driven snapshots, semantic Codex usage and Credits, responsive UI, and immutable canonical-core promotion)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

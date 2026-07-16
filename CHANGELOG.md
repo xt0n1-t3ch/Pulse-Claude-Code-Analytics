@@ -2,9 +2,9 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
-## [1.6.0]
+## [1.6.0] - 2026-07-16
 
-Unreleased local candidate. No tag, pull request, GitHub release, or published artifact exists yet.
+Pulse 1.6.0 unifies live analytics, Discord publication, and persistence around one semantic snapshot while promoting Codex parsing and presence composition to a canonical shared core.
 
 ### Added
 
@@ -18,6 +18,7 @@ Unreleased local candidate. No tag, pull request, GitHub release, or published a
 - Pulse consumes the canonical UI-free `codex-presence-core` instead of maintaining a second telemetry/composition owner.
 - Backend polling is consolidated around one content-fingerprinted snapshot; unchanged sessions no longer force recurring SQLite upserts.
 - Dashboard quota cards adapt to the scopes actually present. Codex shows Credits while Claude retains Extra Usage when available.
+- Usage reset timestamps render as absolute local dates and times, matching the Codex analytics presentation instead of a drifting relative countdown.
 - Dark and Light themes now drive native Tauri chrome, previews, charts, heatmaps, overlays, focus states, and scrollbars through semantic tokens.
 - Discord settings and the remaining views use responsive layouts down to 720×560, system fonts, reduced-motion behavior, and keyboard-accessible controls.
 - Repository release governance now requires Conventional Commits, provider/runtime proof, Dark/Light viewport evidence, performance measurements, and an exact canonical core pin.
@@ -34,11 +35,11 @@ Unreleased local candidate. No tag, pull request, GitHub release, or published a
 - Idle snapshot delivery is content-addressed, frontend recurring invokes are removed, and session persistence skips unchanged fingerprints.
 - Historical provider/time queries gain a schema-5 index and controlled WAL maintenance.
 
-### Validation pending before promotion
+### Validated
 
-- Rust, Svelte, Vitest, bundle, migration, accessibility, and six-viewport visual gates.
-- Real Windows Fast, weekly-only quota, Credits, presence persistence/publication, native Light mode, and 720×560 resize proof.
-- Before/after startup, idle CPU/memory, Tauri invokes, JSONL reads, SQLite writes/query plans, and gzip measurements.
+- Rust, Svelte, Vitest, bundle, migration, accessibility, and six-viewport visual gates passed.
+- Real Windows Fast, weekly-only quota, Credits, presence persistence/publication, native Light mode, and 720x560 resize behavior were observed.
+- Startup, idle CPU/memory, Tauri invokes, SQLite writes, and initial bundle size were measured with claim boundaries recorded where run order affected results.
 
 ## [1.5.3] — 2026-07-10
 
@@ -309,7 +310,7 @@ v1.2.0 is a minor release for Anthropic's Fable/Mythos 5 launch, the Context Win
 - **Tri-OS installers** — Windows (NSIS/MSI), macOS (DMG, arm64 + x64), Linux (deb/rpm/AppImage).
 
 [1.5.3]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.3
-[1.6.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/compare/v1.5.3...HEAD
+[1.6.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/compare/v1.5.3...v1.6.0
 [1.5.2]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.2
 [1.5.1]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.1
 [1.5.0]: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.5.0
