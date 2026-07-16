@@ -1,4 +1,5 @@
 import { writable, derived } from "svelte/store";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   HealthResponse,
   MetricsResponse,
@@ -9,16 +10,13 @@ import type {
   DiscordSettings,
   DiscordDisplayPrefs,
   PlanInfo,
+  AppSnapshot,
 } from "./api";
 import {
-  getHealth,
-  getMetrics,
-  getLiveSessions,
+  getAppSnapshot,
   getDiscordPreview,
   getDiscordSettings,
-  getRateLimits,
   getDiscordUser,
-  getPlanInfo,
 } from "./api";
 
 export const health = writable<HealthResponse | null>(null);
@@ -39,6 +37,7 @@ export interface DiscordPreviewSettings {
   showTokens: boolean;
   showCost: boolean;
   showLimits: boolean;
+  showCredits: boolean;
   showContext: boolean;
   showSystems: boolean;
 }
@@ -51,6 +50,7 @@ export const discordPreview = writable<DiscordPreviewSettings>({
   showTokens: false,
   showCost: false,
   showLimits: true,
+  showCredits: true,
   showContext: true,
   showSystems: true,
 });
@@ -64,6 +64,7 @@ export function displayPrefsToPreview(prefs: DiscordDisplayPrefs): DiscordPrevie
     showTokens: prefs.show_tokens,
     showCost: prefs.show_cost,
     showLimits: prefs.show_limits,
+    showCredits: prefs.show_credits,
     showContext: prefs.show_context,
     showSystems: prefs.show_systems,
   };
@@ -78,6 +79,7 @@ export function previewToDisplayPrefs(preview: DiscordPreviewSettings): DiscordD
     show_tokens: preview.showTokens,
     show_cost: preview.showCost,
     show_limits: preview.showLimits,
+    show_credits: preview.showCredits,
     show_context: preview.showContext,
     show_systems: preview.showSystems,
   };
@@ -123,21 +125,21 @@ let prevRateLimits: RateLimitInfo | null = null;
 
 export async function poll(): Promise<void> {
   try {
-    const [h, m, s, preview, r, p] = await Promise.all([
-      getHealth(),
-      getMetrics(),
-      getLiveSessions(),
-      getDiscordPreview(),
-      getRateLimits(),
-      getPlanInfo(),
-    ]);
-    health.set(h);
-    metrics.set(m);
-    sessions.set(s);
-    discordPresencePreview.set(preview);
-    rateLimits.set(r);
-    planInfo.set(p);
+    applySnapshot(await getAppSnapshot());
+  } catch (e) {
+    console.warn("Snapshot error:", e);
+  }
+}
 
+function applySnapshot(snapshot: AppSnapshot): void {
+    health.set(snapshot.health);
+    metrics.set(snapshot.metrics);
+    sessions.set(snapshot.sessions);
+    discordPresencePreview.set(snapshot.discord_preview);
+    rateLimits.set(snapshot.rate_limits);
+    planInfo.set(snapshot.plan);
+    applyDiscordSettings(snapshot.discord_settings);
+    const r = snapshot.rate_limits;
     if (r && prevRateLimits) {
       if (r.five_hour_pct > 80 && prevRateLimits.five_hour_pct <= 80) {
         addToast("Session usage above 80%", "warning");
@@ -158,9 +160,6 @@ export async function poll(): Promise<void> {
       }
     }
     prevRateLimits = r;
-  } catch (e) {
-    console.warn("Poll error:", e);
-  }
 }
 
 export async function refreshDiscordPresencePreview(): Promise<void> {
@@ -180,16 +179,24 @@ export async function loadDiscordUser(): Promise<void> {
   }
 }
 
-let pollInterval: ReturnType<typeof setInterval> | null = null;
+let snapshotUnlisten: Promise<UnlistenFn> | null = null;
 
-export function startPolling(intervalMs = 5000): void {
-  poll();
-  pollInterval = setInterval(poll, intervalMs);
+export function startSnapshotSync(): void {
+  if (snapshotUnlisten) return;
+  snapshotUnlisten = listen<AppSnapshot>("pulse://snapshot", (event) => {
+    applySnapshot(event.payload);
+  });
+  void snapshotUnlisten
+    .then(() => poll())
+    .catch((error) => {
+      snapshotUnlisten = null;
+      console.warn("Snapshot listener:", error);
+      void poll();
+    });
 }
 
-export function stopPolling(): void {
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
-  }
+export function stopSnapshotSync(): void {
+  const pendingUnlisten = snapshotUnlisten;
+  snapshotUnlisten = null;
+  void pendingUnlisten?.then((unlisten) => unlisten());
 }

@@ -366,13 +366,14 @@ dependencies = [
 
 [[package]]
 name = "cc-discord-presence"
-version = "1.5.3"
+version = "1.6.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
  "base64 0.22.1",
  "chrono",
  "clap",
+ "codex-presence-core",
  "ctrlc",
  "dirs",
  "discord-rich-presence",
@@ -491,6 +492,15 @@ name = "clap_lex"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
+
+[[package]]
+name = "codex-presence-core"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "colorchoice"
@@ -2983,11 +2993,12 @@ dependencies = [
 
 [[package]]
 name = "pulse"
-version = "1.5.3"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "cc-discord-presence",
  "chrono",
+ "codex-presence-core",
  "fs2",
  "rusqlite",
  "serde",

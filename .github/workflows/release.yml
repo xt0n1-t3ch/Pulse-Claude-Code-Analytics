@@ -203,6 +203,17 @@ jobs:
           if (-not $bundle) { throw "No release assets bundle directory found for $env:PLATFORM" }
           ./scripts/release-platform-assets.ps1 -InputDirectory $bundle -OutputDirectory dist -Platform $env:PLATFORM
 
+      - name: Generate and verify Windows SPDX SBOM
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $artifact = @(Get-ChildItem -LiteralPath dist -File -Filter *.exe)
+          if ($artifact.Count -ne 1) { throw "Expected exactly one Windows executable, found $($artifact.Count)" }
+          $version = [string](Get-Content -Raw package.json | ConvertFrom-Json).version
+          $sbom = "dist/pulse-windows-x64.spdx.json"
+          ./scripts/new-windows-sbom.ps1 -ArtifactPath $artifact[0].FullName -OutputPath $sbom -PackageName pulse -PackageVersion $version
+          ./scripts/check-windows-sbom.ps1 -ArtifactPath $artifact[0].FullName -SbomPath $sbom -PackageName pulse -PackageVersion $version
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pulse-${{ matrix.label }}
@@ -234,8 +245,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 10
-          test "$(wc -l < release-assets/SHA256SUMS.txt)" -eq 9
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 11
+          test "$(wc -l < release-assets/SHA256SUMS.txt)" -eq 10
           (cd release-assets && sha256sum --check SHA256SUMS.txt)
 
       - name: Extract curated release notes

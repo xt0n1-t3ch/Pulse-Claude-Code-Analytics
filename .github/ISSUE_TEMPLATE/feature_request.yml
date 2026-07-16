@@ -16,6 +16,24 @@ body:
       description: How would you like Pulse to handle this?
     validations:
       required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider scope
+      options:
+        - Codex
+        - Claude
+        - Both where capability exists
+        - Provider-independent
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Acceptance behavior
+      description: What observable UI, telemetry, persistence, or runtime result proves completion?
+    validations:
+      required: true
   - type: textarea
     id: alternatives
     attributes:

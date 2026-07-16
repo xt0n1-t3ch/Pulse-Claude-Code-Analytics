@@ -67,14 +67,8 @@
   });
 
   onMount(() => {
-    loadBreakdowns();
-    loadUsage();
-    const iv = setInterval(() => {
-      loadBreakdown();
-      loadBreakdowns();
-      loadUsage();
-    }, 10000);
-    return () => clearInterval(iv);
+    void loadBreakdowns();
+    void loadUsage();
   });
 
   function clampPct(pct: number): number {
@@ -109,10 +103,10 @@
 
   function severityColor(sev: CtxSeverity): string {
     switch (sev) {
-      case "critical": return "#e5484d";
-      case "warning":  return "#f5a524";
+      case "critical": return "var(--danger)";
+      case "warning":  return "var(--warning)";
       case "info":     return "var(--info)";
-      case "positive": return "#62b462";
+      case "positive": return "var(--success)";
     }
   }
 
@@ -210,13 +204,13 @@
   interface CatItem { label: string; tokens: number; pct: number; icon: string; color: string }
 
   let categories = $derived<CatItem[]>(ctx ? [
-    { label: "Observed session usage", tokens: ctx.used_tokens, pct: usedPct, icon: "filled", color: "#7cb9e8" },
+      { label: "Observed session usage", tokens: ctx.used_tokens, pct: usedPct, icon: "filled", color: "var(--info)" },
     { label: "Free space", tokens: ctx.free_space, pct: freePct, icon: "hollow", color: "var(--text-muted)" },
     { label: "Autocompact buffer", tokens: ctx.autocompact_buffer, pct: autocompactPct, icon: "cross", color: "var(--text-muted)" },
   ].filter((c) => c.tokens > 0 || c.icon !== "filled") : []);
 
   let barSegs = $derived<{ pct: number; color: string }[]>(ctx ? [
-    { pct: usedPct, color: "#7cb9e8" },
+      { pct: usedPct, color: "var(--info)" },
   ] : []);
 
   let usedBarPct = $derived(barSegs.reduce((s, b) => s + b.pct, 0));
@@ -504,7 +498,7 @@
   .model-chip {
     font-size: 11px;
     color: var(--text-secondary);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     padding: 4px 10px;
@@ -541,7 +535,7 @@
   .pill-model {
     font-size: 10px;
     color: var(--text-muted);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
   }
 
   /* All-active context cards */
@@ -587,7 +581,7 @@
     font-variant-numeric: tabular-nums;
   }
   .act-model {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -703,7 +697,7 @@
     border-radius: 99px;
     overflow: hidden;
     margin-bottom: 10px;
-    border: 1px solid rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
   }
   .progress-fill { height: 100%; display: flex; border-radius: 99px; overflow: hidden; transition: width 0.6s var(--ease); }
   .progress-seg { height: 100%; transition: flex 0.4s var(--ease); }
@@ -716,10 +710,10 @@
       -45deg,
       transparent,
       transparent 3px,
-      rgba(255,255,255,0.04) 3px,
-      rgba(255,255,255,0.04) 6px
+      var(--border) 3px,
+      var(--border) 6px
     );
-    border-left: 1px solid rgba(255,255,255,0.08);
+    border-left: 1px solid var(--border-strong);
   }
 
   /* Category list */
@@ -781,7 +775,7 @@
     transition: background 0.15s ease;
     text-align: left;
   }
-  .sub-header:hover { background: rgba(255,255,255,0.02); }
+  .sub-header:hover { background: var(--bg-card-hover); }
   .sub-title { flex: 1; }
   .sub-count { font-size: 10px; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 7px; border-radius: 99px; font-weight: 700; }
   .sub-tokens { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -894,6 +888,20 @@
   }
   .advice-btn:hover {
     background: var(--accent);
-    color: #1a1a1a;
+    color: var(--accent-fg);
+  }
+
+  @media (max-width: 800px) {
+    .active-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cat-grid { grid-template-columns: 1fr; }
+    .hero-card, .usage-card { padding: 16px; }
+  }
+
+  @media (max-width: 620px) {
+    .active-grid { grid-template-columns: 1fr; }
+    .hero-top, .usage-head { align-items: flex-start; flex-wrap: wrap; }
+    .usage-pct { margin-left: 0; }
+    .hero-used { font-size: 23px; }
+    .advice-head { align-items: flex-start; flex-wrap: wrap; }
   }
 </style>

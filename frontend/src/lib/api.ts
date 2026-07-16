@@ -95,6 +95,7 @@ export interface SessionInfo {
 
 export interface RateLimitInfo {
     provider: string;
+    usage: UsageSnapshot | null;
     five_hour_pct: number;
     five_hour_resets: string;
     five_hour_label: string;
@@ -109,6 +110,34 @@ export interface RateLimitInfo {
     extra_limit: number | null;
     extra_used: number | null;
     extra_pct: number | null;
+    source: string;
+}
+
+export interface CreditBalance {
+    balance: string | null;
+    has_credits: boolean;
+    unlimited: boolean;
+}
+
+export interface QuotaWindow {
+    window_minutes: number;
+    used_percent: number;
+    remaining_percent: number;
+    resets_at: string | null;
+}
+
+export interface QuotaScope {
+    id: string | null;
+    name: string | null;
+    kind: "global" | "model" | "other";
+    windows: QuotaWindow[];
+}
+
+export interface UsageSnapshot {
+    provider: string;
+    scopes: QuotaScope[];
+    credits: CreditBalance | null;
+    observed_at: string | null;
     source: string;
 }
 
@@ -184,6 +213,7 @@ export interface DiscordDisplayPrefs {
     show_tokens: boolean;
     show_cost: boolean;
     show_limits: boolean;
+    show_credits: boolean;
     show_context: boolean;
     show_systems: boolean;
 }
@@ -209,10 +239,27 @@ export interface DiscordSettings {
     display_prefs: DiscordDisplayPrefs;
     desktop_design: "codex_app" | "chatgpt_app" | null;
     supports_desktop_design: boolean;
+    supports_field_order: boolean;
+    field_order: string[];
+}
+
+export interface AppSnapshot {
+    revision: number;
+    health: HealthResponse;
+    metrics: MetricsResponse;
+    sessions: SessionInfo[];
+    rate_limits: RateLimitInfo | null;
+    discord_preview: DiscordPresencePreview;
+    discord_settings: DiscordSettings;
+    plan: PlanInfo;
 }
 
 export function getHealth(): Promise<HealthResponse> {
     return invoke("get_health");
+}
+
+export function getAppSnapshot(): Promise<AppSnapshot> {
+    return invoke("get_app_snapshot");
 }
 
 export function getMetrics(): Promise<MetricsResponse> {
@@ -248,9 +295,14 @@ export function discordDisplayPrefsArgs(prefs: DiscordDisplayPrefs): Record<stri
         showTokens: prefs.show_tokens,
         showCost: prefs.show_cost,
         showLimits: prefs.show_limits,
+        showCredits: prefs.show_credits,
         showContext: prefs.show_context,
         showSystems: prefs.show_systems,
     };
+}
+
+export function setDiscordFieldOrder(order: string[]): Promise<DiscordSettings> {
+    return invoke("set_discord_field_order", { order });
 }
 
 export function setDiscordEnabled(enabled: boolean): Promise<DiscordSettings> {

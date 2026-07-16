@@ -624,7 +624,7 @@
     transition: background 0.15s var(--ease);
   }
   .s-row:first-child { border-top: none; }
-  .s-row:hover { background: rgba(255, 255, 255, 0.012); }
+  .s-row:hover { background: var(--bg-card-hover); }
 
   .s-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
   .s-label {

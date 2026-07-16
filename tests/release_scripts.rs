@@ -125,8 +125,10 @@ fn vendored_windows_polling_commands_use_silent_launcher() {
     let parser = read(root.join("src/codex/session/parser.rs"));
 
     assert!(
-        manifest.contains(r#""ref": "v1.7.6""#),
-        "Pulse must pin the canonical Windows console-suppression release"
+        manifest.contains(r#""schema_version": 3"#)
+            && manifest.contains(r#""canonical_release": "v1.8.0""#)
+            && manifest.contains(r#""package": "codex-presence-core""#),
+        "Pulse must declare the canonical core release contract"
     );
     assert!(
         !parser.contains(r#"Command::new("git")"#),
@@ -363,6 +365,10 @@ fn release_assets_reject_empty_input_and_checksum_nonempty_input() {
         artifacts.join("pulse-windows-x64/pulse-windows-x64-Pulse.msi"),
         "msi",
     );
+    write(
+        artifacts.join("pulse-windows-x64/pulse-windows-x64.spdx.json"),
+        r#"{"spdxVersion":"SPDX-2.3"}"#,
+    );
     for platform in ["macos-arm64", "macos-x64"] {
         write(
             artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.dmg")),
@@ -386,8 +392,10 @@ fn release_assets_reject_empty_input_and_checksum_nonempty_input() {
         .expect("run asset collector");
     assert_success(&collected);
     assert!(output.join("pulse-windows-x64-Pulse.exe").is_file());
+    assert!(output.join("pulse-windows-x64.spdx.json").is_file());
     let sums = read(output.join("SHA256SUMS.txt"));
     assert!(sums.contains("  pulse-windows-x64-Pulse.exe\n"));
+    assert!(sums.contains("  pulse-windows-x64.spdx.json\n"));
 }
 
 #[test]
@@ -456,6 +464,8 @@ fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
     assert!(release.contains("check-codex-rich-presence-upstream.ps1"));
     assert!(release.contains("NPM_VERSION: \"11.10.1\""));
     assert!(release.contains("No release assets"));
+    assert!(release.contains("new-windows-sbom.ps1"));
+    assert!(release.contains("check-windows-sbom.ps1"));
     assert!(freshness.contains("workflow_dispatch:"));
     assert!(freshness.contains("issues: write"));
     assert!(!ci.contains("git ls-remote"));

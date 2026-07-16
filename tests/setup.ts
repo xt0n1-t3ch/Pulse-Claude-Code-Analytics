@@ -1,5 +1,10 @@
 import { vi } from "vitest";
 
+const eventMocks = vi.hoisted(() => ({
+  listen: vi.fn(async () => () => undefined),
+  emit: vi.fn(async () => undefined),
+}));
+
 const helpers = vi.hoisted(() => {
   const emptyArrayCmds = new Set<string>([
     "get_live_sessions",
@@ -186,10 +191,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: vi.fn((p: string) => p),
 }));
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => undefined),
-  emit: vi.fn(async () => undefined),
-}));
+vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: vi.fn(async () => "0.0.0-test"),

@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -28,7 +31,12 @@ use cc_discord_presence::session::{
     merge_statusline_into_sessions, preferred_active_session, read_statusline_data,
 };
 use cc_discord_presence::usage::UsageManager;
+use codex_presence_core::{
+    PresenceFieldId, QuotaScope, QuotaWindow, RateLimitScope, UsageSnapshot,
+    usage_snapshot_from_envelopes,
+};
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 use crate::live::PublisherLease;
 
@@ -39,6 +47,10 @@ const ACTIVE_CUTOFF: Duration = Duration::from_secs(600);
 const IDLE_CUTOFF: Duration = Duration::from_secs(300);
 
 static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+static SNAPSHOT_POLLER_STARTED: AtomicBool = AtomicBool::new(false);
+static INITIAL_SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
+static SESSION_FINGERPRINTS: std::sync::OnceLock<Mutex<HashMap<String, u64>>> =
+    std::sync::OnceLock::new();
 fn uptime_secs() -> u64 {
     START_TIME.get_or_init(Instant::now).elapsed().as_secs()
 }
@@ -52,6 +64,7 @@ pub struct DiscordDisplayPrefs {
     pub show_tokens: bool,
     pub show_cost: bool,
     pub show_limits: bool,
+    pub show_credits: bool,
     pub show_context: bool,
     pub show_systems: bool,
 }
@@ -66,6 +79,7 @@ impl Default for DiscordDisplayPrefs {
             show_tokens: false,
             show_cost: false,
             show_limits: true,
+            show_credits: true,
             show_context: true,
             show_systems: true,
         }
@@ -81,6 +95,8 @@ pub struct DiscordSettings {
     pub display_prefs: DiscordDisplayPrefs,
     pub desktop_design: Option<String>,
     pub supports_desktop_design: bool,
+    pub supports_field_order: bool,
+    pub field_order: Vec<String>,
 }
 
 #[derive(Default, Clone)]
@@ -97,6 +113,8 @@ struct CachedData {
     sessions: ActiveSessions,
     claude_usage: Option<CachedUsage>,
     claude_usage_error: Option<String>,
+    codex_usage: Option<UsageSnapshot>,
+    codex_limits: Option<codex_session::EffectiveLimitSelection>,
     discord_status: String,
     discord_publisher: String,
     discord_enabled: bool,
@@ -164,7 +182,9 @@ fn codex_plan_key_from_tier(tier: DetectedPlanTier) -> &'static str {
     }
 }
 
-pub fn start_background_poller() {
+pub fn start_background_poller(app: tauri::AppHandle) {
+    INITIAL_SNAPSHOT_READY.store(false, Ordering::Release);
+    SNAPSHOT_POLLER_STARTED.store(true, Ordering::Release);
     let data = Arc::clone(shared());
 
     if let Ok(mut d) = data.lock() {
@@ -199,6 +219,7 @@ pub fn start_background_poller() {
         let mut claude_publisher = PublisherLease::new(cc_discord_presence::config::lock_path());
         let mut codex_publisher =
             PublisherLease::new(cc_discord_presence::codex::config::lock_path());
+        let mut last_snapshot_hash = None;
 
         loop {
             let provider = current_provider();
@@ -356,9 +377,18 @@ pub fn start_background_poller() {
                         &codex_config.pricing,
                     )
                     .unwrap_or_default();
+                    let usage_envelopes = codex_parse.rate_limit_envelopes();
+                    let codex_usage = (!usage_envelopes.is_empty()).then(|| {
+                        usage_snapshot_from_envelopes(
+                            Provider::Codex.as_str(),
+                            "Codex JSONL rate_limits",
+                            &usage_envelopes,
+                        )
+                    });
+                    let effective_limits = codex_parse.latest_limits_source();
 
                     let resolved_plan = codex_plan_detector
-                        .resolve_from_sessions(&active, &codex_config.openai_plan);
+                        .resolve_from_envelopes(&usage_envelopes, &codex_config.openai_plan);
                     let resolved_service_tier = resolve_service_tier();
                     let opencode_running =
                         cc_discord_presence::codex::process::is_opencode_running();
@@ -369,7 +399,6 @@ pub fn start_background_poller() {
                     persist_live_codex_snapshots(&active, &codex_config, surface_override);
                     let status = if discord_enabled && publisher_owned {
                         let active_session = codex_session::preferred_active_session(&active);
-                        let effective_limits = codex_session::latest_limits_source(&active);
                         let limits = effective_limits.as_ref().map(|item| &item.limits);
                         if let Err(err) = codex_discord.update(
                             active_session,
@@ -400,6 +429,8 @@ pub fn start_background_poller() {
                         d.codex_desktop_surface_running = codex_desktop_running;
                         d.claude_usage = None;
                         d.claude_usage_error = None;
+                        d.codex_usage = codex_usage;
+                        d.codex_limits = effective_limits;
                     }
                     (
                         status,
@@ -416,6 +447,17 @@ pub fn start_background_poller() {
             if let Ok(mut d) = data.lock() {
                 d.discord_status = discord_status;
                 d.discord_publisher = discord_publisher;
+            }
+            INITIAL_SNAPSHOT_READY.store(true, Ordering::Release);
+
+            if let Ok(snapshot) = get_app_snapshot() {
+                let snapshot_hash = app_snapshot_fingerprint(&snapshot);
+                if last_snapshot_hash != Some(snapshot_hash) {
+                    if let Err(error) = app.emit("pulse://snapshot", &snapshot) {
+                        tracing::warn!(error = %error, "failed to emit Pulse snapshot");
+                    }
+                    last_snapshot_hash = Some(snapshot_hash);
+                }
             }
 
             thread::sleep(REFRESH_INTERVAL);
@@ -500,6 +542,74 @@ pub struct HealthResponse {
     pub uptime_seconds: u64,
     pub discord_status: String,
     pub discord_enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct AppSnapshot {
+    pub revision: u32,
+    pub health: HealthResponse,
+    pub metrics: MetricsResponse,
+    pub sessions: Vec<SessionInfo>,
+    pub rate_limits: Option<RateLimitInfo>,
+    pub discord_preview: DiscordPresencePreview,
+    pub discord_settings: DiscordSettings,
+    pub plan: PlanInfo,
+}
+
+#[tauri::command]
+pub fn get_app_snapshot() -> Result<AppSnapshot, String> {
+    let deadline = Instant::now() + REFRESH_INTERVAL + Duration::from_secs(1);
+    while SNAPSHOT_POLLER_STARTED.load(Ordering::Acquire)
+        && !INITIAL_SNAPSHOT_READY.load(Ordering::Acquire)
+        && Instant::now() < deadline
+    {
+        thread::sleep(Duration::from_millis(25));
+    }
+    Ok(AppSnapshot {
+        revision: 1,
+        health: get_health(),
+        metrics: get_metrics(),
+        sessions: get_live_sessions(),
+        rate_limits: get_rate_limits(),
+        discord_preview: get_discord_preview(),
+        discord_settings: get_discord_settings()?,
+        plan: get_plan_info(),
+    })
+}
+
+fn app_snapshot_fingerprint(snapshot: &AppSnapshot) -> u64 {
+    semantic_snapshot_fingerprint(serde_json::to_value(snapshot).unwrap_or_default())
+}
+
+fn semantic_snapshot_fingerprint(mut value: serde_json::Value) -> u64 {
+    if let Some(root) = value.as_object_mut() {
+        if let Some(health) = root
+            .get_mut("health")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            health.remove("uptime_seconds");
+        }
+        if let Some(preview) = root
+            .get_mut("discord_preview")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            preview.remove("duration_secs");
+        }
+        if let Some(sessions) = root
+            .get_mut("sessions")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for session in sessions {
+                if let Some(session) = session.as_object_mut() {
+                    session.remove("duration_secs");
+                    session.remove("tokens_per_sec");
+                }
+            }
+        }
+    }
+    let mut hasher = DefaultHasher::new();
+    value.to_string().hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -634,6 +744,7 @@ pub struct SessionInfo {
 #[derive(Serialize)]
 pub struct RateLimitInfo {
     pub provider: String,
+    pub usage: Option<UsageSnapshot>,
     pub five_hour_pct: f64,
     pub five_hour_resets: String,
     pub five_hour_label: String,
@@ -914,11 +1025,47 @@ fn codex_total_input_tokens(snapshot: &CodexSessionSnapshot) -> u64 {
 
 fn persist_live_session_infos(provider: Provider, result: &[SessionInfo]) {
     let active_ids: Vec<String> = result.iter().map(|s| s.session_id.clone()).collect();
+    let active_keys: HashSet<String> = active_ids
+        .iter()
+        .map(|id| format!("{}:{id}", provider.as_str()))
+        .collect();
+    let fingerprints = SESSION_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut fingerprints = fingerprints.lock().ok();
+    let mut changed_count = 0;
     for s in result {
-        crate::db::upsert_session(s);
-        crate::db::update_daily_stats(s);
+        let key = format!("{}:{}", provider.as_str(), s.session_id);
+        let fingerprint = persistent_session_fingerprint(s);
+        let unchanged = fingerprints
+            .as_ref()
+            .and_then(|items| items.get(&key))
+            .is_some_and(|previous| *previous == fingerprint);
+        if !unchanged {
+            crate::db::upsert_session(s);
+            changed_count += 1;
+            if let Some(items) = fingerprints.as_mut() {
+                items.insert(key, fingerprint);
+            }
+        }
+    }
+    if let Some(items) = fingerprints.as_mut() {
+        let provider_prefix = format!("{}:", provider.as_str());
+        items.retain(|key, _| !key.starts_with(&provider_prefix) || active_keys.contains(key));
     }
     crate::db::mark_inactive(provider.as_str(), &active_ids);
+    crate::db::checkpoint_wal_after_writes(changed_count);
+}
+
+fn persistent_session_fingerprint(session: &SessionInfo) -> u64 {
+    let mut value = serde_json::to_value(session).unwrap_or_default();
+    if let Some(session) = value.as_object_mut() {
+        // These values advance with wall-clock time even when no telemetry changed.
+        // They are presentation-only and must not force SQLite writes every poll.
+        session.remove("duration_secs");
+        session.remove("tokens_per_sec");
+    }
+    let mut hasher = DefaultHasher::new();
+    value.to_string().hash(&mut hasher);
+    hasher.finish()
 }
 
 fn persist_live_claude_snapshots(snapshots: &[ClaudeSessionSnapshot]) {
@@ -976,6 +1123,7 @@ pub fn set_discord_display_prefs(
     show_tokens: bool,
     show_cost: bool,
     show_limits: bool,
+    show_credits: bool,
     show_context: bool,
     show_systems: bool,
 ) -> Result<DiscordSettings, String> {
@@ -987,6 +1135,7 @@ pub fn set_discord_display_prefs(
         show_tokens,
         show_cost,
         show_limits,
+        show_credits,
         show_context,
         show_systems,
     };
@@ -1155,6 +1304,7 @@ fn apply_codex_display_prefs(config: &mut CodexPresenceConfig, prefs: &DiscordDi
     config.privacy.show_tokens = prefs.show_tokens;
     config.privacy.show_cost = prefs.show_cost;
     config.privacy.show_limits = prefs.show_limits;
+    config.privacy.show_credits = prefs.show_credits;
     config.privacy.show_context = prefs.show_context;
     config.privacy.show_systems = prefs.show_systems;
 }
@@ -1168,6 +1318,7 @@ fn claude_display_prefs(config: &PresenceConfig) -> DiscordDisplayPrefs {
         show_tokens: config.privacy.show_tokens,
         show_cost: config.privacy.show_cost,
         show_limits: config.privacy.show_limits,
+        show_credits: false,
         show_context: config.privacy.show_context,
         show_systems: config.privacy.show_systems,
     }
@@ -1182,6 +1333,7 @@ fn codex_display_prefs(config: &CodexPresenceConfig) -> DiscordDisplayPrefs {
         show_tokens: config.privacy.show_tokens,
         show_cost: config.privacy.show_cost,
         show_limits: config.privacy.show_limits,
+        show_credits: config.privacy.show_credits,
         show_context: config.privacy.show_context,
         show_systems: config.privacy.show_systems,
     }
@@ -1200,28 +1352,41 @@ fn build_discord_settings(
     claude_config: Option<&PresenceConfig>,
     codex_config: Option<&CodexPresenceConfig>,
 ) -> DiscordSettings {
-    let (enabled, display_prefs, desktop_design, supports_desktop_design) = match provider {
-        Provider::Claude => (
-            cached.discord_enabled,
-            claude_config
-                .map(claude_display_prefs)
-                .unwrap_or_else(|| cached.discord_prefs.clone()),
-            None,
-            false,
-        ),
-        Provider::Codex => (
-            codex_config
-                .map(|config| config.presence_enabled)
-                .unwrap_or(cached.discord_enabled),
-            codex_config
-                .map(codex_display_prefs)
-                .unwrap_or_else(|| cached.discord_prefs.clone()),
-            codex_config.map(|config| {
-                desktop_design_key(config.display.desktop_presence_design).to_string()
-            }),
-            true,
-        ),
-    };
+    let (enabled, display_prefs, desktop_design, supports_desktop_design, field_order) =
+        match provider {
+            Provider::Claude => (
+                cached.discord_enabled,
+                claude_config
+                    .map(claude_display_prefs)
+                    .unwrap_or_else(|| cached.discord_prefs.clone()),
+                None,
+                false,
+                Vec::new(),
+            ),
+            Provider::Codex => (
+                codex_config
+                    .map(|config| config.presence_enabled)
+                    .unwrap_or(cached.discord_enabled),
+                codex_config
+                    .map(codex_display_prefs)
+                    .unwrap_or_else(|| cached.discord_prefs.clone()),
+                codex_config.map(|config| {
+                    desktop_design_key(config.display.desktop_presence_design).to_string()
+                }),
+                true,
+                codex_config
+                    .map(|config| {
+                        config
+                            .display
+                            .presence_layout
+                            .fields
+                            .iter()
+                            .map(|item| item.field.as_str().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            ),
+        };
 
     DiscordSettings {
         provider: provider.as_str().to_string(),
@@ -1231,7 +1396,35 @@ fn build_discord_settings(
         display_prefs,
         desktop_design,
         supports_desktop_design,
+        supports_field_order: provider == Provider::Codex,
+        field_order,
     }
+}
+
+#[tauri::command]
+pub fn set_discord_field_order(order: Vec<String>) -> Result<DiscordSettings, String> {
+    if current_provider() != Provider::Codex {
+        return Err("Field ordering is currently available for Codex presence".to_string());
+    }
+    let parsed: Vec<PresenceFieldId> = order
+        .iter()
+        .map(|value| {
+            PresenceFieldId::parse(value).ok_or_else(|| format!("Unknown presence field: {value}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let unique: HashSet<PresenceFieldId> = parsed.iter().copied().collect();
+    if parsed.len() != PresenceFieldId::ALL.len() || unique.len() != PresenceFieldId::ALL.len() {
+        return Err("Field order must contain every field exactly once".to_string());
+    }
+    let mut config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+    config.display.presence_layout.fields.sort_by_key(|item| {
+        parsed
+            .iter()
+            .position(|field| *field == item.field)
+            .unwrap_or(usize::MAX)
+    });
+    config.save().map_err(|error| error.to_string())?;
+    get_discord_settings()
 }
 
 #[tauri::command]
@@ -1370,6 +1563,31 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
             if let Some(u) = data.claude_usage.as_ref() {
                 return Some(RateLimitInfo {
                     provider: Provider::Claude.as_str().to_string(),
+                    usage: Some(UsageSnapshot {
+                        provider: Provider::Claude.as_str().to_string(),
+                        scopes: vec![QuotaScope {
+                            id: Some("claude".to_string()),
+                            name: Some("Account quota".to_string()),
+                            kind: RateLimitScope::GlobalCodex,
+                            windows: vec![
+                                QuotaWindow {
+                                    window_minutes: 300,
+                                    used_percent: u.five_hour_pct,
+                                    remaining_percent: (100.0 - u.five_hour_pct).clamp(0.0, 100.0),
+                                    resets_at: None,
+                                },
+                                QuotaWindow {
+                                    window_minutes: 10080,
+                                    used_percent: u.seven_day_pct,
+                                    remaining_percent: (100.0 - u.seven_day_pct).clamp(0.0, 100.0),
+                                    resets_at: None,
+                                },
+                            ],
+                        }],
+                        credits: None,
+                        observed_at: None,
+                        source: "api".to_string(),
+                    }),
                     five_hour_pct: u.five_hour_pct,
                     five_hour_resets: u.five_hour_resets.clone(),
                     five_hour_label: "5-hour window".into(),
@@ -1395,6 +1613,29 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
                 let secondary = source.limits.secondary.as_ref();
                 return Some(RateLimitInfo {
                     provider: Provider::Claude.as_str().to_string(),
+                    usage: Some(UsageSnapshot {
+                        provider: Provider::Claude.as_str().to_string(),
+                        scopes: vec![QuotaScope {
+                            id: Some("claude".to_string()),
+                            name: Some("Account quota".to_string()),
+                            kind: RateLimitScope::GlobalCodex,
+                            windows: std::iter::once(primary)
+                                .chain(secondary.into_iter())
+                                .map(|window| QuotaWindow {
+                                    window_minutes: window.window_minutes,
+                                    used_percent: window.used_percent,
+                                    remaining_percent: window.remaining_percent,
+                                    resets_at: window.resets_at,
+                                })
+                                .collect(),
+                        }],
+                        credits: None,
+                        observed_at: source.last_token_event_at,
+                        source: match source.source {
+                            session::DataSource::Statusline => "statusline".to_string(),
+                            session::DataSource::Jsonl => "jsonl".to_string(),
+                        },
+                    }),
                     five_hour_pct: primary.used_percent,
                     five_hour_resets: primary
                         .resets_at
@@ -1426,6 +1667,7 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
                 .unwrap_or_else(|| "no data yet".into());
             Some(RateLimitInfo {
                 provider: Provider::Claude.as_str().to_string(),
+                usage: None,
                 five_hour_pct: 0.0,
                 five_hour_resets: "N/A".into(),
                 five_hour_label: "5-hour window".into(),
@@ -1444,35 +1686,14 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
             })
         }
         Provider::Codex => {
-            let sessions = match &data.sessions {
-                ActiveSessions::Codex(sessions) => sessions,
-                _ => {
-                    return Some(RateLimitInfo {
-                        provider: Provider::Codex.as_str().to_string(),
-                        five_hour_pct: 0.0,
-                        five_hour_resets: "N/A".into(),
-                        five_hour_label: "5h Window".into(),
-                        five_hour_window_minutes: None,
-                        seven_day_pct: 0.0,
-                        seven_day_resets: "N/A".into(),
-                        seven_day_label: "7d Window".into(),
-                        seven_day_window_minutes: None,
-                        sonnet_pct: None,
-                        sonnet_resets: None,
-                        extra_enabled: false,
-                        extra_limit: None,
-                        extra_used: None,
-                        extra_pct: None,
-                        source: "no codex telemetry yet".into(),
-                    });
-                }
-            };
-            if let Some(selected) = codex_session::latest_limits_source(sessions)
+            let usage = data.codex_usage.clone();
+            if let Some(selected) = data.codex_limits.as_ref()
                 && let Some(primary) = selected.limits.primary.as_ref()
             {
                 let secondary = selected.limits.secondary.as_ref();
                 return Some(RateLimitInfo {
                     provider: Provider::Codex.as_str().to_string(),
+                    usage,
                     five_hour_pct: primary.used_percent,
                     five_hour_resets: primary.resets_at.map_or("N/A".into(), |d| d.to_rfc3339()),
                     five_hour_label: format_codex_window_label(
@@ -1500,6 +1721,7 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
             }
             Some(RateLimitInfo {
                 provider: Provider::Codex.as_str().to_string(),
+                usage,
                 five_hour_pct: 0.0,
                 five_hour_resets: "N/A".into(),
                 five_hour_label: "5h Window".into(),
@@ -2982,7 +3204,7 @@ mod tests {
     use super::{
         build_claude_context_breakdown, build_claude_session_infos, build_codex_discord_preview,
         build_codex_session_infos, codex_plan_key_from_tier, codex_total_input_tokens,
-        plan_key_from_override,
+        plan_key_from_override, semantic_snapshot_fingerprint,
     };
     use cc_discord_presence::codex::config::{
         DesktopPresenceDesign, DisplayConfig, OpenAiPlanMode,
@@ -3001,6 +3223,56 @@ mod tests {
     use cc_discord_presence::session::{ClaudeSessionSnapshot, DataSource, ReasoningEffort, Speed};
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn snapshot_fingerprint_ignores_wall_clock_fields_but_not_telemetry() {
+        let first = serde_json::json!({
+            "health": {"uptime_seconds": 10, "status": "ok"},
+            "discord_preview": {"duration_secs": 10, "state": "7d 96%"},
+            "sessions": [{"duration_secs": 10, "tokens_per_sec": 4.5, "tokens": 100}]
+        });
+        let second = serde_json::json!({
+            "health": {"uptime_seconds": 15, "status": "ok"},
+            "discord_preview": {"duration_secs": 15, "state": "7d 96%"},
+            "sessions": [{"duration_secs": 15, "tokens_per_sec": 3.0, "tokens": 100}]
+        });
+        let changed = serde_json::json!({
+            "health": {"uptime_seconds": 15, "status": "ok"},
+            "discord_preview": {"duration_secs": 15, "state": "7d 95%"},
+            "sessions": [{"duration_secs": 15, "tokens_per_sec": 3.0, "tokens": 101}]
+        });
+
+        assert_eq!(
+            semantic_snapshot_fingerprint(first),
+            semantic_snapshot_fingerprint(second)
+        );
+        assert_ne!(
+            semantic_snapshot_fingerprint(serde_json::json!({
+                "health": {"uptime_seconds": 15, "status": "ok"},
+                "discord_preview": {"duration_secs": 15, "state": "7d 96%"},
+                "sessions": [{"duration_secs": 15, "tokens_per_sec": 3.0, "tokens": 100}]
+            })),
+            semantic_snapshot_fingerprint(changed)
+        );
+    }
+
+    #[test]
+    fn usage_snapshot_transport_uses_public_scope_labels() {
+        let snapshot = codex_presence_core::UsageSnapshot {
+            provider: "codex".to_string(),
+            scopes: vec![codex_presence_core::QuotaScope {
+                id: Some("codex".to_string()),
+                name: None,
+                kind: codex_presence_core::RateLimitScope::GlobalCodex,
+                windows: Vec::new(),
+            }],
+            credits: None,
+            observed_at: None,
+            source: "fixture".to_string(),
+        };
+        let value = serde_json::to_value(snapshot).expect("usage snapshot JSON");
+        assert_eq!(value["scopes"][0]["kind"], "global");
+    }
 
     fn sample_claude_snapshot(model_id: &str) -> ClaudeSessionSnapshot {
         ClaudeSessionSnapshot {
@@ -3067,8 +3339,10 @@ mod tests {
             std::env::set_var("CODEX_HOME", &codex_home);
         }
 
-        super::set_discord_display_prefs(true, false, true, true, true, true, false, false, true)
-            .expect("save display preferences");
+        super::set_discord_display_prefs(
+            true, false, true, true, true, true, false, true, false, true,
+        )
+        .expect("save display preferences");
         super::set_active_provider("codex".to_string());
         let settings = super::set_discord_enabled(false).expect("disable Codex presence");
 
@@ -3081,6 +3355,7 @@ mod tests {
         assert!(codex.privacy.show_cost);
         assert!(!claude.privacy.show_limits);
         assert!(!codex.privacy.show_limits);
+        assert!(codex.privacy.show_credits);
         assert!(!claude.privacy.show_context);
         assert!(!codex.privacy.show_context);
         assert!(claude.privacy.show_systems);
@@ -3179,6 +3454,7 @@ mod tests {
                 show_tokens: true,
                 show_cost: true,
                 show_limits: false,
+                show_credits: false,
                 show_context: false,
                 show_systems: true,
             },

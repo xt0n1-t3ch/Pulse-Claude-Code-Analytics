@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result, bail};
@@ -13,8 +14,9 @@ use cc_discord_presence::cost;
 use cc_discord_presence::provider::Provider;
 
 static DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
+static WRITES_SINCE_CHECKPOINT: AtomicUsize = AtomicUsize::new(0);
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 fn context_label_tokens(label: &str) -> Option<i64> {
     let normalized = label
@@ -134,7 +136,7 @@ fn create_migration_backup(conn: &Connection, path: &Path) -> Result<Option<Path
         conn.execute("VACUUM INTO ?1", params![backup_file])
             .with_context(|| {
                 format!(
-                    "failed to create pre-v4 migration backup {}",
+                    "failed to create pre-v5 migration backup {}",
                     backup_path.display()
                 )
             })?;
@@ -336,7 +338,9 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
     )?;
 
     backfill_context_windows(&transaction)?;
-    if previous_version < SCHEMA_VERSION {
+    // These provenance repairs belong to the v4 migration. A v4 -> v5 upgrade
+    // only adds the provider/history index and must not relabel valid rows.
+    if previous_version < 4 {
         transaction.execute(
             "UPDATE sessions
              SET provider = 'claude'
@@ -412,6 +416,8 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
         CREATE INDEX IF NOT EXISTS idx_sessions_history_ts
             ON sessions(COALESCE(started_at, created_at, updated_at));
+        CREATE INDEX IF NOT EXISTS idx_sessions_provider_history_ts
+            ON sessions(provider, COALESCE(started_at, created_at, updated_at) DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_stats_provider_key
             ON daily_stats(provider, date, project, model);
 
@@ -859,7 +865,30 @@ pub fn mark_inactive(provider: &str, active_ids: &[String]) {
     let _ = stmt.execute(refs.as_slice());
 }
 
-pub fn update_daily_stats(_session: &super::commands::SessionInfo) {}
+pub fn checkpoint_wal_after_writes(changed_count: usize) {
+    const CHECKPOINT_INTERVAL: usize = 256;
+    if changed_count == 0 {
+        return;
+    }
+    let pending =
+        WRITES_SINCE_CHECKPOINT.fetch_add(changed_count, Ordering::Relaxed) + changed_count;
+    if pending < CHECKPOINT_INTERVAL {
+        return;
+    }
+    let Ok(conn) = db().lock() else { return };
+    if conn
+        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .is_ok()
+    {
+        WRITES_SINCE_CHECKPOINT.store(0, Ordering::Relaxed);
+    }
+}
 
 pub fn get_session_history(
     days: Option<i64>,
@@ -1803,7 +1832,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_v3_to_v4_preserves_rollback_table_and_marks_legacy_codex_unknown() {
+    fn migration_v3_to_v5_preserves_rollback_table_and_adds_history_index() {
         let conn = Connection::open_in_memory().expect("in-memory sqlite");
         create_v3_schema(&conn);
 
@@ -1834,7 +1863,16 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
+
+        let provider_history_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_index_list('sessions') WHERE name = 'idx_sessions_provider_history_ts'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read provider history index");
+        assert_eq!(provider_history_index, 1);
 
         let columns = {
             let mut stmt = conn
@@ -1926,6 +1964,52 @@ mod tests {
     }
 
     #[test]
+    fn migration_v4_to_v5_only_adds_index_and_preserves_provenance() {
+        let conn = test_conn();
+        conn.execute_batch(
+            "DROP INDEX idx_sessions_provider_history_ts;
+             PRAGMA user_version = 4;",
+        )
+        .expect("prepare v4 database");
+        conn.execute(
+            "INSERT INTO sessions (
+                id, provider, project, model, updated_at, total_cost,
+                cost_status, cost_source, known_cost, context_source
+             ) VALUES (
+                'v4-codex', 'codex', 'repo', 'GPT-5.6 Sol',
+                '2026-07-16T12:00:00+00:00', 12.5,
+                'exact', 'session', 12.5, 'event'
+             )",
+            [],
+        )
+        .expect("insert v4 row");
+
+        init_schema(&conn).expect("migrate v4 to v5");
+
+        let provenance: (String, String, Option<f64>, String) = conn
+            .query_row(
+                "SELECT cost_status, cost_source, known_cost, context_source
+                 FROM sessions WHERE id = 'v4-codex'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read migrated provenance");
+        assert_eq!(
+            provenance,
+            (
+                "exact".to_string(),
+                "session".to_string(),
+                Some(12.5),
+                "event".to_string()
+            )
+        );
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read user_version");
+        assert_eq!(version, 5);
+    }
+
+    #[test]
     fn file_migration_creates_valid_v3_backup_once_before_schema_mutation() {
         let path = temporary_database_path("v3-backup");
         {
@@ -1967,7 +2051,7 @@ mod tests {
             )
             .expect("backup schema columns");
         assert!(!backup_has_speed);
-        assert_eq!(schema_version(&migrated).expect("live schema version"), 4);
+        assert_eq!(schema_version(&migrated).expect("live schema version"), 5);
 
         drop(backup);
         drop(migrated);

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { get } from "svelte/store";
+import { listen } from "@tauri-apps/api/event";
 import type {
   HealthResponse,
   MetricsResponse,
@@ -83,6 +84,21 @@ const liveSessions = [makeSession("s1", "pulse"), makeSession("s2", "other")];
 
 const rateLimitInfo: RateLimitInfo = {
   provider: "claude",
+  usage: {
+    provider: "claude",
+    scopes: [{
+      id: "global",
+      name: "Claude account",
+      kind: "other",
+      windows: [
+        { window_minutes: 300, used_percent: 40, remaining_percent: 60, resets_at: "2026-05-28T18:00:00Z" },
+        { window_minutes: 10080, used_percent: 55, remaining_percent: 45, resets_at: "2026-06-01T00:00:00Z" },
+      ],
+    }],
+    credits: null,
+    observed_at: "2026-05-28T12:00:00Z",
+    source: "Anthropic usage API",
+  },
   five_hour_pct: 40,
   five_hour_resets: "2026-05-28T18:00:00Z",
   five_hour_label: "5-hour window",
@@ -102,6 +118,7 @@ const rateLimitInfo: RateLimitInfo = {
 
 const planInfoFixture: PlanInfo = {
   provider: "claude",
+  plan_key: "max_20x",
   plan_name: "Max 20x ($200/mo)",
   detected: true,
 };
@@ -179,11 +196,36 @@ const getDiscordPreview = vi.fn(async () => ({
 }));
 const getRateLimits = vi.fn(async () => rateLimitInfo);
 const getPlanInfo = vi.fn(async () => planInfoFixture);
+const getAppSnapshot = vi.fn(async () => ({
+  revision: 1,
+  health,
+  metrics,
+  sessions: liveSessions,
+  rate_limits: rateLimitInfo,
+  discord_preview: await getDiscordPreview(),
+  discord_settings: {
+    provider: "claude",
+    enabled: true,
+    status: "Connected",
+    publisher: "pulse",
+    display_prefs: {
+      show_project: true, show_branch: true, show_model: true, show_activity: true,
+      show_tokens: false, show_cost: false, show_limits: true, show_credits: false,
+      show_context: true, show_systems: true,
+    },
+    desktop_design: null,
+    supports_desktop_design: false,
+    supports_field_order: false,
+    field_order: [],
+  },
+  plan: planInfoFixture,
+}));
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    getAppSnapshot: () => getAppSnapshot(),
     getHealth: () => getHealth(),
     getMetrics: () => getMetrics(),
     getLiveSessions: () => getLiveSessions(),
@@ -207,7 +249,9 @@ describe("poll() to stores to Dashboard full flow", () => {
     getDiscordPreview.mockClear();
     getRateLimits.mockClear();
     getPlanInfo.mockClear();
+    getAppSnapshot.mockClear();
     const { health: h, metrics: m, sessions: s, discordPresencePreview: dp, rateLimits: r, planInfo: p } = await import("@/lib/stores");
+    (await import("@/lib/stores")).stopSnapshotSync();
     h.set(null);
     m.set(null);
     s.set([]);
@@ -223,12 +267,13 @@ describe("poll() to stores to Dashboard full flow", () => {
     const stores = await import("@/lib/stores");
     await stores.poll();
 
-    expect(getHealth).toHaveBeenCalledTimes(1);
-    expect(getMetrics).toHaveBeenCalledTimes(1);
-    expect(getLiveSessions).toHaveBeenCalledTimes(1);
+    expect(getAppSnapshot).toHaveBeenCalledTimes(1);
+    expect(getHealth).not.toHaveBeenCalled();
+    expect(getMetrics).not.toHaveBeenCalled();
+    expect(getLiveSessions).not.toHaveBeenCalled();
     expect(getDiscordPreview).toHaveBeenCalledTimes(1);
-    expect(getRateLimits).toHaveBeenCalledTimes(1);
-    expect(getPlanInfo).toHaveBeenCalledTimes(1);
+    expect(getRateLimits).not.toHaveBeenCalled();
+    expect(getPlanInfo).not.toHaveBeenCalled();
 
     expect(get(stores.health)).toEqual(health);
     expect(get(stores.metrics)).toEqual(metrics);
@@ -237,6 +282,48 @@ describe("poll() to stores to Dashboard full flow", () => {
     expect(get(stores.rateLimits)).toEqual(rateLimitInfo);
     expect(get(stores.planInfo)).toEqual(planInfoFixture);
     expect(get(stores.activeSessions)).toHaveLength(2);
+  });
+
+  it("attaches the snapshot listener before initial hydration", async () => {
+    const order: string[] = [];
+    vi.mocked(listen).mockImplementationOnce(async () => {
+      order.push("listen");
+      return () => undefined;
+    });
+    getAppSnapshot.mockImplementationOnce(async () => {
+      order.push("snapshot");
+      return {
+        revision: 1,
+        health,
+        metrics,
+        sessions: liveSessions,
+        rate_limits: rateLimitInfo,
+        discord_preview: await getDiscordPreview(),
+        discord_settings: {
+          provider: "claude",
+          enabled: true,
+          status: "Connected",
+          publisher: "pulse",
+          display_prefs: {
+            show_project: true, show_branch: true, show_model: true, show_activity: true,
+            show_tokens: false, show_cost: false, show_limits: true, show_credits: false,
+            show_context: true, show_systems: true,
+          },
+          desktop_design: null,
+          supports_desktop_design: false,
+          supports_field_order: false,
+          field_order: [],
+        },
+        plan: planInfoFixture,
+      };
+    });
+    const stores = await import("@/lib/stores");
+
+    stores.startSnapshotSync();
+    await waitFor(() => expect(getAppSnapshot).toHaveBeenCalledTimes(1));
+
+    expect(order).toEqual(["listen", "snapshot"]);
+    stores.stopSnapshotSync();
   });
 
   it("renders the Dashboard against the polled store state end to end", async () => {

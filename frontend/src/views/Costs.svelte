@@ -16,6 +16,10 @@
   let editingBudget = $state(false);
   let budgetInput = $state("");
 
+  function themeColor(token: string): string {
+    return getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  }
+
   const costColumns: ExportColumn[] = [
     { key: "project", label: "Project", enabled: true },
     { key: "model", label: "Model", enabled: true },
@@ -118,10 +122,10 @@
 
   let costChartConfig: ChartConfiguration = {
     type: "bar",
-    data: { labels: [], datasets: [{ data: [], backgroundColor: "#f5f5f5", borderRadius: 6, maxBarThickness: 40 }] },
+    data: { labels: [], datasets: [{ data: [], backgroundColor: () => themeColor("--chart-1"), borderRadius: 6, maxBarThickness: 40 }] },
     options: {
       responsive: true, maintainAspectRatio: false, indexAxis: "y",
-      scales: { x: { grid: { color: "rgba(255,255,255,0.06)" }, ticks: { callback: (v: any) => "$" + Number(v).toFixed(2), maxTicksLimit: 6 } }, y: { grid: { display: false } } },
+      scales: { x: { grid: { color: () => themeColor("--border") }, ticks: { callback: (v: any) => "$" + Number(v).toFixed(2), maxTicksLimit: 6 } }, y: { grid: { display: false } } },
       plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c: any) => fmtCost(c.raw as number) } } },
     },
   };
@@ -321,17 +325,17 @@
   .cost-type-bar { display: flex; height: 12px; border-radius: 99px; overflow: hidden; background: var(--bg-elevated); margin-bottom: 14px; }
   .cost-seg { height: 100%; transition: width 0.4s var(--ease); }
   .cost-seg.input { background: var(--info); }
-  .cost-seg.output { background: #7cb9e8; }
-  .cost-seg.cache-w { background: #77dd77; }
-  .cost-seg.cache-r { background: #c3b1e1; }
+  .cost-seg.output { background: var(--token-output); }
+  .cost-seg.cache-w { background: var(--token-cache-write); }
+  .cost-seg.cache-r { background: var(--token-cache-read); }
 
   .cost-type-legend { display: flex; flex-direction: column; gap: 6px; }
   .ct-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .dot.input { background: var(--info); }
-  .dot.output { background: #7cb9e8; }
-  .dot.cache-w { background: #77dd77; }
-  .dot.cache-r { background: #c3b1e1; }
+  .dot.output { background: var(--token-output); }
+  .dot.cache-w { background: var(--token-cache-write); }
+  .dot.cache-r { background: var(--token-cache-read); }
   .ct-label { flex: 1; color: var(--text-secondary); }
   .ct-val { font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
@@ -394,4 +398,20 @@
   .budget-save-btn:hover { opacity: 0.9; transform: translateY(-1px); }
   .budget-cancel-btn { font-size: 11px; font-weight: 500; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 14px; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease; }
   .budget-cancel-btn:hover { color: var(--text-primary); border-color: var(--border-hover); }
+
+  .card { min-width: 0; }
+  .detail-table { overflow-x: auto; overscroll-behavior-inline: contain; }
+  .dt-header, .dt-row { min-width: 760px; }
+
+  @media (max-width: 1050px) {
+    .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .charts-row, .budget-forecast-row { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 620px) {
+    .stats-row, .forecast-grid { grid-template-columns: 1fr; }
+    .card { padding: 14px; }
+    .budget-empty { align-items: flex-start; flex-direction: column; }
+    .budget-edit { flex-wrap: wrap; }
+  }
 </style>

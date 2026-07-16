@@ -1,6 +1,6 @@
 [package]
 name = "pulse"
-version = "1.5.3"
+version = "1.6.0"
 edition = "2024"
 description = "Pulse — Codex & Claude analytics"
 license = "Apache-2.0"
@@ -10,6 +10,7 @@ authors = ["xt0n1-t3ch"]
 
 [dependencies]
 cc-discord-presence = { path = ".." }
+codex-presence-core = { path = "../../codex-rp-v1-8/crates/codex-presence-core", version = "1.0.0" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

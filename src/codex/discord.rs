@@ -6,6 +6,11 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::time::{Duration, Instant, SystemTime};
 
+use codex_presence_core::{
+    PresenceFieldId, PresenceValues, compose_presence, format_window_label,
+    select_session_envelope_global_first,
+};
+
 use crate::codex::config::{DesktopPresenceDesign, PresenceConfig, PresenceSurface};
 use crate::codex::cost::format_presentable_cost;
 use crate::codex::model::format_model_display;
@@ -640,41 +645,24 @@ fn presence_lines(
         return ("Using Codex".to_string(), "In a coding session".to_string());
     }
 
-    let project_label = if config.privacy.show_project_name {
-        if config.privacy.show_git_branch {
-            if let Some(branch) = &session.git_branch {
-                format!("{} ({branch})", session.project_name)
-            } else {
-                session.project_name.clone()
-            }
-        } else {
-            session.project_name.clone()
-        }
-    } else {
-        "private project".to_string()
-    };
-
-    let details = if config.privacy.show_activity {
-        if let Some(activity) = &session.activity {
-            format!(
-                "{} - {}",
-                activity.to_text(config.privacy.show_activity_target),
-                project_label
-            )
-        } else if config.privacy.show_project_name {
-            format!("In {}", project_label)
-        } else {
-            "Coding session".to_string()
-        }
-    } else if config.privacy.show_project_name {
-        format!("In {}", project_label)
-    } else {
-        "Coding session".to_string()
-    };
-
     let limits = effective_limits.unwrap_or(&session.limits);
-
-    let mut state_parts: Vec<String> = Vec::new();
+    let mut values = PresenceValues::default();
+    if config.privacy.show_activity
+        && let Some(activity) = &session.activity
+    {
+        values.insert(
+            PresenceFieldId::Activity,
+            activity.to_text(config.privacy.show_activity_target),
+        );
+    }
+    if config.privacy.show_project_name {
+        values.insert(PresenceFieldId::Project, session.project_name.clone());
+    }
+    if config.privacy.show_git_branch
+        && let Some(branch) = &session.git_branch
+    {
+        values.insert(PresenceFieldId::Branch, branch.clone());
+    }
     if config.privacy.show_model
         && let Some(model) = &session.model
     {
@@ -687,33 +675,59 @@ fn presence_lines(
             ),
             resolved_plan.label(config.openai_plan.show_price)
         );
-        state_parts.push(truncate_for_limit(&label, 68));
+        values.insert(PresenceFieldId::Model, truncate_for_limit(&label, 68));
     }
     if config.privacy.show_cost
         && let Some(cost) = format_presentable_cost(session.known_cost_usd, session.pricing_status)
     {
-        state_parts.push(cost);
+        values.insert(PresenceFieldId::Cost, cost);
     }
-    if let Some(usage) = usage_state_part(
-        session,
-        config.privacy.show_tokens,
-        config.privacy.show_context,
-    ) {
-        state_parts.push(usage);
+    if config.privacy.show_tokens
+        && let Some(tokens) = token_state_part(session)
+    {
+        values.insert(PresenceFieldId::Tokens, tokens);
+    }
+    if config.privacy.show_context
+        && let Some(context) = context_state_part(session)
+    {
+        values.insert(PresenceFieldId::Context, context);
     }
     if config.privacy.show_limits
         && let Some(limits_part) = limits_state_part(limits)
     {
-        state_parts.push(limits_part);
+        values.insert(PresenceFieldId::Quotas, limits_part);
+    }
+    if config.privacy.show_credits
+        && let Some(credits) = select_session_envelope_global_first(&session.rate_limit_envelopes)
+            .and_then(|envelope| envelope.credits)
+        && let Some(credits_part) = credit_state_part(&credits)
+    {
+        values.insert(PresenceFieldId::Credits, credits_part);
+    }
+
+    let mut layout = config.display.presence_layout.clone();
+    for item in &mut layout.fields {
+        item.enabled = match item.field {
+            PresenceFieldId::Project => config.privacy.show_project_name,
+            PresenceFieldId::Branch => config.privacy.show_git_branch,
+            PresenceFieldId::Model => config.privacy.show_model,
+            PresenceFieldId::Activity => config.privacy.show_activity,
+            PresenceFieldId::Tokens => config.privacy.show_tokens,
+            PresenceFieldId::Cost => config.privacy.show_cost,
+            PresenceFieldId::Quotas => config.privacy.show_limits,
+            PresenceFieldId::Credits => config.privacy.show_credits,
+            PresenceFieldId::Context => config.privacy.show_context,
+            PresenceFieldId::Systems => config.privacy.show_systems,
+        };
     }
 
     let fallback = if config.privacy.show_project_name {
-        project_label.as_str()
+        session.project_name.as_str()
     } else {
-        "Codex session"
+        "Coding session"
     };
-    let state = compact_join_prioritized(&state_parts, 128, fallback, " • ");
-    (truncate_for_limit(&details, 128), state)
+    let lines = compose_presence(&layout, &values, fallback, "Codex session");
+    (lines.details, lines.state)
 }
 
 fn token_state_part(session: &CodexSessionSnapshot) -> Option<String> {
@@ -743,17 +757,21 @@ fn context_state_part(session: &CodexSessionSnapshot) -> Option<String> {
     ))
 }
 
-fn usage_state_part(
-    session: &CodexSessionSnapshot,
-    show_tokens: bool,
-    show_context: bool,
-) -> Option<String> {
+fn limits_state_part(limits: &RateLimits) -> Option<String> {
     let mut parts = Vec::new();
-    if show_tokens && let Some(tokens) = token_state_part(session) {
-        parts.push(tokens);
+    if let Some(primary) = &limits.primary {
+        parts.push(format!(
+            "{} {:.0}%",
+            format_window_label(primary.window_minutes),
+            primary.remaining_percent
+        ));
     }
-    if show_context && let Some(context) = context_state_part(session) {
-        parts.push(context);
+    if let Some(secondary) = &limits.secondary {
+        parts.push(format!(
+            "{} {:.0}%",
+            format_window_label(secondary.window_minutes),
+            secondary.remaining_percent
+        ));
     }
     if parts.is_empty() {
         None
@@ -762,18 +780,38 @@ fn usage_state_part(
     }
 }
 
-fn limits_state_part(limits: &RateLimits) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(primary) = &limits.primary {
-        parts.push(format!("5h {:.0}%", primary.remaining_percent));
+fn credit_state_part(credits: &codex_presence_core::CreditBalance) -> Option<String> {
+    if credits.unlimited {
+        return Some("Credits Unlimited".to_string());
     }
-    if let Some(secondary) = &limits.secondary {
-        parts.push(format!("7d {:.0}%", secondary.remaining_percent));
+    credits
+        .balance
+        .as_deref()
+        .map(format_credit_balance)
+        .map(|balance| format!("Credits {balance}"))
+}
+
+fn format_credit_balance(value: &str) -> String {
+    let (integer, decimal) = value
+        .split_once('.')
+        .map_or((value, None), |(left, right)| (left, Some(right)));
+    let (sign, digits) = integer
+        .strip_prefix('-')
+        .map_or(("", integer), |digits| ("-", digits));
+    if !digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return value.to_string();
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(" • "))
+    let mut grouped = String::new();
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    let integer: String = grouped.chars().rev().collect();
+    match decimal {
+        Some(decimal) if !decimal.is_empty() => format!("{sign}{integer}.{decimal}"),
+        _ => format!("{sign}{integer}"),
     }
 }
 
@@ -884,6 +922,7 @@ fn parse_discord_asset_keys(body: &str) -> Result<HashSet<String>> {
         .collect())
 }
 
+#[cfg(test)]
 fn compact_join_prioritized(
     parts: &[String],
     max: usize,
@@ -941,6 +980,7 @@ mod tests {
     use crate::codex::telemetry::plan::{DetectedPlanSource, DetectedPlanTier, ResolvedPlan};
     use crate::codex::telemetry::service_tier::ServiceTier;
     use chrono::TimeZone;
+    use codex_presence_core::{CreditBalance, RateLimitEnvelope, RateLimitScope};
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 
@@ -1180,6 +1220,45 @@ mod tests {
     }
 
     #[test]
+    fn weekly_only_presence_never_invents_five_hour_and_shows_credits() {
+        let mut session = sample_session();
+        session.limits = RateLimits {
+            primary: Some(UsageWindow {
+                used_percent: 4.0,
+                remaining_percent: 96.0,
+                window_minutes: 10_080,
+                resets_at: None,
+            }),
+            secondary: None,
+        };
+        session.rate_limit_envelopes = vec![RateLimitEnvelope {
+            limit_id: Some("codex".to_string()),
+            limit_name: None,
+            plan_type: Some("pro".to_string()),
+            observed_at: None,
+            scope: RateLimitScope::GlobalCodex,
+            limits: session.limits.clone(),
+            credits: Some(CreditBalance {
+                balance: Some("2500".to_string()),
+                has_credits: true,
+                unlimited: false,
+            }),
+        }];
+
+        let (_, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &resolved_plan_pro(),
+            &resolved_service_tier(false),
+            &PresenceConfig::default(),
+        );
+
+        assert!(state.contains("7d 96%"), "{state}");
+        assert!(state.contains("Credits 2,500"), "{state}");
+        assert!(!state.contains("5h"), "{state}");
+    }
+
+    #[test]
     fn state_keeps_priority_when_length_is_limited() {
         let mut session = sample_session();
         session.model = Some("gpt-5.3-codex-ultra-long-variant-name-for-tests".to_string());
@@ -1200,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn details_use_activity_dash_project_format() {
+    fn details_follow_the_ordered_composer() {
         let mut session = sample_session();
         session.activity = Some(crate::codex::session::SessionActivitySnapshot {
             kind: crate::codex::session::SessionActivityKind::RunningCommand,
@@ -1223,7 +1302,7 @@ mod tests {
         );
         assert_eq!(
             details,
-            "Running command rg --files - project-alpha (feature/main)"
+            "Running command rg --files · project-alpha · feature/main"
         );
     }
 
@@ -1284,7 +1363,7 @@ mod tests {
             &service_tier,
             &config,
         );
-        assert!(state.contains("GPT-5.6 Sol · Max · Fast | Pro 20x ($200/month)"));
+        assert!(state.contains("GPT-5.6 Sol · Max · ⚡ Fast | Pro 20x ($200/month)"));
     }
 
     #[test]

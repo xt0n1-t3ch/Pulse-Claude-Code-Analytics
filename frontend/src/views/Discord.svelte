@@ -20,6 +20,7 @@
     setCodexDesktopDesign,
     setDiscordDisplayPrefs,
     setDiscordEnabled,
+    setDiscordFieldOrder,
   } from "../lib/api";
   import type { SessionInfo } from "../lib/api";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
@@ -82,9 +83,9 @@
 
   type Preset = "minimal" | "standard" | "full";
   const presets: Record<Preset, typeof $discordPreview> = {
-    minimal: { showProject: true, showBranch: false, showModel: false, showActivity: false, showTokens: false, showCost: false, showLimits: false, showContext: false, showSystems: false },
-    standard: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: false, showCost: false, showLimits: true, showContext: true, showSystems: true },
-    full: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: true, showCost: true, showLimits: true, showContext: true, showSystems: true },
+    minimal: { showProject: true, showBranch: false, showModel: false, showActivity: false, showTokens: false, showCost: false, showLimits: false, showCredits: false, showContext: false, showSystems: false },
+    standard: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: false, showCost: false, showLimits: true, showCredits: true, showContext: true, showSystems: true },
+    full: { showProject: true, showBranch: true, showModel: true, showActivity: true, showTokens: true, showCost: true, showLimits: true, showCredits: true, showContext: true, showSystems: true },
   };
   const presetOrder: Preset[] = ["minimal", "standard", "full"];
 
@@ -173,6 +174,10 @@
       const limitLine = sessionLimitPart();
       if (limitLine) parts.push(limitLine);
     }
+    if (s.showCredits) {
+      const creditLine = creditsPart();
+      if (creditLine) parts.push(creditLine);
+    }
     return parts.join(" · ") || "Idle";
   });
 
@@ -194,28 +199,71 @@
   }
 
   function sessionLimitPart(): string | null {
-    if (!$rateLimits) return null;
-    const parts: string[] = [];
-    if ($rateLimits.five_hour_pct > 0) {
-      parts.push(`5h ${Math.max(0, 100 - $rateLimits.five_hour_pct).toFixed(0)}%`);
-    }
-    if ($rateLimits.seven_day_pct > 0) {
-      parts.push(`7d ${Math.max(0, 100 - $rateLimits.seven_day_pct).toFixed(0)}%`);
-    }
-    return parts.join(" • ") || null;
+    const usage = $rateLimits?.usage;
+    if (!usage) return null;
+    return usage.scopes
+      .flatMap((scope) => scope.windows.map((window) => `${windowLabel(window.window_minutes)} ${window.remaining_percent.toFixed(0)}%`))
+      .join(" • ") || null;
+  }
+
+  function windowLabel(minutes: number): string {
+    if (minutes === 300) return "5h";
+    if (minutes === 1440) return "24h";
+    if (minutes === 10080) return "7d";
+    if (minutes > 0 && minutes % 1440 === 0) return `${minutes / 1440}d`;
+    if (minutes > 0 && minutes % 60 === 0) return `${minutes / 60}h`;
+    return `${minutes}m`;
+  }
+
+  function creditsPart(): string | null {
+    const credits = $rateLimits?.usage?.credits;
+    if (!credits) return null;
+    if (credits.unlimited) return "Credits Unlimited";
+    if (credits.balance == null) return null;
+    const numeric = Number(credits.balance);
+    const display = Number.isFinite(numeric) ? numeric.toLocaleString() : credits.balance;
+    return `Credits ${display}`;
   }
 
   const fieldRows = [
-    { key: "showProject",  label: "Project name",  hint: "Repository or folder name." },
-    { key: "showBranch",   label: "Git branch",    hint: "Current checked-out ref." },
-    { key: "showModel",    label: "Model",         hint: "Active model identifier." },
-    { key: "showActivity", label: "Activity",      hint: "What Pulse thinks you're doing." },
-    { key: "showTokens",   label: "Token count",   hint: "Cumulative tokens this session." },
-    { key: "showCost",     label: "Cost",          hint: "Running USD total for the session." },
-    { key: "showLimits",   label: "Session limits", hint: "5-hour and weekly remaining percentages." },
-    { key: "showContext",  label: "Context usage", hint: "Current context-window fill percentage." },
-    { key: "showSystems",  label: "Systems",       hint: "Safe workflow and agent signals." },
+    { id: "project", key: "showProject",  label: "Project name",  hint: "Repository or folder name." },
+    { id: "branch", key: "showBranch",   label: "Git branch",    hint: "Current checked-out ref." },
+    { id: "model", key: "showModel",    label: "Model",         hint: "Active model identifier." },
+    { id: "activity", key: "showActivity", label: "Activity",      hint: "What Pulse thinks you're doing." },
+    { id: "tokens", key: "showTokens",   label: "Token count",   hint: "Cumulative tokens this session." },
+    { id: "cost", key: "showCost",     label: "Cost",          hint: "Running USD total for the session." },
+    { id: "quotas", key: "showLimits",   label: "Usage quotas", hint: "Only quota windows actually reported by the provider." },
+    { id: "credits", key: "showCredits", label: "Credits available", hint: "Real Codex account credit balance when available." },
+    { id: "context", key: "showContext",  label: "Context usage", hint: "Current context-window fill percentage." },
+    { id: "systems", key: "showSystems",  label: "Systems",       hint: "Safe workflow and agent signals." },
   ] as const;
+  type FieldId = (typeof fieldRows)[number]["id"];
+
+  let orderedFieldRows = $derived.by(() => {
+    const rank = new Map(($discordSettings?.field_order ?? []).map((id, index) => [id, index]));
+    return [...fieldRows].sort((a, b) => (rank.get(a.id) ?? 999) - (rank.get(b.id) ?? 999));
+  });
+
+  async function moveField(id: FieldId, offset: -1 | 1): Promise<void> {
+    if (settingsPending || !$discordSettings?.supports_field_order) return;
+    const order = orderedFieldRows.map((row) => row.id);
+    const index = order.indexOf(id);
+    const next = index + offset;
+    if (index < 0 || next < 0 || next >= order.length) return;
+    [order[index], order[next]] = [order[next], order[index]];
+    const previous = $discordSettings;
+    applyDiscordSettings({ ...previous, field_order: order });
+    settingsPending = true;
+    try {
+      applyDiscordSettings(await setDiscordFieldOrder(order));
+      await refreshDiscordPresencePreview();
+    } catch (error) {
+      applyDiscordSettings(previous);
+      addToast(`Field order failed to save: ${String(error)}`, "danger", 5000);
+    } finally {
+      settingsPending = false;
+    }
+  }
 
   let activeCount = $derived.by(() => {
     const s = $discordPreview;
@@ -334,20 +382,26 @@
         <div class="cc-section-head cc-fields-head">
           <div class="cc-section-text">
             <h3 class="cc-section-title">Fields</h3>
-            <p class="cc-section-desc">Each toggle reflects in the preview instantly.</p>
+            <p class="cc-section-desc">Toggle visibility and reorder fields. The backend generates the exact preview.</p>
           </div>
           <span class="field-count">
             <span class="fc-num">{activeCount}</span><span class="fc-den">/{fieldRows.length}</span>
           </span>
         </div>
         <div class="field-grid">
-          {#each fieldRows as row}
-            <label class="field-cell" class:active={$discordPreview[row.key]}>
+          {#each orderedFieldRows as row, index (row.id)}
+            <div class="field-cell" class:active={$discordPreview[row.key]}>
               <div class="field-text">
                 <span class="field-label">{row.label}</span>
                 <span class="field-hint">{row.hint}</span>
               </div>
-              <span class="toggle">
+              {#if $discordSettings?.supports_field_order}
+                <div class="field-order" role="group" aria-label={`Reorder ${row.label}`}>
+                  <button type="button" aria-label={`Move ${row.label} up`} title="Move up" disabled={settingsPending || index === 0} onclick={() => moveField(row.id, -1)}>↑</button>
+                  <button type="button" aria-label={`Move ${row.label} down`} title="Move down" disabled={settingsPending || index === orderedFieldRows.length - 1} onclick={() => moveField(row.id, 1)}>↓</button>
+                </div>
+              {/if}
+              <label class="toggle" aria-label={`Show ${row.label}`}>
                 <input
                   type="checkbox"
                   checked={$discordPreview[row.key]}
@@ -355,8 +409,8 @@
                   onchange={() => toggleSetting(row.key)}
                 />
                 <span class="toggle-slider"></span>
-              </span>
-            </label>
+              </label>
+            </div>
           {/each}
         </div>
       </div>
@@ -504,6 +558,8 @@
   }
   @media (max-width: 960px) {
     .discord-layout { grid-template-columns: 1fr; }
+    .stage { grid-row: 1; position: static; }
+    .control-card { grid-row: 2; }
   }
 
   /* ── CONTROL CARD (flat, Dashboard-aligned) ── */
@@ -665,10 +721,9 @@
     border-top: 1px solid var(--border);
     border-left: 1px solid var(--border);
     min-height: 64px;
-    cursor: pointer;
     transition: background 0.15s var(--ease);
   }
-  .field-cell:hover { background: rgba(255, 255, 255, 0.015); }
+  .field-cell:hover { background: var(--bg-card-hover); }
   .field-cell:nth-child(-n+2) { border-top: none; }
   .field-cell:nth-child(2n+1) { border-left: none; }
   @media (max-width: 620px) {
@@ -687,6 +742,21 @@
     color: var(--text-muted);
     line-height: var(--lh-snug);
   }
+  .field-order {
+    display: inline-flex;
+    gap: 3px;
+    margin-left: auto;
+  }
+  .field-order button {
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    background: var(--bg-input);
+  }
+  .field-order button:hover:not(:disabled) { border-color: var(--border-hover); color: var(--text-primary); }
+  .field-order button:disabled { opacity: 0.35; cursor: default; }
 
   /* ── STAGE ── */
   .stage {
@@ -737,17 +807,13 @@
   /* ── Discord mock card — premium, Discord-faithful, editorial rhythm ── */
   .dp-profile {
     position: relative;
-    background: #1e1f22;
-    border: 1px solid rgba(255, 255, 255, 0.055);
+    background: var(--preview-bg);
+    border: 1px solid var(--preview-border);
     border-radius: 14px;
     overflow: hidden;
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.4),
-      0 1px 0 rgba(255, 255, 255, 0.035) inset,
-      0 20px 56px rgba(0, 0, 0, 0.6),
-      0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--preview-shadow);
   }
-  .dp-body { padding: 0 0 18px; color: #dbdee1; }
+  .dp-body { padding: 0 0 18px; color: var(--preview-text); }
 
   .dp-banner {
     height: 68px;
@@ -765,7 +831,7 @@
   .dp-banner-default {
     background:
       radial-gradient(120% 140% at 15% 0%, color-mix(in srgb, var(--provider-accent) 22%, transparent) 0%, transparent 62%),
-      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 14%, #1e1f22) 0%, #1e1f22 70%);
+      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 14%, var(--preview-bg)) 0%, var(--preview-bg) 70%);
   }
 
   .dp-avatar-ring {
@@ -778,8 +844,8 @@
     width: 80px;
     height: 80px;
     border-radius: 50%;
-    background: #2b2d31;
-    border: 6px solid #1e1f22;
+    background: var(--preview-surface);
+    border: 6px solid var(--preview-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -794,26 +860,26 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: #23a55a;
-    border: 5px solid #1e1f22;
+    background: var(--success);
+    border: 5px solid var(--preview-bg);
     transition: background 0.2s var(--ease);
   }
-  .dp-status-dot.offline { background: #80848e; }
+  .dp-status-dot.offline { background: var(--preview-faint); }
 
   .dp-username {
     padding: 10px 18px 0;
     font-size: 20px;
     font-weight: 700;
     letter-spacing: -0.015em;
-    color: #f2f3f5;
+    color: var(--preview-text);
     line-height: 1.2;
   }
-  .dp-tag { font-size: 14px; color: #b5bac1; font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+  .dp-tag { font-size: 14px; color: var(--preview-muted); font-weight: 500; margin-left: 4px; letter-spacing: 0; }
 
   .dp-separator {
     margin: 14px 18px 12px;
     height: 1px;
-    background: rgba(255, 255, 255, 0.065);
+    background: var(--preview-border);
   }
 
   .dp-section-title {
@@ -822,13 +888,13 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #b5bac1;
+    color: var(--preview-muted);
   }
 
   .dp-activity-card {
     margin: 0 14px;
-    background: #2b2d31;
-    border: 1px solid rgba(255, 255, 255, 0.035);
+    background: var(--preview-surface);
+    border: 1px solid var(--preview-border);
     border-radius: 8px;
     padding: 14px;
   }
@@ -837,7 +903,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #b5bac1;
+    color: var(--preview-muted);
     margin-bottom: 10px;
   }
   .dp-activity-body { display: flex; gap: 14px; align-items: flex-start; }
@@ -852,10 +918,8 @@
     height: 60px;
     border-radius: 10px;
     object-fit: cover;
-    background: #1e1f22;
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.35),
-      0 2px 6px rgba(0, 0, 0, 0.35);
+    background: var(--preview-bg);
+    box-shadow: var(--shadow-sm);
     -webkit-user-drag: none;
     user-select: none;
   }
@@ -867,9 +931,9 @@
     height: 24px;
     border-radius: 50%;
     object-fit: cover;
-    background: #2b2d31;
-    border: 2.5px solid #2b2d31;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    background: var(--preview-surface);
+    border: 2.5px solid var(--preview-surface);
+    box-shadow: var(--shadow-sm);
     -webkit-user-drag: none;
     user-select: none;
   }
@@ -885,13 +949,13 @@
     font-size: 15px;
     font-weight: 700;
     letter-spacing: -0.005em;
-    color: #f2f3f5;
+    color: var(--preview-text);
     line-height: 1.2;
   }
   .dp-activity-details,
   .dp-activity-state {
     font-size: 12.5px;
-    color: #b5bac1;
+    color: var(--preview-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -899,9 +963,21 @@
   }
   .dp-activity-elapsed {
     font-size: 11.5px;
-    color: #80848e;
+    color: var(--preview-faint);
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 760px) {
+    .view-header { gap: 12px; }
+    .header-meta { width: 100%; }
+    .cc-section-head { align-items: flex-start; flex-direction: column; padding: 14px; }
+    .cc-toggle-row { padding-inline: 14px; }
+    .field-grid { grid-template-columns: 1fr; }
+    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; padding: 12px 14px; }
+    .field-cell:first-child { border-top: none !important; }
+    .field-order button { width: 36px; height: 36px; }
+    .dp-activity-card { margin-inline: 10px; }
   }
 
 </style>

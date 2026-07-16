@@ -1,116 +1,35 @@
 {
-  "schema_version": 2,
-  "sync_version": 2,
+  "schema_version": 3,
   "repository": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
-  "ref": "v1.7.6",
-  "commit": "ba3ce636ffdf5c84754489713b742bf2b3c61add",
-  "upstream_committed_at": "2026-07-10T06:23:45-05:00",
-  "strategy": "namespace-rebase-v3-source-contracts",
-  "inventory": "model-catalog-v3",
-  "provenance": "official",
-  "contract_sha256": "7cfd9a6f1ab2cce958ac08fd9c2f28041bc06e00877c75fa70d8f99c7c98c58e",
-  "files": [
-    {
-      "source": "src/app.rs",
-      "target": "src/codex/app.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "ddb45fe3560d49397d25869c3e4ea0f5dd57b5087fad54f33203aa4c68c93907",
-      "target_sha256": "247ac6a6e4efcf22096081c120e5661458c1cd7fdcb4101b5cf16800f3800392"
-    },
-    {
-      "source": "src/config.rs",
-      "target": "src/codex/config.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "d1755695064fab07f7533c1c9735f7466a1b91b2347b266dcccb2c8225552114",
-      "target_sha256": "34bf0d5127267a29b3ec2387e540becee28535a8862762ad8199daed2cff6845"
-    },
-    {
-      "source": "src/cost.rs",
-      "target": "src/codex/cost.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "ba12e4e64a53d618a63395a30eb8a3a43fb086add681598cc008ca854d01f9ce",
-      "target_sha256": "145dd1f46257a0732326fd60da3e36216dd66dc9a82158a439160efdbafdb8a9"
-    },
-    {
-      "source": "src/discord.rs",
-      "target": "src/codex/discord.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "9cf9db528e3dce1d70a4839d053e329d93ecd8d5e0eb3a51b496739097bf4c53",
-      "target_sha256": "55ad0f84256b01870ab3e93e27cd3e14825fa9deb0e8dc15ed4ef9cdf6d4dffd"
-    },
-    {
-      "source": "src/model.rs",
-      "target": "src/codex/model.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "acd66ab2f99aa86a5f673db6946aa21eb959b70b5a7de6f9fb07c4ac4bb47d06",
-      "target_sha256": "2ef30f1ca3915f4628064b6371324f3b758f1afd6d4ce8cccdae1be88f04e3d9"
-    },
-    {
-      "source": "src/model_catalog.json",
-      "target": "src/codex/model_catalog.json",
-      "mode": "byte-copy",
-      "source_sha256": "037e199b23ca95d6ac0a99718b4f353e555f8eeae95637dce0e13485d81ba39a",
-      "target_sha256": "037e199b23ca95d6ac0a99718b4f353e555f8eeae95637dce0e13485d81ba39a"
-    },
-    {
-      "source": "src/process_guard.rs",
-      "target": "src/codex/process_guard.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "920f9957cd57b995d0743220b402a9fe410fcc7babeaf634e4f87646e4c9f24c",
-      "target_sha256": "f5fa457d82c9b0f5ca857bc7d67c5d9d30c5fe0b66bc6079690d444a50bfdfc8"
-    },
-    {
-      "source": "src/session.rs",
-      "target": "src/codex/session.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "f88b0c9bb40f1af39d6f7adb7cddbdb3390fddd4f84e9fbd41c10ba8003ef86f",
-      "target_sha256": "0b558dca2c6b0a65081e3e287c4d0ce1860ba0a5e1ad8e9981366b643a1bf202"
-    },
-    {
-      "source": "src/util.rs",
-      "target": "src/codex/util.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "a61cb8db04bec0601423928753da2a5830087f83cf31eaa9cb69c604868acb35",
-      "target_sha256": "93f0ac945c9b18a9ca4e52a0bc5ac23188053822e27ac6c23fb1f8e633e21528"
-    },
-    {
-      "source": "src/session/activity.rs",
-      "target": "src/codex/session/activity.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "9c82e90967ba946725b1bdee0cb6008ddc3b4d3dc7e9193ac3e2360bf30f7fcf",
-      "target_sha256": "14fd7880a9f8aa4d8350f32a0527db39a7c13143e16ed84c52aa0a1cb31742d2"
-    },
-    {
-      "source": "src/session/parser.rs",
-      "target": "src/codex/session/parser.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "ce78a94fde39ccb0c5d2608e71582eaf9c246acda455aaf3767b434effe10cb0",
-      "target_sha256": "2e2c002dbed0e7c6c932dd76476a3ef014803db916a6d40ef4e5f10403a6b6fa"
-    },
-    {
-      "source": "src/telemetry/limits.rs",
-      "target": "src/codex/telemetry/limits.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "ae6af06eb79324171dd361b3de8fdf1c28035ace6211755470511e9ec1dcce91",
-      "target_sha256": "ae6af06eb79324171dd361b3de8fdf1c28035ace6211755470511e9ec1dcce91"
-    },
-    {
-      "source": "src/telemetry/plan.rs",
-      "target": "src/codex/telemetry/plan.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "ed296000ab0f9d1622d41cb117acbd81dbcdf03b188396a8976b0e797e8eee30",
-      "target_sha256": "efd4d4a2b48eb525f75109fb857aeea007cbc224f8d12c32a805b0489dfbfac3"
-    },
-    {
-      "source": "src/telemetry/service_tier.rs",
-      "target": "src/codex/telemetry/service_tier.rs",
-      "mode": "namespace-rebase",
-      "source_sha256": "951c1b9b21ea20dc2607757e7d9c1248bf664ac36acabf83b8fcbac3343b52ba",
-      "target_sha256": "3317c66235c4423c97be0b37b95b854df4b98d5016ffb64660050d5d875e04bc"
-    }
+  "canonical_release": "v1.8.0",
+  "canonical_commit": null,
+  "integration": {
+    "mode": "local-path",
+    "package": "codex-presence-core",
+    "version": "1.0.0",
+    "path": "../codex-rp-v1-8/crates/codex-presence-core",
+    "promotion_mode": "git-rev",
+    "promotion_status": "pending-local-validation"
+  },
+  "compatibility": {
+    "pulse": "1.6.0",
+    "presence_config_schema": 13,
+    "usage_snapshot_revision": 1,
+    "app_snapshot_revision": 1
+  },
+  "shared_contracts": [
+    "presence-composer",
+    "presence-field-layout",
+    "quota-envelope-parser",
+    "semantic-quota-windows",
+    "usage-snapshot",
+    "credit-balance"
   ],
   "local_adapters": [
-    "src/codex/mod.rs",
-    "src/codex/process.rs"
+    "src/codex/config.rs",
+    "src/codex/discord.rs",
+    "src/codex/session.rs",
+    "src/codex/telemetry/plan.rs",
+    "src/codex/telemetry/service_tier.rs"
   ]
 }

@@ -17,6 +17,7 @@ const defaultDisplayPrefs: DiscordDisplayPrefs = {
   show_tokens: false,
   show_cost: false,
   show_limits: true,
+  show_credits: true,
   show_context: true,
   show_systems: true,
 };
@@ -28,6 +29,10 @@ const setDiscordEnabled = vi.fn(async (enabled: boolean) => {
 const getDiscordSettings = vi.fn(async () => discordSettings);
 const setDiscordDisplayPrefs = vi.fn(async (prefs: DiscordDisplayPrefs) => {
   discordSettings = { ...discordSettings, display_prefs: prefs };
+  return discordSettings;
+});
+const setDiscordFieldOrder = vi.fn(async (order: string[]) => {
+  discordSettings = { ...discordSettings, field_order: order };
   return discordSettings;
 });
 const setCodexDesktopDesign = vi.fn(
@@ -46,6 +51,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     setDiscordEnabled: (enabled: boolean) => setDiscordEnabled(enabled),
     getDiscordSettings: () => getDiscordSettings(),
     setDiscordDisplayPrefs: (prefs: DiscordDisplayPrefs) => setDiscordDisplayPrefs(prefs),
+    setDiscordFieldOrder: (order: string[]) => setDiscordFieldOrder(order),
     setCodexDesktopDesign: (design: "codex_app" | "chatgpt_app") =>
       setCodexDesktopDesign(design),
     getDiscordPreview: () => getDiscordPreview(),
@@ -113,6 +119,7 @@ describe("Discord.svelte", () => {
     setDiscordEnabled.mockClear();
     getDiscordSettings.mockClear();
     setDiscordDisplayPrefs.mockClear();
+    setDiscordFieldOrder.mockClear();
     setCodexDesktopDesign.mockClear();
     discordSettings = {
       provider: "claude",
@@ -122,9 +129,13 @@ describe("Discord.svelte", () => {
       display_prefs: { ...defaultDisplayPrefs },
       desktop_design: null,
       supports_desktop_design: false,
+      supports_field_order: false,
+      field_order: ["project", "branch", "model", "activity", "tokens", "cost", "quotas", "credits", "context", "systems"],
     };
     getDiscordPreview.mockClear();
     discordPreviewPayload = null;
+    const { provider } = await import("@/lib/provider");
+    provider.set("claude");
     const { sessions, discordUser, health, discordPreview, discordPresencePreview } = await import("@/lib/stores");
     sessions.set([makeSession("s1", "pulse")]);
     discordUser.set(discordUserFixture);
@@ -138,6 +149,7 @@ describe("Discord.svelte", () => {
       showTokens: false,
       showCost: false,
       showLimits: true,
+      showCredits: true,
       showContext: true,
       showSystems: true,
     });
@@ -223,8 +235,9 @@ describe("Discord.svelte", () => {
     await tick();
 
     expect(getByText("Rich Presence")).toBeTruthy();
-    expect(container.querySelectorAll(".field-cell").length).toBe(9);
-    expect(getByText("Session limits")).toBeTruthy();
+    expect(container.querySelectorAll(".field-cell").length).toBe(10);
+    expect(getByText("Usage quotas")).toBeTruthy();
+    expect(getByText("Credits available")).toBeTruthy();
     expect(getByText("Context usage")).toBeTruthy();
     expect(container.querySelectorAll(".preset-opt").length).toBe(3);
   });
@@ -238,7 +251,7 @@ describe("Discord.svelte", () => {
     const { getByText } = render(Discord);
 
     await waitFor(() => expect(getDiscordSettings).toHaveBeenCalledTimes(1));
-    const branchRow = getByText("Git branch").closest("label");
+    const branchRow = getByText("Git branch").closest(".field-cell");
     const branchToggle = branchRow?.querySelector("input") as HTMLInputElement;
     expect(branchToggle.checked).toBe(false);
     expect(setDiscordDisplayPrefs).not.toHaveBeenCalled();
@@ -262,7 +275,7 @@ describe("Discord.svelte", () => {
     await waitFor(() => expect(getDiscordSettings).toHaveBeenCalledTimes(1));
 
     const branchToggle = getByText("Git branch")
-      .closest("label")
+      .closest(".field-cell")
       ?.querySelector("input") as HTMLInputElement;
     await fireEvent.change(branchToggle);
 
@@ -284,7 +297,7 @@ describe("Discord.svelte", () => {
     await waitFor(() => expect(getDiscordSettings).toHaveBeenCalledTimes(1));
 
     const branchToggle = getByText("Git branch")
-      .closest("label")
+      .closest(".field-cell")
       ?.querySelector("input") as HTMLInputElement;
     expect(branchToggle.checked).toBe(true);
     await fireEvent.change(branchToggle);
@@ -311,6 +324,23 @@ describe("Discord.svelte", () => {
       expect(setCodexDesktopDesign).toHaveBeenCalledWith("chatgpt_app");
       expect(getDiscordPreview).toHaveBeenCalled();
     });
+  });
+
+  it("persists accessible field reordering for Codex", async () => {
+    const { provider } = await import("@/lib/provider");
+    provider.set("codex");
+    discordSettings = {
+      ...discordSettings,
+      provider: "codex",
+      supports_field_order: true,
+    };
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { getByRole } = render(Discord);
+    await waitFor(() => expect(getDiscordSettings).toHaveBeenCalledTimes(1));
+
+    await fireEvent.click(getByRole("button", { name: "Move Project name down" }));
+    await waitFor(() => expect(setDiscordFieldOrder).toHaveBeenCalledTimes(1));
+    expect(setDiscordFieldOrder.mock.calls[0][0].slice(0, 2)).toEqual(["branch", "project"]);
   });
 
   it("shows safe systems signals without exposing subagent names", async () => {

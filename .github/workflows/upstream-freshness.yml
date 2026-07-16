@@ -28,7 +28,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $manifest = Get-Content -Raw src/codex/UPSTREAM.json | ConvertFrom-Json
-          $pinned = [string]$manifest.commit
+          $pinned = if ([int]$manifest.schema_version -eq 3) { [string]$manifest.canonical_commit } else { [string]$manifest.commit }
           if ($pinned -notmatch '^[0-9a-fA-F]{40}$') { throw "UPSTREAM.json has an invalid commit" }
           $latest = (gh api repos/xt0n1-t3ch/Codex-Discord-Rich-Presence/commits/main --jq .sha).Trim()
           if ($latest -notmatch '^[0-9a-fA-F]{40}$') { throw "GitHub returned an invalid upstream commit" }
@@ -52,12 +52,12 @@ jobs:
 
           if ($env:IS_STALE -eq "true") {
             $body = @"
-          The vendored Codex Rich Presence source is behind upstream `main`.
+          Pulse's immutable `codex-presence-core` pin is behind canonical `main`.
 
           - Pinned commit: ``$env:PINNED_SHA``
           - Upstream commit: ``$env:LATEST_SHA``
 
-          Update only after selecting an immutable canonical release tag and full commit SHA. Run `scripts/update-codex-rich-presence.ps1` with both values, review the vendored diff, and keep the resulting manifest hashes in the same commit.
+          Update only after selecting an immutable canonical release tag and full commit SHA. Change the Cargo Git `rev` and schema-3 canonical manifest together, then rerun the full core compatibility and release gates.
           "@
             $bodyPath = Join-Path $env:RUNNER_TEMP "codex-upstream-drift.md"
             [System.IO.File]::WriteAllText($bodyPath, $body)

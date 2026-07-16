@@ -1,80 +1,45 @@
-# Codex Rich Presence upstream sync
+# Canonical Codex presence core
 
-Pulse keeps the Codex-specific Discord Rich Presence core aligned with the standalone
-[Codex Discord Rich Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)
-repository.
+Pulse consumes Codex telemetry and Rich Presence composition from the standalone [Codex Discord Rich Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence) repository. `codex-presence-core` is the UI-free owner. Pulse owns Tauri integration, analytics persistence, and presentation; it must not recreate parsing or Discord line composition in TypeScript or a second Rust module.
 
-## Source of truth
+## Versioned contract
 
-| Field | Value |
-| --- | --- |
-| Upstream repo | <https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence> |
-| Local mirror | `src/codex/` |
-| Pin file | `src/codex/UPSTREAM.json` |
-| Pinned release | `v1.7.5` |
-| Pinned commit | `2b3c7f51cf320c9a0c0beced963254348202c8c1` |
-| Shared config | schema 12 with persisted `presence_enabled` |
-| Sync strategy | immutable tag/commit source sync with a small Pulse compatibility overlay |
+| Surface | Local v1.6 candidate | Promotion requirement |
+| --- | --- | --- |
+| Core package | `codex-presence-core` 1.0.0 | Same version from canonical `v1.8.0` |
+| Config schema | 13 | Migration fixtures pass from schema 12 |
+| Pulse database schema | 5 | Migration and query-plan fixtures pass |
+| Development dependency | Local `path` worktree | Replace with canonical Git URL plus full 40-character `rev` |
+| Canonical manifest | Local candidate metadata | Core version, release tag, and commit equal the Cargo Git pin |
 
-The local mirror copies the Rust modules Pulse consumes for Codex session parsing,
-pricing, telemetry, display labels, and Rich Presence composition. `UPSTREAM.json`
-records the upstream tag, full commit, sync-script version, file inventory, and SHA-256 hashes so CI can prove the mirror is immutable and exact.
+The path dependency is intentional only while both worktrees are under local validation. A Pulse release must fail until the canonical release exists and the dependency uses its exact commit SHA. Moving branches, tags without a `rev`, and shortened SHAs are not release inputs.
 
-## Why source sync instead of a Cargo Git dependency
+## Source and compatibility boundary
 
-The upstream crate ships its own Windows resource build. Linking that crate directly
-inside Pulse produced a duplicate Windows `VERSION` resource at build time because
-Pulse also embeds app resources through Tauri. Source sync keeps the same logic
-available to Pulse without linking a second Windows application resource.
+The core exports semantic usage snapshots, quota scopes/windows, Credits, service tier, configuration layout, and deterministic Rich Presence composition. Pulse may translate those DTOs into Tauri responses but may not reinterpret positional `primary`/`secondary` limits or infer unavailable provider capabilities.
 
-## Compatibility overlay
+Canonical code still carried under `src/codex/` is migration residue unless it is an explicit Pulse adapter. The core manifest records compatibility with schema 13 and the immutable canonical commit. The release gate checks that manifest against Cargo before any bundle is published.
 
-Pulse owns only the glue the upstream crate does not expose as a stable library
-contract:
+## Local validation
 
-- `src/codex/mod.rs` declares the mirrored modules under Pulse's namespace.
-- `src/codex/process.rs` exposes the OpenCode process probe needed by the Pulse UI.
-- `src/codex/session/parser.rs` rewrites upstream `git` probes through Pulse's no-window command helper so Windows polling does not open console windows.
-- `tests/codex_upstream_contract.rs` checks the Pulse-facing module boundary stays
-  present after every sync.
-
-Pulse does not append pricing tables or Fast multipliers to vendored files. Model identity, pricing, context, and presentation stay owned by the canonical mirror; Pulse adapters translate the public DTOs into Tauri responses. Inventory `model-catalog-v3` also mirrors `app.rs` and `process_guard.rs` as uncompiled source-contract inputs so canonical cross-file regression tests remain buildable without declaring a second Pulse runtime owner.
-
-All other mirrored code should come from upstream through the sync script.
-
-## Check freshness
+During the local phase:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-rich-presence-upstream.ps1
+cargo test --workspace
+npm --prefix frontend run check
+npm --prefix frontend run test
+npm --prefix frontend run build
 ```
 
-The release check validates every file hash against `src/codex/UPSTREAM.json`. A separate non-required scheduled drift check compares the pin with upstream and opens or updates one issue; normal CI does not silently replace a released pin with moving `main`.
+The local path is allowed here so canonical and Pulse changes can be validated together without publishing either repository.
 
-## Pull latest upstream code
+## Promotion sequence
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-codex-rich-presence.ps1 -Tag v1.7.5 -Commit 2b3c7f51cf320c9a0c0beced963254348202c8c1
-```
+1. Complete canonical v1.8.0 validation and obtain explicit approval.
+2. Publish the annotated canonical tag/release and record its full commit SHA.
+3. Replace Pulse's path dependency with the canonical Git dependency and exact `rev`.
+4. Update the canonical manifest with core 1.0.0, tag v1.8.0, schema compatibility, and the same SHA.
+5. Run the full Pulse gates again, including Windows runtime, migrations, Dark/Light viewports, performance, SPDX SBOM, and checksums.
+6. Only then approve the annotated Pulse v1.6.0 tag.
 
-The update script checks out the explicit tag and commit, refreshes `src/codex/`, reapplies the
-compatibility overlay, updates `UPSTREAM.json`, formats Rust, validates hashes, and
-runs:
-
-```powershell
-cargo test --workspace codex_upstream
-```
-
-There is also a POSIX shell variant at `scripts/update-codex-rich-presence.sh` for
-Linux/macOS contributors.
-
-## Release gate
-
-Before a Pulse release, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-rich-presence-upstream.ps1
-cargo test --workspace codex_upstream
-```
-
-If upstream changed, sync first, inspect the diff, then run the full Pulse pre-ship
-validators from `tests/index.md`.
+No tag, pull request, or release is created by the local validation phase.

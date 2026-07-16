@@ -1125,17 +1125,26 @@ fn print_active_summary(
     let limits = effective_limits.unwrap_or(&active.limits);
     if let Some(primary) = &limits.primary {
         println!(
-            "  5h remaining: {:.0}% (reset {})",
+            "  {} remaining: {:.0}% (reset {})",
+            codex_presence_core::format_window_label(primary.window_minutes),
             primary.remaining_percent,
             format_time_until(primary.resets_at)
         );
     }
     if let Some(secondary) = &limits.secondary {
         println!(
-            "  7d remaining: {:.0}% (reset {})",
+            "  {} remaining: {:.0}% (reset {})",
+            codex_presence_core::format_window_label(secondary.window_minutes),
             secondary.remaining_percent,
             format_time_until(secondary.resets_at)
         );
+    }
+    if let Some(credits) = limits_source.and_then(|source| source.credits.as_ref()) {
+        if credits.unlimited {
+            println!("  credits available: Unlimited");
+        } else if let Some(balance) = credits.balance.as_deref() {
+            println!("  credits available: {balance}");
+        }
     }
     if let Some(model) = active.model.as_deref()
         && !is_model_allowed_for_plan(model, resolved_plan.tier)
