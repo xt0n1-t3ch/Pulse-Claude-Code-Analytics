@@ -24,26 +24,25 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.5.3</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.0</h2>
 
-- **No five-second console flashes** — Codex Git branch probes now use the shared Windows `CREATE_NO_WINDOW` launcher during Pulse's background refresh.
-- **Canonical fix, immutable pin** — Pulse vendors Codex Discord Rich Presence `v1.7.6` by annotated tag, exact commit, and per-file SHA-256 hashes.
-- **Adapters stay local** — the sync updates only canonical Rust owners; Pulse process detection and Tauri adapters remain outside the vendored mirror.
-- **Regression locked** — CI rejects the old upstream pin and any periodic Git probe that bypasses the silent launcher.
+- **Event-driven live telemetry** — one versioned backend snapshot now hydrates the app, updates Discord, and persists analytics without recurring frontend polling or unchanged SQLite writes.
+- **Factual Codex usage** — semantic global and model quota windows, Credits, and absolute local reset timestamps match the data Codex exposes without inventing a five-hour window.
+- **Discord you can shape** — ten ordered presence fields, compact and descriptive presets, persistent privacy controls, and one backend-owned preview/publisher contract.
+- **Responsive native UI** — Dark and Light themes, self-hosted Inter Variable, keyboard-visible controls, and validated layouts down to 720x560.
+- **Release integrity** — Pulse pins `codex-presence-core` 1.0.0 to canonical `v1.8.0`, validates migrations and the Windows SPDX SBOM, and ships immutable checksummed assets.
 
 <details>
-<summary>Previous v1.5.2 highlights</summary>
+<summary>Previous v1.5.3 highlights</summary>
 
-- **GPT-5.6 without guessed economics** — one vendored catalog owns Sol, Terra, and Luna aliases, labels, API and Codex-credit rates, cache policy, reasoning tiers, and the 372K raw / 353.4K usable context contract. Unknown models and missing telemetry remain explicit.
-- **Discord controls that match Discord** — all nine privacy fields flow through one backend presentation contract. Disabling Git branch removes it from both the Live Preview and the real Discord card.
-- **Correct Codex identities** — choose `Codex App` or `ChatGPT App` for desktop sessions; CLI and VS Code Extension are detected and labeled separately instead of being collapsed into one ambiguous surface.
-- **Readable model state** — Discord shows model, reasoning, plan, speed, cost, tokens, context, and quota windows as deliberate fields, including `GPT-5.6 Sol · Max` and an independent `Fast` marker when observed.
-- **Durable analytics** — SQLite schema v4 records provenance and completeness for speed, pricing, cache savings, and context, while daily aggregates are derived idempotently from sessions.
-- **One product, two first-class providers** — refreshed Pulse artwork, reports, docs, and fix prompts now name Claude Code and Codex (ChatGPT App) consistently.
+- **No five-second console flashes** — Codex Git branch probes use the shared Windows `CREATE_NO_WINDOW` launcher during Pulse's background refresh.
+- **Canonical fix, immutable pin** — Pulse vendors Codex Discord Rich Presence `v1.7.6` by annotated tag, exact commit, and per-file SHA-256 hashes.
+- **Adapters stay local** — sync updates canonical Rust owners while Pulse process detection and Tauri adapters remain outside the vendored mirror.
+- **Regression locked** — CI rejects the old upstream pin and any periodic Git probe that bypasses the silent launcher.
 
 </details>
 
-**[Download v1.5.3](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.6.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
