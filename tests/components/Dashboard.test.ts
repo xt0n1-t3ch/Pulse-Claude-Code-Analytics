@@ -187,6 +187,7 @@ describe("Dashboard.svelte", () => {
 
   it("shows the plan usage limits and model distribution from the store + history", async () => {
     const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { formatResetDateTime } = await import("@/lib/utils");
     const { container, getByText } = render(Dashboard);
     await tick();
 
@@ -195,6 +196,7 @@ describe("Dashboard.svelte", () => {
     const modelNames = [...container.querySelectorAll(".model-list .model-name")].map((e) => e.textContent?.trim());
     expect(modelNames).toContain("Claude Opus 4.8");
     expect(modelNames).toContain("Claude Sonnet 4.6");
+    expect(getByText(formatResetDateTime("2026-05-28T18:00:00Z"))).toBeTruthy();
   });
 
   it("renders weekly-only Codex quota and credits without inventing a five-hour window", async () => {

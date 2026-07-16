@@ -7,7 +7,7 @@
   import Heatmap from "../components/Heatmap.svelte";
   import { health, metrics, sessions, rateLimits, planInfo } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
-  import { fmtTokens, fmtCost, fmtDuration, fmtPct, fmtTps, formatResetRelative } from "../lib/utils";
+  import { fmtTokens, fmtCost, fmtDuration, fmtPct, fmtTps, formatResetDateTime } from "../lib/utils";
   import {
     getAnalyticsSummary, getSessionHistory, getCostForecast,
     getHourlyActivity, getDailyStats, getProjectStats, refreshUsage,
@@ -255,7 +255,7 @@
                   label={limitLabel(window.window_minutes)}
                   sublabel={limitContext(scope.name, scope.id, scope.kind)}
                   pct={window.used_percent}
-                  meta={window.resets_at ? formatResetRelative(window.resets_at) : `${window.remaining_percent.toFixed(0)}% remaining`}
+                  meta={window.resets_at ? formatResetDateTime(window.resets_at) : `${window.remaining_percent.toFixed(0)}% remaining`}
                 />
               </section>
             {/each}

@@ -66,29 +66,22 @@ export function fmtPromoEndDate(raw: string): string {
   return PROMO_END_DATE_FORMAT.format(lastInclusiveMoment);
 }
 
-export function formatResetRelative(raw: string): string {
-  const reset = parseResetDate(raw);
-  if (!reset) return raw;
-  const diff = reset.getTime() - Date.now();
-  if (diff <= 0) return "Resetting...";
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `Resets in ${mins} min`;
-  const hrs = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return `Resets in ${hrs} hr ${remMins} min`;
-}
+const RESET_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+});
 
-export function formatResetWeekly(raw: string): string {
+const RESET_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+
+export function formatResetDateTime(raw: string): string {
   const reset = parseResetDate(raw);
   if (!reset) return raw;
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const day = days[reset.getDay()];
-  const h = reset.getHours();
-  const m = reset.getMinutes();
-  const ampm = h >= 12 ? "PM" : "AM";
-  const h12 = h % 12 || 12;
-  const mStr = m.toString().padStart(2, "0");
-  return `Resets ${day} ${h12}:${mStr} ${ampm}`;
+  return `Resets ${RESET_DATE_FORMAT.format(reset)} ${RESET_TIME_FORMAT.format(reset)}`;
 }
 
 export type ActivityType =
