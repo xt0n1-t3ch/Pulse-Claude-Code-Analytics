@@ -10,7 +10,7 @@ authors = ["xt0n1-t3ch"]
 
 [dependencies]
 cc-discord-presence = { path = ".." }
-codex-presence-core = { path = "../../codex-rp-v1-8/crates/codex-presence-core", version = "1.0.0" }
+codex-presence-core = { git = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence", rev = "b085c3dcc2ba75b5e54ec7e6252c90120ec04b0e", version = "1.0.0" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

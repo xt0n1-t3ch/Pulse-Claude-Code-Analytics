@@ -496,6 +496,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 [[package]]
 name = "codex-presence-core"
 version = "1.0.0"
+source = "git+https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence?rev=b085c3dcc2ba75b5e54ec7e6252c90120ec04b0e#b085c3dcc2ba75b5e54ec7e6252c90120ec04b0e"
 dependencies = [
  "chrono",
  "serde",
