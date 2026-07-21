@@ -17,7 +17,7 @@
     "@testing-library/svelte": "^5.4.2",
     "@testing-library/user-event": "^14.6.1",
     "@tsconfig/svelte": "^5.0.0",
-    "@vitest/coverage-v8": "^3",
+    "@vitest/coverage-v8": "^4",
     "happy-dom": "^20.10.6",
     "playwright": "^1.61.1",
     "svelte": "^5.56.4",
