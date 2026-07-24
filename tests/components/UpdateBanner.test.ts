@@ -260,7 +260,15 @@ describe("UpdateBanner.svelte", () => {
   });
 
   it("surfaces only the installer for the host platform", async () => {
-    // happy-dom reports a Windows-ish user agent, so the .exe is the match.
+    // The host platform is derived from the user agent, which differs between
+    // a Windows dev machine and a Linux CI runner. Pin it so the assertion
+    // tests the selection logic rather than the machine running the suite.
+    const originalAgent = Object.getOwnPropertyDescriptor(navigator, "userAgent");
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    });
+
     checkAppUpdate.mockResolvedValue(
       makeUpdate({
         assets: [
@@ -293,12 +301,17 @@ describe("UpdateBanner.svelte", () => {
 
     await findByText("Feature update");
     const asset = container.querySelector(".up-asset");
-    if (asset) {
-      expect(asset.textContent).toContain("Pulse_1.2.0_x64-setup.exe");
-      expect(asset.textContent).toContain("8.0 MB");
-    }
-    // Non-installer assets never surface.
+    // With the host pinned to Windows, exactly the .exe must surface: not the
+    // Linux build, and not the checksum file.
+    expect(asset).not.toBeNull();
+    expect(asset?.textContent).toContain("Pulse_1.2.0_x64-setup.exe");
+    expect(asset?.textContent).toContain("8.0 MB");
+    expect(asset?.textContent).not.toContain("amd64.deb");
     expect(queryByText("checksums.txt")).toBeNull();
+
+    if (originalAgent) {
+      Object.defineProperty(navigator, "userAgent", originalAgent);
+    }
   });
 
   it("previews at most three release-note highlights with markdown stripped", async () => {
