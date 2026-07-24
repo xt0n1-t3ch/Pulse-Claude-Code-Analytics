@@ -1634,7 +1634,7 @@ mod tests {
     #[test]
     fn query_limit_none_is_unbounded_not_a_hidden_hundred() {
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
-        init_schema(&conn);
+        init_schema(&conn).expect("schema");
 
         for i in 0..250 {
             conn.execute(
@@ -1648,12 +1648,13 @@ mod tests {
         }
 
         let unbounded = query_sessions(
-            &conn, None, None, None, None, None, None, None, None, None, None,
+            &conn, "claude", None, None, None, None, None, None, None, None, None, None,
         );
         assert_eq!(unbounded.len(), 250, "None must not cap the result set");
 
         let capped = query_sessions(
             &conn,
+            "claude",
             None,
             None,
             None,

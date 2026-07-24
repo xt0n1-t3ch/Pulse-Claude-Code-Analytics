@@ -1545,11 +1545,6 @@ mod tests {
         assert!(escaped.contains("&lt;script&gt;"));
         assert!(escaped.contains("hxxps://evil\\.example/x"));
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     /// Reports receive human labels ("Claude Opus 5"), not API ids, so the
     /// normalizer has to round-trip them back into a form `is_fast_capable`

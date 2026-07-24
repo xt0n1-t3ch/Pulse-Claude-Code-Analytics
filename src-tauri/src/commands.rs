@@ -3386,7 +3386,9 @@ mod tests {
         CostAttribution, PricingSource, PricingStatus, TokenCostBreakdown,
     };
     use cc_discord_presence::codex::model::{SessionSpeed, SpeedMode, SpeedSource};
-    use cc_discord_presence::codex::session::CodexSessionSnapshot;
+    use cc_discord_presence::codex::session::{
+        CodexSessionSnapshot, ContextWindowSnapshot, ContextWindowSource,
+    };
     use cc_discord_presence::codex::telemetry::limits::RateLimits;
     use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
     use cc_discord_presence::config::PresenceConfig as TestClaudePresenceConfig;
@@ -3856,8 +3858,25 @@ mod tests {
 
     #[test]
     fn codex_session_info_uses_the_canonical_effective_context_for_gpt_5_4() {
+        // The snapshot carries no observed context window, so resolution falls
+        // back to the model catalogue. Pin it here: without an explicit window
+        // the resolver also consults ~/.codex/models_cache.json, which makes
+        // the expected value depend on whichever Codex build last wrote that
+        // file on the developer's machine.
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.context_window = Some(ContextWindowSnapshot {
+            raw_window_tokens: 272_000,
+            window_tokens: 258_400,
+            effective_percent: Some(95),
+            used_tokens: 0,
+            remaining_tokens: 258_400,
+            remaining_percent: 100.0,
+            source: ContextWindowSource::Event,
+            raw_source: ContextWindowSource::Event,
+        });
+
         let infos = build_codex_session_infos(
-            &[sample_codex_snapshot()],
+            &[snapshot],
             &TestCodexPresenceConfig::default(),
             TestPresenceSurface::Cli,
         );
