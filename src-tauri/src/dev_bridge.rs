@@ -54,15 +54,13 @@ fn allowed_origin(origin: Option<&str>) -> Option<&str> {
 /// the packaged app. Ignoring it would make the bridge quietly answer every
 /// range with the same 30-day numbers.
 ///
-/// `session_id` carries the single-session argument the Context view sends and
-/// `project` the filter Cost Analysis applies.
-fn dispatch(
-    command: &str,
-    days: Option<i64>,
-    session_id: Option<String>,
-    project: Option<String>,
-) -> Option<String> {
-    let window = days.unwrap_or(30);
+/// `target` carries the arguments the views send: the window, the Context
+/// view's single session, the Cost Analysis project filter, and the Sessions
+/// view's advanced filters and search query.
+fn dispatch(command: &str, target: &BridgeTarget<'_>) -> Option<String> {
+    let window = target.days.unwrap_or(30);
+    let session_id = target.session_id.clone();
+    let project = target.project.clone();
     let json = match command {
         "get_health" => serde_json::to_string(&crate::commands::get_health()),
         "get_metrics" => serde_json::to_string(&crate::commands::get_metrics()),
@@ -163,9 +161,24 @@ fn dispatch(
         "get_session_health" => serde_json::to_string(
             &crate::commands::reports_bundle_blocking(window, project).session_health,
         ),
-        "get_session_history_filtered" => serde_json::to_string(
-            &crate::commands::get_session_history(Some(window), project, Some(200)),
-        ),
+        // Preserves every advanced filter. Substituting a plain window query
+        // would answer a filtered request with unfiltered rows, which is worse
+        // than a 404: the view would look like the filter matched everything.
+        "get_session_history_filtered" => {
+            serde_json::to_string(&crate::commands::get_session_history_filtered(
+                target.from_iso.clone(),
+                target.to_iso.clone(),
+                project,
+                target.model.clone(),
+                target.min_cost,
+                target.max_cost,
+                Some(target.limit.unwrap_or(500)),
+            ))
+        }
+        "search_sessions" => serde_json::to_string(&crate::commands::search_sessions(
+            target.query.clone()?,
+            Some(target.limit.unwrap_or(100)),
+        )),
         "get_sessions_by_hour_range" => serde_json::to_string(
             &crate::commands::get_sessions_by_hour_range(0, 23, Some(window)),
         ),
@@ -225,12 +238,7 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     match path.strip_prefix("/invoke/") {
         Some(rest) => {
             let target = parse_target(rest);
-            match dispatch(
-                target.command,
-                target.days,
-                target.session_id,
-                target.project,
-            ) {
+            match dispatch(target.command, &target) {
                 Some(body) => respond(&mut stream, 200, "application/json", &body, &allow_origin),
                 None => respond(
                     &mut stream,
@@ -270,6 +278,15 @@ struct BridgeTarget<'a> {
     days: Option<i64>,
     session_id: Option<String>,
     project: Option<String>,
+    /// Sessions-view advanced filters, preserved verbatim so a filtered
+    /// request is never answered with unfiltered rows.
+    from_iso: Option<String>,
+    to_iso: Option<String>,
+    model: Option<String>,
+    min_cost: Option<f64>,
+    max_cost: Option<f64>,
+    limit: Option<i64>,
+    query: Option<String>,
 }
 
 /// Splits `command?days=90&sessionId=abc` into its parts. Anything unparseable
@@ -297,11 +314,29 @@ fn parse_target(rest: &str) -> BridgeTarget<'_> {
             .map(percent_decode)
             .filter(|value| !value.is_empty())
     });
+    // Argument names match the Tauri command parameters the frontend sends,
+    // so the bridge and the packaged app run the same query.
+    let text = |name: &str| {
+        let prefix = format!("{name}=");
+        query.and_then(|q| {
+            q.split('&')
+                .find_map(|pair| pair.strip_prefix(&prefix))
+                .map(percent_decode)
+                .filter(|value| !value.is_empty())
+        })
+    };
     BridgeTarget {
         command,
         days,
         session_id,
         project,
+        from_iso: text("fromIso"),
+        to_iso: text("toIso"),
+        model: text("model"),
+        min_cost: text("minCost").and_then(|value| value.parse().ok()),
+        max_cost: text("maxCost").and_then(|value| value.parse().ok()),
+        limit: text("limit").and_then(|value| value.parse().ok()),
+        query: text("query"),
     }
 }
 
@@ -381,6 +416,25 @@ fn respond(
 mod tests {
     use super::*;
 
+    impl<'a> BridgeTarget<'a> {
+        /// An argument-free target for the command under test.
+        fn for_test(command: &'a str) -> Self {
+            Self {
+                command,
+                days: None,
+                session_id: None,
+                project: None,
+                from_iso: None,
+                to_iso: None,
+                model: None,
+                min_cost: None,
+                max_cost: None,
+                limit: None,
+                query: None,
+            }
+        }
+    }
+
     #[test]
     fn dispatch_serves_the_read_only_allowlist() {
         for command in [
@@ -390,7 +444,7 @@ mod tests {
             "get_discord_preview",
         ] {
             assert!(
-                dispatch(command, None, None, None).is_some(),
+                dispatch(command, &BridgeTarget::for_test(command)).is_some(),
                 "{command} must be served"
             );
         }
@@ -415,7 +469,7 @@ mod tests {
             "get_db_size",
         ] {
             assert!(
-                dispatch(command, None, None, None).is_some(),
+                dispatch(command, &BridgeTarget::for_test(command)).is_some(),
                 "{command} must be served"
             );
         }
@@ -431,16 +485,17 @@ mod tests {
             "get_sessions_context_usage",
         ] {
             assert!(
-                dispatch(command, None, None, None).is_some(),
+                dispatch(command, &BridgeTarget::for_test(command)).is_some(),
                 "{command} must be served"
             );
         }
         assert!(
             dispatch(
                 "get_context_breakdown",
-                None,
-                Some("session-a".into()),
-                None
+                &BridgeTarget {
+                    session_id: Some("session-a".into()),
+                    ..BridgeTarget::for_test("get_context_breakdown")
+                }
             )
             .is_some(),
             "the single-session argument must be accepted"
@@ -468,10 +523,53 @@ mod tests {
             "get_sessions_by_hour_range",
         ] {
             assert!(
-                dispatch(command, None, None, None).is_some(),
+                dispatch(command, &BridgeTarget::for_test(command)).is_some(),
                 "{command} must be served"
             );
         }
+    }
+
+    /// Submitting the Sessions search box calls a read-only command that must
+    /// reach the backend rather than 404.
+    #[test]
+    fn dispatch_serves_session_search_with_its_query() {
+        assert!(
+            dispatch(
+                "search_sessions",
+                &BridgeTarget {
+                    query: Some("pulse".into()),
+                    ..BridgeTarget::for_test("search_sessions")
+                }
+            )
+            .is_some(),
+            "a search with a query must be served"
+        );
+        // Without a query there is nothing to search; answering with unrelated
+        // rows would look like a match.
+        assert!(
+            dispatch(
+                "search_sessions",
+                &BridgeTarget::for_test("search_sessions")
+            )
+            .is_none()
+        );
+    }
+
+    /// A filtered request answered with unfiltered rows is worse than a 404:
+    /// the view looks like the filter matched everything.
+    #[test]
+    fn parse_target_preserves_the_advanced_session_filters() {
+        let target = parse_target(
+            "get_session_history_filtered?fromIso=2026-07-01T00%3A00%3A00Z&toIso=2026-07-20T23%3A59%3A59Z&model=claude-opus-5&minCost=1.5&maxCost=90&limit=500&project=pulse",
+        );
+
+        assert_eq!(target.from_iso.as_deref(), Some("2026-07-01T00:00:00Z"));
+        assert_eq!(target.to_iso.as_deref(), Some("2026-07-20T23:59:59Z"));
+        assert_eq!(target.model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(target.min_cost, Some(1.5));
+        assert_eq!(target.max_cost, Some(90.0));
+        assert_eq!(target.limit, Some(500));
+        assert_eq!(target.project.as_deref(), Some("pulse"));
     }
 
     /// The bridge must never become a browser-reachable path to mutation.
@@ -487,7 +585,7 @@ mod tests {
             "../../etc/passwd",
         ] {
             assert!(
-                dispatch(command, None, None, None).is_none(),
+                dispatch(command, &BridgeTarget::for_test(command)).is_none(),
                 "{command} must be rejected"
             );
         }
@@ -534,8 +632,22 @@ mod tests {
     /// series cannot be the same payload.
     #[test]
     fn dispatch_honours_the_requested_window() {
-        let week = dispatch("get_daily_stats", Some(7), None, None).expect("7d");
-        let quarter = dispatch("get_daily_stats", Some(90), None, None).expect("90d");
+        let week = dispatch(
+            "get_daily_stats",
+            &BridgeTarget {
+                days: Some(7),
+                ..BridgeTarget::for_test("get_daily_stats")
+            },
+        )
+        .expect("7d");
+        let quarter = dispatch(
+            "get_daily_stats",
+            &BridgeTarget {
+                days: Some(90),
+                ..BridgeTarget::for_test("get_daily_stats")
+            },
+        )
+        .expect("90d");
         // Cheap structural proof that the parameter is threaded through: the
         // wider window cannot produce a shorter payload than the narrow one.
         assert!(quarter.len() >= week.len());

@@ -29,13 +29,15 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
             `${command} is a mutation; the read-only dev bridge cannot persist it. Run the packaged app to change settings.`,
         );
     }
-    // Forward the window so a 7d/30d/90d/1y switch queries the same range the
-    // packaged app would, instead of silently reusing the default. The session
-    // id travels the same way for the Context view's single-session lookup.
+    // Forward every scalar argument under its Tauri name, so a filtered or
+    // windowed request reaches the same query the packaged app would run.
+    // Dropping arguments here silently answers a filtered request with
+    // unfiltered rows, which reads as "the filter matched everything".
     const query = new URLSearchParams();
-    if (typeof args?.days === "number") query.set("days", String(args.days));
-    if (typeof args?.sessionId === "string") query.set("sessionId", args.sessionId);
-    if (typeof args?.project === "string") query.set("project", args.project);
+    for (const [name, value] of Object.entries(args ?? {})) {
+        if (typeof value === "string" && value !== "") query.set(name, value);
+        else if (typeof value === "number" || typeof value === "boolean") query.set(name, String(value));
+    }
     const suffix = query.size > 0 ? `?${query}` : "";
     const res = await fetch(`${BRIDGE_ORIGIN}/invoke/${command}${suffix}`);
     if (!res.ok) {
