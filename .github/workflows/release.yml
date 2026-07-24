@@ -82,6 +82,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Required for in-app updates: the updater plugin refuses any
+          # package whose signature does not verify against the pubkey in
+          # tauri.conf.json. Without these secrets the bundle still builds,
+          # but no updater artifacts (.sig / latest.json) are produced.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: src-tauri
           args: ${{ matrix.tauri-args }}
@@ -104,7 +110,8 @@ jobs:
               -name '*.app.tar.gz' -o \
               -name '*.deb' -o \
               -name '*.rpm' -o \
-              -name '*.AppImage' \
+              -name '*.AppImage' -o \
+              -name '*.sig' \
             \) -exec cp {} dist/ \;
           fi
           ls -lah dist
@@ -140,6 +147,48 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           echo "Generated assets:"
           ls -lah
+
+      - name: Build updater manifest
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The updater plugin polls latest.json and matches the running
+          # platform against these keys. Each entry needs the detached
+          # signature produced by the signing key, not just the installer URL.
+          cd release-assets
+          VERSION="${TAG#v}"
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+          emit_platform() {
+            local key="$1" pattern="$2"
+            local file
+            file="$(ls ${pattern} 2>/dev/null | head -n1 || true)"
+            [ -z "$file" ] && return 0
+            [ ! -f "${file}.sig" ] && { echo "warning: no signature for ${file}, skipping ${key}" >&2; return 0; }
+            printf '    "%s": { "signature": "%s", "url": "%s/%s" }' \
+              "$key" "$(cat "${file}.sig")" "$BASE" "$file"
+          }
+
+          {
+            printf '{\n  "version": "%s",\n  "pub_date": "%s",\n  "platforms": {\n' \
+              "$VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            entries=()
+            for spec in "windows-x86_64:*-setup.nsis.zip" \
+                        "darwin-aarch64:*aarch64*.app.tar.gz" \
+                        "darwin-x86_64:*x64*.app.tar.gz" \
+                        "linux-x86_64:*.AppImage.tar.gz"; do
+              out="$(emit_platform "${spec%%:*}" "${spec#*:}")"
+              [ -n "$out" ] && entries+=("$out")
+            done
+            printf '%s' "$(IFS=$',\n'; echo "${entries[*]}")"
+            printf '\n  }\n}\n'
+          } > latest.json
+
+          echo "latest.json:"
+          cat latest.json
 
       - name: Install git-cliff
         uses: orhun/git-cliff-action@v4

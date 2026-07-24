@@ -13,6 +13,11 @@ pub struct AppUpdateAsset {
     pub download_url: String,
     pub size: u64,
     pub content_type: String,
+    /// Platform this asset installs on, derived from the file name
+    /// ("windows", "macos", "linux") or `None` when it is not a recognizable
+    /// installer. Lets the UI offer one obvious download instead of a raw
+    /// asset dump.
+    pub platform: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -26,6 +31,23 @@ pub struct AppUpdateInfo {
     pub published_at: Option<String>,
     pub checked_at: String,
     pub assets: Vec<AppUpdateAsset>,
+    /// Semver jump between the running build and the release, so the UI can
+    /// signal how significant the update is without re-parsing versions.
+    pub severity: UpdateSeverity,
+}
+
+/// How large a version jump a release represents.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateSeverity {
+    /// No newer release, or the running build is ahead.
+    None,
+    /// Patch bump: 1.6.0 -> 1.6.1.
+    Patch,
+    /// Minor bump: 1.6.x -> 1.7.0.
+    Minor,
+    /// Major bump: 1.x -> 2.0.0.
+    Major,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,6 +108,12 @@ fn update_info_from_release(current_version: &str, release: GithubRelease) -> Ap
         && !release.prerelease
         && compare_versions(&latest_version, current_version).is_gt();
 
+    let severity = if update_available {
+        severity_between(current_version, &latest_version)
+    } else {
+        UpdateSeverity::None
+    };
+
     AppUpdateInfo {
         current_version: current_version.to_string(),
         latest_version: Some(latest_version),
@@ -99,13 +127,46 @@ fn update_info_from_release(current_version: &str, release: GithubRelease) -> Ap
             .assets
             .into_iter()
             .map(|asset| AppUpdateAsset {
+                platform: platform_for_asset(&asset.name),
                 name: asset.name,
                 download_url: asset.browser_download_url,
                 size: asset.size,
                 content_type: asset.content_type.unwrap_or_default(),
             })
             .collect(),
+        severity,
     }
+}
+
+/// Classifies the jump from `current` to `latest`. Only called once an update
+/// is known to be newer, so the equal case collapses to `Patch`.
+fn severity_between(current: &str, latest: &str) -> UpdateSeverity {
+    let cur = parse_version_core(current);
+    let new = parse_version_core(latest);
+    if new[0] > cur[0] {
+        UpdateSeverity::Major
+    } else if new[1] > cur[1] {
+        UpdateSeverity::Minor
+    } else {
+        UpdateSeverity::Patch
+    }
+}
+
+/// Maps a release asset file name to the platform it installs on. Extension
+/// based, because that is what the bundle targets in `tauri.conf.json`
+/// actually produce (nsis/msi, dmg/app, deb/rpm/appimage).
+fn platform_for_asset(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let platform = if lower.ends_with(".exe") || lower.ends_with(".msi") {
+        "windows"
+    } else if lower.ends_with(".dmg") || lower.ends_with(".app.tar.gz") {
+        "macos"
+    } else if lower.ends_with(".deb") || lower.ends_with(".rpm") || lower.ends_with(".appimage") {
+        "linux"
+    } else {
+        return None;
+    };
+    Some(platform.to_string())
 }
 
 fn is_allowed_release_url(url: &str) -> bool {
@@ -205,5 +266,53 @@ mod tests {
         assert!(!is_allowed_release_url(
             "https://example.com/releases/tag/v1.3.0"
         ));
+    }
+
+    #[test]
+    fn severity_reflects_the_semver_jump() {
+        assert_eq!(severity_between("1.6.0", "1.6.1"), UpdateSeverity::Patch);
+        assert_eq!(severity_between("1.6.1", "1.7.0"), UpdateSeverity::Minor);
+        assert_eq!(severity_between("1.6.1", "2.0.0"), UpdateSeverity::Major);
+        // A major bump outranks a lower minor.
+        assert_eq!(severity_between("1.9.0", "2.0.0"), UpdateSeverity::Major);
+    }
+
+    #[test]
+    fn severity_is_none_when_no_update_is_available() {
+        let same = update_info_from_release("1.2.0", release("v1.2.0"));
+        assert_eq!(same.severity, UpdateSeverity::None);
+    }
+
+    #[test]
+    fn severity_is_reported_for_an_available_update() {
+        let info = update_info_from_release("1.2.0", release("v1.3.0"));
+        assert_eq!(info.severity, UpdateSeverity::Minor);
+    }
+
+    #[test]
+    fn assets_are_tagged_with_their_install_platform() {
+        assert_eq!(
+            platform_for_asset("Pulse_1.6.1_x64-setup.exe").as_deref(),
+            Some("windows")
+        );
+        assert_eq!(
+            platform_for_asset("Pulse_1.6.1_x64_en-US.msi").as_deref(),
+            Some("windows")
+        );
+        assert_eq!(
+            platform_for_asset("Pulse_1.6.1_aarch64.dmg").as_deref(),
+            Some("macos")
+        );
+        assert_eq!(
+            platform_for_asset("pulse_1.6.1_amd64.deb").as_deref(),
+            Some("linux")
+        );
+        assert_eq!(
+            platform_for_asset("pulse_1.6.1_amd64.AppImage").as_deref(),
+            Some("linux")
+        );
+        // Checksums and signatures are not installers.
+        assert_eq!(platform_for_asset("checksums.txt"), None);
+        assert_eq!(platform_for_asset("Pulse.exe.sig"), None);
     }
 }
