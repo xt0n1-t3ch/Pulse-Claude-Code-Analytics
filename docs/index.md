@@ -21,6 +21,13 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
+## v1.6.1 docs refresh
+
+- Recorded the Claude Opus 5 pricing correction: a single-segment family version now parses, so `claude-opus-5` bills at the official $5/$25/$6.25/$0.50 rates with 1M GA context and no long-context surcharge.
+- Documented window-accurate aggregation for Cost Analysis and Reports, which now total the full selected window in SQL instead of the newest page of sessions.
+- Added the signed in-app updater flow, replacing the browser hand-off to the Releases page.
+- Kept the release as a SemVer patch because v1.6.1 corrects pricing, aggregation, and presentation without changing Tauri command signatures or database schema.
+
 ## v1.6.0 docs refresh
 
 - Documented the versioned snapshot/event transport that keeps the frontend, Discord publisher, and SQLite persistence on one semantic state.
@@ -98,7 +105,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.6.0**
+- App release: **v1.6.1**
 - Schema: **Claude config v5 / Codex config v13 / Pulse analytics DB v5**
 - Last docs refresh: 2026-07-16 (event-driven snapshots, semantic Codex usage and Credits, responsive UI, and immutable canonical-core promotion)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

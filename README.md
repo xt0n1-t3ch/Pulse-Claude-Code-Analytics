@@ -24,25 +24,26 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.0</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.1</h2>
 
-- **Event-driven live telemetry** — one versioned backend snapshot now hydrates the app, updates Discord, and persists analytics without recurring frontend polling or unchanged SQLite writes.
+- **Claude Opus 5 priced correctly** — the dateless `claude-opus-5` id now resolves to the official $5/$25 rates with 1M GA context and no long-context surcharge, instead of falling through to legacy Opus pricing.
+- **True window totals** — Cost Analysis and Reports aggregate the entire selected window in SQL rather than the newest page of sessions, so 7d/30d/90d/1y agree across views.
+- **In-app updates** — signed Tauri updater artifacts install a new release from inside Pulse instead of sending you to the Releases page.
+- **Distinct analytical views** — Reports leads with a daily cost timeline and marked inflections; Cost Analysis is a budget cockpit with its own shape.
+- **Theme-true Discord preview** — the live Rich Presence card and its header state resolve through semantic tokens in both Dark and Light.
+
+<details>
+<summary>Previous v1.6.0 highlights</summary>
+
+- **Event-driven live telemetry** — one versioned backend snapshot hydrates the app, updates Discord, and persists analytics without recurring frontend polling or unchanged SQLite writes.
 - **Factual Codex usage** — semantic global and model quota windows, Credits, and absolute local reset timestamps match the data Codex exposes without inventing a five-hour window.
 - **Discord you can shape** — ten ordered presence fields, compact and descriptive presets, persistent privacy controls, and one backend-owned preview/publisher contract.
 - **Responsive native UI** — Dark and Light themes, self-hosted Inter Variable, keyboard-visible controls, and validated layouts down to 720x560.
 - **Release integrity** — Pulse pins `codex-presence-core` 1.0.0 to canonical `v1.8.0`, validates migrations and the Windows SPDX SBOM, and ships immutable checksummed assets.
 
-<details>
-<summary>Previous v1.5.3 highlights</summary>
-
-- **No five-second console flashes** — Codex Git branch probes use the shared Windows `CREATE_NO_WINDOW` launcher during Pulse's background refresh.
-- **Canonical fix, immutable pin** — Pulse vendors Codex Discord Rich Presence `v1.7.6` by annotated tag, exact commit, and per-file SHA-256 hashes.
-- **Adapters stay local** — sync updates canonical Rust owners while Pulse process detection and Tauri adapters remain outside the vendored mirror.
-- **Regression locked** — CI rejects the old upstream pin and any periodic Git probe that bypasses the silent launcher.
-
 </details>
 
-**[Download v1.6.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.6.1](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
