@@ -411,7 +411,7 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
     .unwrap();
     writeln!(
         md,
-        "\nFast-capable spend runs on Opus 4.8+ models (2x priority-speed rate when fast mode is active).\n"
+        "\nFast-capable spend runs on Opus 4.8 and Opus 5 (2x priority-speed rate when fast mode is active).\n"
     )
     .unwrap();
 
@@ -881,7 +881,7 @@ fn compute_speed_split(sessions: &[db::HistoricalSession]) -> SpeedSplit {
 
 fn build_speed_split_html(split: &SpeedSplit) -> String {
     format!(
-        r##"<div class="card"><h2>Speed Split</h2><div class="speed-split"><div class="speed-cell is-fast"><div class="speed-head"><span class="speed-bolt">⚡</span><span class="speed-name">Fast-capable</span></div><div class="speed-value">{fast_cost}</div><div class="speed-meta">{fast_sessions} sessions · {fast_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{fast_share:.1}%"></div></div></div><div class="speed-cell"><div class="speed-head"><span class="speed-name">Standard</span></div><div class="speed-value">{standard_cost}</div><div class="speed-meta">{standard_sessions} sessions · {standard_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{standard_share:.1}%"></div></div></div></div><p style="margin-top:14px;color:var(--text-secondary);font-size:12px;">Fast-capable spend runs on Opus 4.8+ models, which bill at the 2× priority-speed rate when fast mode is active. Standard covers every earlier model.</p></div>"##,
+        r##"<div class="card"><h2>Speed Split</h2><div class="speed-split"><div class="speed-cell is-fast"><div class="speed-head"><span class="speed-bolt">⚡</span><span class="speed-name">Fast-capable</span></div><div class="speed-value">{fast_cost}</div><div class="speed-meta">{fast_sessions} sessions · {fast_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{fast_share:.1}%"></div></div></div><div class="speed-cell"><div class="speed-head"><span class="speed-name">Standard</span></div><div class="speed-value">{standard_cost}</div><div class="speed-meta">{standard_sessions} sessions · {standard_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{standard_share:.1}%"></div></div></div></div><p style="margin-top:14px;color:var(--text-secondary);font-size:12px;">Fast-capable spend runs on Opus 4.8 and Opus 5, which bill at the 2× priority-speed rate when fast mode is active. Standard covers every other model.</p></div>"##,
         fast_cost = html_escape(&format_cost(split.fast_cost)),
         fast_sessions = split.fast_sessions,
         fast_share = split.fast_share_pct(),
@@ -1316,4 +1316,26 @@ fn build_recommendations(
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reports receive human labels ("Claude Opus 5"), not API ids, so the
+    /// normalizer has to round-trip them back into a form `is_fast_capable`
+    /// understands. Opus 5 and Opus 4.8 are the fast-capable models today.
+    #[test]
+    fn model_label_fast_capable_covers_opus_5_and_4_8() {
+        assert!(model_label_is_fast_capable("Claude Opus 5"));
+        assert!(model_label_is_fast_capable("Claude Opus 4.8"));
+    }
+
+    #[test]
+    fn model_label_fast_capable_excludes_earlier_and_other_families() {
+        assert!(!model_label_is_fast_capable("Claude Opus 4.7"));
+        assert!(!model_label_is_fast_capable("Claude Opus 4.6"));
+        assert!(!model_label_is_fast_capable("Claude Sonnet 5"));
+        assert!(!model_label_is_fast_capable("Claude Fable 5"));
+    }
 }

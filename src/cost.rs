@@ -34,6 +34,21 @@ fn is_mythos_class(id: &str) -> bool {
     id.contains("fable") || id.contains("mythos")
 }
 
+/// Matches Claude Opus 5 ids ("claude-opus-5", dated and `[1m]`-suffixed
+/// variants) without colliding with a hypothetical future "Opus 50". Mirrors
+/// `is_sonnet_5_class`: the character immediately after "opus-5" must be one
+/// of the real Anthropic id continuations (`-` before a date suffix, `[`
+/// before a context suffix) or the end of the string.
+fn is_opus_5_class(id: &str) -> bool {
+    match id.find("opus-5") {
+        None => false,
+        Some(pos) => matches!(
+            id[pos + "opus-5".len()..].chars().next(),
+            None | Some('-') | Some('[')
+        ),
+    }
+}
+
 /// Matches Claude Sonnet 5 ids ("claude-sonnet-5", dated and `[1m]`-suffixed
 /// variants) without colliding with a hypothetical future "Sonnet 50" or any
 /// other id that merely starts with the same digits. The character
@@ -185,23 +200,13 @@ pub fn model_pricing_at(model_id: &str, now: DateTime<Utc>) -> ModelPricing {
     }
 }
 
-/// Opus 4.5 and 4.6 use new pricing ($5/$25). Detected by version segments after "opus".
+/// Opus 4.5 and later use new pricing ($5/$25). Thin wrapper over the shared
+/// version comparison so there is exactly one place that knows how to read a
+/// version out of a model ID.
+///
+/// Don't match: opus-4, opus-4-0, opus-4-1, opus-3, opus (bare).
 fn is_new_opus(id: &str) -> bool {
-    // Don't match: opus-4, opus-4-0, opus-4-1, opus-3, opus (bare)
-    let after = match id.find("opus") {
-        Some(pos) => &id[pos + 4..],
-        None => return false,
-    };
-    let segments: Vec<&str> = after
-        .split('-')
-        .filter(|s| !s.is_empty() && s.len() <= 3 && s.chars().all(|c| c.is_ascii_digit()))
-        .collect();
-    if segments.len() >= 2
-        && let (Ok(major), Ok(minor)) = (segments[0].parse::<u32>(), segments[1].parse::<u32>())
-    {
-        return major >= 4 && minor >= 5;
-    }
-    false
+    is_version_at_least(id, "opus", 4, 5)
 }
 
 pub fn calculate_cost(
@@ -355,21 +360,42 @@ pub fn is_ga_1m_context(model_id: &str) -> bool {
 }
 
 /// Checks if a model ID has a version >= major.minor after the family name.
+///
+/// Accepts both the two-segment shape used through the 4.x line
+/// ("claude-opus-4-8" -> 4.8) and the single-segment shape introduced by
+/// Claude Opus 5 ("claude-opus-5" -> 5.0), where a missing minor reads as 0.
+/// A dated id ("claude-opus-5-20260724") still parses as 5.0 because the date
+/// is too long to be mistaken for a version segment.
+///
+/// The single-segment relaxation deliberately requires the family to be
+/// followed by a version at all, so a bare "opus" stays unversioned and keeps
+/// falling through to legacy handling. Future single-segment families (Opus 6,
+/// Sonnet 6, ...) are handled here rather than by another special case.
 fn is_version_at_least(id: &str, family: &str, min_major: u32, min_minor: u32) -> bool {
-    let after = match id.find(family) {
-        Some(pos) => &id[pos + family.len()..],
-        None => return false,
+    let Some((major, minor)) = family_version(id, family) else {
+        return false;
     };
-    let segments: Vec<&str> = after
+    major > min_major || (major == min_major && minor >= min_minor)
+}
+
+/// Parses the `(major, minor)` version that follows `family` in a model ID.
+/// Returns `None` when the family is absent or carries no version segment.
+///
+/// Version segments are at most three digits, which is what keeps an eight
+/// digit date suffix from being read as a version.
+fn family_version(id: &str, family: &str) -> Option<(u32, u32)> {
+    let after = &id[id.find(family)? + family.len()..];
+    let segments: Vec<u32> = after
         .split('-')
         .filter(|s| !s.is_empty() && s.len() <= 3 && s.chars().all(|c| c.is_ascii_digit()))
+        .filter_map(|s| s.parse::<u32>().ok())
         .collect();
-    if segments.len() >= 2
-        && let (Ok(major), Ok(minor)) = (segments[0].parse::<u32>(), segments[1].parse::<u32>())
-    {
-        return major > min_major || (major == min_major && minor >= min_minor);
+    match segments.as_slice() {
+        [major, minor, ..] => Some((*major, *minor)),
+        // Single-segment ids (Claude Opus 5 onward) have an implicit .0 minor.
+        [major] => Some((*major, 0)),
+        [] => None,
     }
-    false
 }
 
 /// Like `calculate_cost` but applies the 1M context surcharge for **beta** models only.
@@ -447,6 +473,14 @@ pub fn has_inflated_tokenizer(model_id: &str) -> bool {
         return true;
     }
     if !id.contains("opus") {
+        return false;
+    }
+    // Claude Opus 5 is deliberately excluded. Anthropic's pricing page
+    // attributes the newer tokenizer to "Claude 4.7 and later models" but
+    // publishes no Opus 5 figure, so Pulse reports only what is documented
+    // per-model rather than inferring a multiplier. This flag is display-only
+    // and feeds no cost math, so the choice cannot skew billing either way.
+    if is_opus_5_class(&id) {
         return false;
     }
     is_version_at_least(&id, "opus", 4, 7)
@@ -1407,5 +1441,177 @@ mod tests {
             (p.input_per_million - 2.0).abs() < 0.001 || (p.input_per_million - 3.0).abs() < 0.001,
             "must resolve to either the intro or the regular Sonnet 5 rate depending on the real wall clock"
         );
+    }
+
+    // ---- Claude Opus 5 ------------------------------------------------
+    // Opus 5 is the first Claude model whose ID carries a single version
+    // segment (`claude-opus-5`, dateless per Anthropic's model-ID docs).
+    // Every value below is taken literally from
+    // <https://platform.claude.com/docs/en/about-claude/pricing>.
+
+    /// Every published Opus 5 ID shape must resolve to the official
+    /// $5 / $25 / $6.25 / $0.50 rates.
+    #[test]
+    fn opus_5_pricing_matches_official_rates() {
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5[1m]",
+        ] {
+            let p = model_pricing(model);
+            assert!((p.input_per_million - 5.0).abs() < 0.001, "{model} input");
+            assert!(
+                (p.output_per_million - 25.0).abs() < 0.001,
+                "{model} output"
+            );
+            assert!(
+                (p.cache_write_per_million - 6.25).abs() < 0.001,
+                "{model} cache write"
+            );
+            assert!(
+                (p.cache_read_per_million - 0.50).abs() < 0.001,
+                "{model} cache read"
+            );
+        }
+    }
+
+    /// The short, dated, and `[1m]`-suffixed IDs are the same model, so an
+    /// identical turn must cost the same through all three.
+    #[test]
+    fn opus_5_id_variants_price_identically() {
+        let short = calculate_cost("claude-opus-5", 12_345, 6_789, 4_321, 9_876);
+        let dated = calculate_cost("claude-opus-5-20260724", 12_345, 6_789, 4_321, 9_876);
+        let suffixed = calculate_cost("claude-opus-5[1m]", 12_345, 6_789, 4_321, 9_876);
+        assert!((short - dated).abs() < 0.000_001);
+        assert!((short - suffixed).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn opus_5_supports_and_ga_1m_context() {
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5[1m]",
+        ] {
+            assert!(supports_1m_context(model), "{model} supports 1M");
+            assert!(is_ga_1m_context(model), "{model} is GA 1M");
+        }
+    }
+
+    /// 1M is Opus 5's native window at standard pricing, so a turn above the
+    /// 200K beta threshold must not pick up the 2x/1.5x long-context surcharge.
+    #[test]
+    fn opus_5_never_takes_the_beta_long_context_surcharge() {
+        let model = "claude-opus-5";
+        let (input, output, cache_write, cache_read) =
+            (300_000u64, 20_000u64, 50_000u64, 40_000u64);
+        assert!(
+            input + cache_write + cache_read > 200_000,
+            "above threshold"
+        );
+        let with_ctx = calculate_cost_with_context(model, input, output, cache_write, cache_read);
+        let plain = calculate_cost(model, input, output, cache_write, cache_read);
+        assert!((with_ctx - plain).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn opus_5_is_fast_capable() {
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5[1m]",
+        ] {
+            assert!(is_fast_capable(model), "{model}");
+        }
+    }
+
+    /// Fast mode for Opus 5 is published as $10 / $50 per MTok, exactly 2x the
+    /// $5 / $25 standard rate, and the multiplier scales the whole turn.
+    #[test]
+    fn opus_5_fast_mode_matches_published_10_and_50_rates() {
+        let model = "claude-opus-5";
+        let fast_input = calculate_cost_with_context_and_speed(model, 1_000_000, 0, 0, 0, true);
+        let fast_output = calculate_cost_with_context_and_speed(model, 0, 1_000_000, 0, 0, true);
+        assert!((fast_input - 10.0).abs() < 0.001, "fast input $10/MTok");
+        assert!((fast_output - 50.0).abs() < 0.001, "fast output $50/MTok");
+    }
+
+    #[test]
+    fn opus_5_fast_doubles_every_token_category() {
+        let model = "claude-opus-5";
+        let (input, output, cache_write, cache_read) =
+            (50_000u64, 5_000u64, 100_000u64, 100_000u64);
+        let standard =
+            calculate_category_costs(model, input, output, cache_write, cache_read, false);
+        let fast = calculate_category_costs(model, input, output, cache_write, cache_read, true);
+        assert!((fast.input_cost - standard.input_cost * 2.0).abs() < 0.000_001);
+        assert!((fast.output_cost - standard.output_cost * 2.0).abs() < 0.000_001);
+        assert!((fast.cache_write_cost - standard.cache_write_cost * 2.0).abs() < 0.000_001);
+        assert!((fast.cache_read_cost - standard.cache_read_cost * 2.0).abs() < 0.000_001);
+        let headline = calculate_cost_with_context_and_speed(
+            model,
+            input,
+            output,
+            cache_write,
+            cache_read,
+            true,
+        );
+        assert!((fast.total() - headline).abs() < 0.000_001);
+    }
+
+    /// Anthropic documents the newer tokenizer for "Claude 4.7 and later", but
+    /// no Opus 5 tokenizer figure is published, so Pulse does not infer one.
+    /// The flag is display-only and feeds no cost math.
+    #[test]
+    fn opus_5_has_no_inflated_tokenizer_flag() {
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5[1m]",
+        ] {
+            assert!(!has_inflated_tokenizer(model), "{model}");
+        }
+        // The exclusion must stay surgical: 4.7 and 4.8 keep the flag.
+        assert!(has_inflated_tokenizer("claude-opus-4-7"));
+        assert!(has_inflated_tokenizer("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn opus_5_display_names() {
+        assert_eq!(model_display_name("claude-opus-5"), "Claude Opus 5");
+        assert_eq!(
+            model_display_name("claude-opus-5-20260724"),
+            "Claude Opus 5"
+        );
+        assert_eq!(model_display_name("claude-opus-5[1m]"), "Claude Opus 5");
+        assert_eq!(
+            model_display_with_context("claude-opus-5", "Claude Opus 5", 0),
+            "Claude Opus 5 (1M)"
+        );
+        assert_eq!(strip_claude_prefix("Claude Opus 5"), "Opus 5");
+    }
+
+    /// Guard rail for the relaxed single-segment parser: a hypothetical
+    /// "opus-50" is a different model and must not inherit Opus 5 handling.
+    #[test]
+    fn unrelated_opus_ids_are_not_absorbed_as_opus_5() {
+        let p = model_pricing("claude-opus-50");
+        assert!(
+            (p.input_per_million - 5.0).abs() < 0.001,
+            "opus-50 parses as major 50, which is still a new-Opus rate"
+        );
+        // The single-segment relaxation must not reach down to bare/legacy ids.
+        assert!(!is_fast_capable("claude-opus-4"));
+        assert!(!is_fast_capable("opus"));
+        assert!(!is_ga_1m_context("claude-opus-4"));
+        assert!(!has_inflated_tokenizer("claude-opus-4"));
+    }
+
+    /// Opus 4.7 gained the tokenizer change but not fast mode; fast mode
+    /// starts at Opus 4.8.
+    #[test]
+    fn opus_4_7_still_not_fast_capable() {
+        assert!(!is_fast_capable("claude-opus-4-7"));
+        assert!(!is_fast_capable("claude-opus-4-6"));
     }
 }

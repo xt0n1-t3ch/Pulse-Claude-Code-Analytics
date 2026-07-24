@@ -129,6 +129,9 @@ mod tests {
     #[test]
     fn classify_covers_families() {
         assert_eq!(classify("claude-opus-4-7"), "opus");
+        assert_eq!(classify("claude-opus-5"), "opus");
+        assert_eq!(classify("claude-opus-5-20260724"), "opus");
+        assert_eq!(classify("claude-opus-5[1m]"), "opus");
         assert_eq!(classify("claude-sonnet-4-6"), "sonnet");
         assert_eq!(classify("claude-haiku-4-5"), "haiku");
         assert_eq!(classify("mystery-model"), "other");

@@ -424,6 +424,32 @@ mod tests {
         assert!(snap.totals.cost_usd > 0.0);
     }
 
+    /// Opus 5 is fast-capable, so a fast turn must still reconcile the four
+    /// billable categories against the headline total.
+    #[test]
+    fn fast_opus_5_snapshot_breakdown_reconciles_with_total() {
+        let mut tracker = MetricsTracker::new();
+        let sessions = vec![make_fast_session_with_breakdown(
+            "s1",
+            "claude-opus-5",
+            100_000,
+            20_000,
+            8_000,
+            60_000,
+        )];
+        tracker.update(&sessions);
+        let snap = tracker.snapshot().unwrap();
+
+        let bd = &snap.cost_breakdown;
+        let breakdown_sum =
+            bd.input_cost + bd.output_cost + bd.cache_write_cost + bd.cache_read_cost;
+        assert!((breakdown_sum - snap.totals.cost_usd).abs() < 1e-7);
+        assert!(snap.totals.cost_usd > 0.0);
+        // The tracker falls back to the plain display name; the "(1M)" context
+        // suffix is added by callers that pass a per-turn input figure.
+        assert_eq!(snap.by_model[0].display_name, "Claude Opus 5");
+    }
+
     #[test]
     fn accumulates_sessions_without_double_counting() {
         let mut tracker = MetricsTracker::new();

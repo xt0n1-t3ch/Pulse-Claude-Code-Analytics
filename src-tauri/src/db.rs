@@ -1176,6 +1176,20 @@ mod tests {
         assert_eq!(session_window_tokens(&two_hundred_k), 200_000);
     }
 
+    /// Opus 5 ships 1M as both its default and maximum window, so it must
+    /// report 1M even when a stale snapshot still says "200K".
+    #[test]
+    fn session_window_tokens_reports_1m_for_opus_5() {
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5[1m]",
+        ] {
+            let stale = sample_session_info("200K", model, 10, 10);
+            assert_eq!(session_window_tokens(&stale), 1_000_000, "{model}");
+        }
+    }
+
     #[test]
     fn session_used_tokens_uses_context_snapshot_not_lifetime_total() {
         let mut info = sample_session_info("1M", "claude-opus-4-8", 83_700, 8_580_000);
