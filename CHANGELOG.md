@@ -2,6 +2,30 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.6.1] - 2026-07-24
+
+Pulse 1.6.1 corrects Claude Opus 5 pricing, reports true window totals instead of a capped page, and installs updates from inside the app.
+
+### Added
+
+- Claude Opus 5 support end to end: pricing, cache tiers, 1M GA context, fast-mode detection, display names, model routing, and Rich Presence.
+- `get_cost_totals` aggregates an entire cost window, including per-model and per-project breakdowns, without the analyzer row cap.
+- A signed in-app updater that downloads, verifies, and installs a published release without leaving Pulse.
+- A read-only localhost bridge, compiled only in debug builds, so the Svelte frontend can be reviewed in a browser against the real backend.
+
+### Changed
+
+- Reports leads with a daily cost timeline that marks inflections on the curve; Cost Analysis becomes a budget cockpit with its own analytical shape.
+- The Discord live preview and its header state resolve entirely through semantic tokens and stay legible in Dark and Light.
+
+### Fixed
+
+- `claude-opus-5` no longer falls through to legacy $15/$75 Opus pricing plus a long-context surcharge; it bills at the official $5/$25 rates.
+- Cost Analysis and Reports no longer understate totals by summing only the newest page of sessions.
+- Drop inflections report their real ratio instead of an inverted multiplier.
+- Accent foregrounds on themed surfaces resolve through tokens instead of hardcoded colors.
+- Both high-severity frontend dependency advisories are cleared.
+
 ## [1.6.0] - 2026-07-16
 
 Pulse 1.6.0 unifies live analytics, Discord publication, and persistence around one semantic snapshot while promoting Codex parsing and presence composition to a canonical shared core.

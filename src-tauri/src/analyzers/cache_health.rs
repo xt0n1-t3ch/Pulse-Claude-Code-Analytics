@@ -187,4 +187,34 @@ mod tests {
     fn overall_ratio_empty_returns_zero() {
         assert_eq!(overall_ratio(&[]), 0.0);
     }
+
+    /// Diagnosis copy must name the provider's own instruction file. Telling a
+    /// Codex user to edit CLAUDE.md sends them to a file that does not exist in
+    /// their setup.
+    #[test]
+    fn diagnosis_names_the_providers_own_instruction_file() {
+        for grade in ['A', 'C', 'F'] {
+            let claude = diagnose(Provider::Claude, grade, 90.0, 88.0, 1_000);
+            let codex = diagnose(Provider::Codex, grade, 90.0, 88.0, 1_000);
+
+            if claude.contains(".md") {
+                assert!(
+                    claude.contains("CLAUDE.md"),
+                    "claude grade {grade}: {claude}"
+                );
+                assert!(!claude.contains("AGENTS.md"), "claude grade {grade}");
+                assert!(codex.contains("AGENTS.md"), "codex grade {grade}: {codex}");
+                assert!(!codex.contains("CLAUDE.md"), "codex grade {grade}");
+            }
+        }
+    }
+
+    /// The same applies to the product name in the empty and broken states.
+    #[test]
+    fn diagnosis_names_the_providers_own_product() {
+        let claude = diagnose(Provider::Claude, 'A', 0.0, 0.0, 0);
+        let codex = diagnose(Provider::Codex, 'A', 0.0, 0.0, 0);
+        assert!(claude.contains("Claude Code"), "{claude}");
+        assert!(!codex.contains("Claude Code"), "{codex}");
+    }
 }

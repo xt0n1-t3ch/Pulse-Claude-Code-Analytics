@@ -10,10 +10,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# The `.sig` entries are the updater payload signatures Tauri emits when
+# `createUpdaterArtifacts` is on. They are required, not optional: a release
+# without them cannot be offered through the in-app updater.
 $requiredSuffixes = switch ($Platform) {
-  "windows-x64" { @(".exe", ".msi") }
-  { $_ -in @("macos-arm64", "macos-x64") } { @(".app.tar.gz", ".dmg") }
-  "linux-x64" { @(".deb", ".rpm", ".AppImage") }
+  "windows-x64" { @(".exe", ".exe.sig", ".msi") }
+  { $_ -in @("macos-arm64", "macos-x64") } { @(".app.tar.gz", ".app.tar.gz.sig", ".dmg") }
+  "linux-x64" { @(".deb", ".rpm", ".AppImage", ".AppImage.sig") }
 }
 
 $inputPath = (Resolve-Path -LiteralPath $InputDirectory).Path

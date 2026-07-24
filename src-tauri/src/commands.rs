@@ -2929,6 +2929,19 @@ fn analyzer_sessions(days: Option<i64>) -> Vec<crate::db::HistoricalSession> {
     crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
 }
 
+/// Analyzer session page for a fixed window, exposed for the debug-only dev
+/// bridge so it can answer analyzer commands without an async runtime.
+#[cfg(debug_assertions)]
+pub fn analyzer_sessions_for(days: i64) -> Vec<crate::db::HistoricalSession> {
+    analyzer_sessions(Some(days))
+}
+
+/// Active analyzer provider, exposed for the debug-only dev bridge.
+#[cfg(debug_assertions)]
+pub fn analyzer_provider_for_bridge() -> Provider {
+    analyzer_provider()
+}
+
 fn analyzer_roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
     (
         cc_discord_presence::config::projects_paths(),
@@ -3121,6 +3134,18 @@ pub struct ReportsBundle {
     pub cache_health: crate::analyzers::cache_health::CacheHealthReport,
     pub model_routing: Option<crate::analyzers::model_routing::ModelRoutingReport>,
     pub inflection_points: Vec<crate::analyzers::inflection::InflectionPoint>,
+    /// Daily spend series for the requested window, oldest first, with every
+    /// day in range present (zero-filled). The Reports timeline plots this
+    /// directly, so gaps must be explicit days rather than missing points.
+    pub daily_costs: Vec<DailyCostPoint>,
+}
+
+/// One day on the Reports cost timeline.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct DailyCostPoint {
+    pub date: String,
+    pub cost: f64,
+    pub sessions: i64,
 }
 
 #[tauri::command]
@@ -3133,15 +3158,196 @@ pub async fn get_reports_bundle(days: Option<i64>, project: Option<String>) -> R
             project.as_deref(),
             Some(5000),
         );
-        build_reports_bundle_from_roots(provider, days, sessions, claude_roots, codex_roots)
+        let daily_costs = window_daily_costs(days.unwrap_or(30), project.as_deref());
+        build_reports_bundle_from_roots(
+            provider,
+            days,
+            sessions,
+            daily_costs,
+            claude_roots,
+            codex_roots,
+        )
     })
     .await
+}
+
+/// Synchronous form of [`get_reports_bundle`] for callers that are already off
+/// the UI thread (currently the debug-only dev bridge).
+pub fn reports_bundle_blocking(days: i64, project: Option<String>) -> ReportsBundle {
+    let provider = analyzer_provider();
+    let (claude_roots, codex_roots) = analyzer_roots();
+    let sessions = crate::db::get_session_history(Some(days), project.as_deref(), Some(5000));
+    let daily_costs = window_daily_costs(days, project.as_deref());
+    build_reports_bundle_from_roots(
+        provider,
+        Some(days),
+        sessions,
+        daily_costs,
+        claude_roots,
+        codex_roots,
+    )
+}
+
+/// Window-wide cost totals for the Cost Analysis KPIs.
+///
+/// The view lists a capped page of recent sessions for its table, but a KPI
+/// that says "Total spent (30d)" has to cover the whole window. Summing the
+/// visible page instead understates real spend by exactly the sessions that
+/// did not fit — which is how the screen came to report $7.73 against an
+/// actual $7,371.35.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct CostTotals {
+    pub days: i64,
+    pub sessions: usize,
+    pub total_cost: f64,
+    pub input_cost: f64,
+    pub output_cost: f64,
+    pub cache_write_cost: f64,
+    pub cache_read_cost: f64,
+    pub total_tokens: i64,
+    pub cache_read_tokens: i64,
+    /// Input tokens that were neither written to nor read from cache. Paired
+    /// with `input_cost` this yields the window's true per-token input rate,
+    /// which is what the cache-savings estimate needs.
+    pub pure_input_tokens: i64,
+    /// Window-wide spend per model, highest first. Computed here so the
+    /// breakdown always reconciles with `total_cost` instead of describing
+    /// only the page of sessions the table happens to show.
+    pub by_model: Vec<CostSlice>,
+    /// Window-wide spend per project, highest first.
+    pub by_project: Vec<CostSlice>,
+}
+
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct CostSlice {
+    pub label: String,
+    pub cost: f64,
+    pub sessions: usize,
+}
+
+#[tauri::command]
+pub async fn get_cost_totals(days: Option<i64>, project: Option<String>) -> CostTotals {
+    offload(move || cost_totals_blocking(days.unwrap_or(30), project)).await
+}
+
+pub fn cost_totals_blocking(days: i64, project: Option<String>) -> CostTotals {
+    // No limit: these are aggregates over the whole window by definition.
+    let sessions = crate::db::get_session_history(Some(days), project.as_deref(), None);
+    aggregate_cost_totals(days, &sessions)
+}
+
+fn aggregate_cost_totals(days: i64, sessions: &[crate::db::HistoricalSession]) -> CostTotals {
+    use std::collections::HashMap;
+
+    let mut totals = CostTotals {
+        days,
+        sessions: sessions.len(),
+        ..Default::default()
+    };
+    let mut by_model: HashMap<&str, (f64, usize)> = HashMap::new();
+    let mut by_project: HashMap<&str, (f64, usize)> = HashMap::new();
+
+    for s in sessions {
+        totals.total_cost += s.total_cost;
+        totals.input_cost += s.input_cost;
+        totals.output_cost += s.output_cost;
+        totals.cache_write_cost += s.cache_write_cost;
+        totals.cache_read_cost += s.cache_read_cost;
+        totals.total_tokens += s.total_tokens;
+        totals.cache_read_tokens += s.cache_read_tokens;
+        totals.pure_input_tokens +=
+            (s.input_tokens - s.cache_write_tokens - s.cache_read_tokens).max(0);
+
+        let m = by_model.entry(s.model.as_str()).or_insert((0.0, 0));
+        m.0 += s.total_cost;
+        m.1 += 1;
+        let p = by_project.entry(s.project.as_str()).or_insert((0.0, 0));
+        p.0 += s.total_cost;
+        p.1 += 1;
+    }
+
+    totals.by_model = into_sorted_slices(by_model);
+    totals.by_project = into_sorted_slices(by_project);
+    totals
+}
+
+/// Sorts a label -> (cost, sessions) map into descending-cost slices.
+fn into_sorted_slices(map: std::collections::HashMap<&str, (f64, usize)>) -> Vec<CostSlice> {
+    let mut slices: Vec<CostSlice> = map
+        .into_iter()
+        .map(|(label, (cost, sessions))| CostSlice {
+            label: label.to_string(),
+            cost,
+            sessions,
+        })
+        .collect();
+    slices.sort_by(|a, b| {
+        b.cost
+            .partial_cmp(&a.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            // Stable tie-break so equal-cost rows do not reshuffle between polls.
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    slices
+}
+
+/// First calendar date plotted for a `days`-long window, inclusive.
+///
+/// The series spans today plus `days - 1` earlier dates. Aggregating from this
+/// date keeps the boundary day whole, so a session that lands earlier in the
+/// day than the rolling `now - days` cutoff still appears on the curve that
+/// describes it.
+fn window_start_date(days: i64) -> chrono::NaiveDate {
+    let span = days.max(1);
+    chrono::Utc::now().date_naive() - chrono::Duration::days(span - 1)
+}
+
+/// Reads window-wide daily spend straight from SQLite.
+///
+/// Separate from the analyzer session page on purpose: the analyzers accept a
+/// capped page of recent rows, but a timeline built from that page would
+/// zero-fill days whose sessions were discarded.
+fn window_daily_costs(days: i64, project: Option<&str>) -> Vec<crate::db::DailyCostRow> {
+    let from = window_start_date(days).format("%Y-%m-%d").to_string();
+    crate::db::get_daily_costs(&from, project)
+}
+
+/// Zero-fills SQL daily totals into one point per day, oldest first.
+///
+/// Zero-filling matters for the timeline: a day with no sessions is a real
+/// observation (you did not spend), not a missing sample. Plotting only the
+/// days that exist would silently compress idle stretches and distort the
+/// shape of the curve.
+fn daily_cost_series(rows: &[crate::db::DailyCostRow], days: i64) -> Vec<DailyCostPoint> {
+    use std::collections::HashMap;
+
+    let by_date: HashMap<&str, (f64, i64)> = rows
+        .iter()
+        .map(|row| (row.date.as_str(), (row.cost, row.sessions)))
+        .collect();
+
+    let span = days.max(1);
+    let start = window_start_date(days);
+    (0..span)
+        .map(|offset| {
+            let date = (start + chrono::Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string();
+            let (cost, sessions) = by_date.get(date.as_str()).copied().unwrap_or((0.0, 0));
+            DailyCostPoint {
+                date,
+                cost,
+                sessions,
+            }
+        })
+        .collect()
 }
 
 pub fn build_reports_bundle_from_roots(
     provider: Provider,
     days: Option<i64>,
     sessions: Vec<crate::db::HistoricalSession>,
+    daily_costs: Vec<crate::db::DailyCostRow>,
     claude_roots: Vec<PathBuf>,
     codex_roots: Vec<PathBuf>,
 ) -> ReportsBundle {
@@ -3188,6 +3394,7 @@ pub fn build_reports_bundle_from_roots(
         capabilities,
         days: days.unwrap_or(30),
         total_sessions: sessions.len(),
+        daily_costs: daily_cost_series(&daily_costs, days.unwrap_or(30)),
         recommendations,
         trace_overview,
         tool_frequency,
@@ -3201,10 +3408,11 @@ pub fn build_reports_bundle_from_roots(
 
 #[cfg(test)]
 mod tests {
+    use super::aggregate_cost_totals;
     use super::{
         build_claude_context_breakdown, build_claude_session_infos, build_codex_discord_preview,
         build_codex_session_infos, codex_plan_key_from_tier, codex_total_input_tokens,
-        plan_key_from_override, semantic_snapshot_fingerprint,
+        daily_cost_series, plan_key_from_override, semantic_snapshot_fingerprint,
     };
     use cc_discord_presence::codex::config::{
         DesktopPresenceDesign, DisplayConfig, OpenAiPlanMode,
@@ -3215,7 +3423,9 @@ mod tests {
         CostAttribution, PricingSource, PricingStatus, TokenCostBreakdown,
     };
     use cc_discord_presence::codex::model::{SessionSpeed, SpeedMode, SpeedSource};
-    use cc_discord_presence::codex::session::CodexSessionSnapshot;
+    use cc_discord_presence::codex::session::{
+        CodexSessionSnapshot, ContextWindowSnapshot, ContextWindowSource,
+    };
     use cc_discord_presence::codex::telemetry::limits::RateLimits;
     use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
     use cc_discord_presence::config::PresenceConfig as TestClaudePresenceConfig;
@@ -3685,8 +3895,25 @@ mod tests {
 
     #[test]
     fn codex_session_info_uses_the_canonical_effective_context_for_gpt_5_4() {
+        // The snapshot carries no observed context window, so resolution falls
+        // back to the model catalogue. Pin it here: without an explicit window
+        // the resolver also consults ~/.codex/models_cache.json, which makes
+        // the expected value depend on whichever Codex build last wrote that
+        // file on the developer's machine.
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.context_window = Some(ContextWindowSnapshot {
+            raw_window_tokens: 272_000,
+            window_tokens: 258_400,
+            effective_percent: Some(95),
+            used_tokens: 0,
+            remaining_tokens: 258_400,
+            remaining_percent: 100.0,
+            source: ContextWindowSource::Event,
+            raw_source: ContextWindowSource::Event,
+        });
+
         let infos = build_codex_session_infos(
-            &[sample_codex_snapshot()],
+            &[snapshot],
             &TestCodexPresenceConfig::default(),
             TestPresenceSurface::Cli,
         );
@@ -3788,5 +4015,182 @@ mod tests {
         assert!((info[0].output_cost - 2.5).abs() < 0.0001);
         assert!((info[0].cache_read_cost - 0.5).abs() < 0.0001);
         assert!(info[0].fast);
+    }
+
+    // ---- Reports cost timeline ---------------------------------------
+
+    /// Builds a history row that landed `days_ago` days before today.
+    /// A SQL daily total placed `days_ago` calendar days before today.
+    fn cost_row(days_ago: i64, cost: f64, sessions: i64) -> crate::db::DailyCostRow {
+        let date = chrono::Utc::now().date_naive() - chrono::Duration::days(days_ago);
+        crate::db::DailyCostRow {
+            date: date.format("%Y-%m-%d").to_string(),
+            cost,
+            sessions,
+        }
+    }
+
+    /// A stored session dated `days_ago` calendar days before today.
+    fn session_on_day(days_ago: i64, cost: f64) -> crate::db::HistoricalSession {
+        let date = chrono::Utc::now().date_naive() - chrono::Duration::days(days_ago);
+        crate::db::HistoricalSession {
+            started_at: Some(format!("{}T12:00:00Z", date.format("%Y-%m-%d"))),
+            total_cost: cost,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn daily_cost_series_returns_one_point_per_day_oldest_first() {
+        let series = daily_cost_series(&[], 7);
+        assert_eq!(series.len(), 7);
+        let dates: Vec<&str> = series.iter().map(|p| p.date.as_str()).collect();
+        let mut sorted = dates.clone();
+        sorted.sort_unstable();
+        assert_eq!(dates, sorted, "series must run oldest to newest");
+    }
+
+    /// A day without sessions is a real "you spent nothing" observation, so it
+    /// must appear as a zero point rather than vanish from the timeline.
+    #[test]
+    fn daily_cost_series_zero_fills_days_without_sessions() {
+        let series = daily_cost_series(&[cost_row(1, 12.5, 1)], 5);
+        assert_eq!(series.len(), 5);
+        let zero_days = series.iter().filter(|p| p.cost == 0.0).count();
+        assert_eq!(zero_days, 4);
+        let spend_day = series.iter().find(|p| p.cost > 0.0).expect("spend day");
+        assert!((spend_day.cost - 12.5).abs() < 0.000_001);
+        assert_eq!(spend_day.sessions, 1);
+    }
+
+    #[test]
+    fn daily_cost_series_carries_the_aggregated_day_total() {
+        let series = daily_cost_series(&[cost_row(2, 8.0, 3)], 5);
+        let day = series.iter().find(|p| p.sessions > 0).expect("busy day");
+        assert!((day.cost - 8.0).abs() < 0.000_001);
+        assert_eq!(day.sessions, 3);
+    }
+
+    #[test]
+    fn daily_cost_series_ignores_sessions_outside_the_window() {
+        // 60 days ago is outside a 7-day window; the series stays flat.
+        let series = daily_cost_series(&[cost_row(60, 40.0, 1)], 7);
+        assert_eq!(series.len(), 7);
+        assert!(series.iter().all(|p| p.cost == 0.0));
+    }
+
+    /// The first plotted date is the same day the SQL aggregate starts from,
+    /// so a session on the boundary day is charted instead of silently
+    /// disagreeing with the analyzers that counted it.
+    #[test]
+    fn daily_cost_series_plots_the_boundary_day_of_the_window() {
+        let series = daily_cost_series(&[cost_row(6, 7.25, 2)], 7);
+        let first = series.first().expect("first day");
+        assert_eq!(first.date, cost_row(6, 0.0, 0).date);
+        assert!((first.cost - 7.25).abs() < 0.000_001);
+        assert_eq!(first.sessions, 2);
+    }
+
+    // ---- Cost Analysis KPI totals ------------------------------------
+
+    /// KPIs must cover every session in the window, not just the page the
+    /// table happens to display.
+    #[test]
+    fn cost_totals_sum_every_session_in_the_window() {
+        let sessions: Vec<_> = (0..250).map(|i| session_on_day(i % 30, 2.0)).collect();
+        let totals = aggregate_cost_totals(30, &sessions);
+        assert_eq!(totals.sessions, 250);
+        assert!((totals.total_cost - 500.0).abs() < 0.000_001);
+    }
+
+    /// The four cost categories must reconcile with the headline total, or the
+    /// "Cost by type" breakdown silently disagrees with "Total spent".
+    #[test]
+    fn cost_totals_categories_reconcile_with_the_headline() {
+        let mut a = session_on_day(1, 0.0);
+        a.input_cost = 1.5;
+        a.output_cost = 2.0;
+        a.cache_write_cost = 0.75;
+        a.cache_read_cost = 0.25;
+        a.total_cost = 4.5;
+
+        let totals = aggregate_cost_totals(30, &[a]);
+        let by_category = totals.input_cost
+            + totals.output_cost
+            + totals.cache_write_cost
+            + totals.cache_read_cost;
+        assert!((by_category - totals.total_cost).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn cost_totals_are_zero_for_an_empty_window() {
+        let totals = aggregate_cost_totals(7, &[]);
+        assert_eq!(totals.sessions, 0);
+        assert_eq!(totals.total_cost, 0.0);
+        assert_eq!(totals.days, 7);
+    }
+
+    /// The cache-savings estimate multiplies a token count by a per-token rate.
+    /// Both must come from this aggregate, so `pure_input_tokens` has to be the
+    /// denominator that matches `input_cost` over the same sessions.
+    #[test]
+    fn cost_totals_expose_pure_input_tokens_for_the_input_rate() {
+        let mut s = session_on_day(1, 0.0);
+        s.input_tokens = 100_000;
+        s.cache_write_tokens = 30_000;
+        s.cache_read_tokens = 50_000;
+        s.input_cost = 0.1;
+
+        let totals = aggregate_cost_totals(30, &[s]);
+        // 100k total input minus 30k written minus 50k read = 20k pure.
+        assert_eq!(totals.pure_input_tokens, 20_000);
+        assert_eq!(totals.cache_read_tokens, 50_000);
+
+        let rate = totals.input_cost / totals.pure_input_tokens as f64;
+        assert!((rate - 0.000_005).abs() < 1e-9, "rate was {rate}");
+    }
+
+    /// Cache-heavy sessions can report more cached than raw input tokens; the
+    /// pure-input count must clamp at zero rather than going negative and
+    /// flipping the derived rate.
+    #[test]
+    fn cost_totals_never_report_negative_pure_input() {
+        let mut s = session_on_day(1, 0.0);
+        s.input_tokens = 1_000;
+        s.cache_write_tokens = 5_000;
+        s.cache_read_tokens = 9_000;
+
+        let totals = aggregate_cost_totals(30, &[s]);
+        assert_eq!(totals.pure_input_tokens, 0);
+    }
+
+    /// Per-model and per-project breakdowns must reconcile with the headline.
+    /// Summing only the visible page made the bars claim $7.72 on a window
+    /// whose real spend was $7,371.
+    #[test]
+    fn cost_totals_breakdowns_reconcile_with_the_headline() {
+        let mut a = session_on_day(1, 10.0);
+        a.model = "Claude Opus 5".into();
+        a.project = "pulse".into();
+        let mut b = session_on_day(2, 4.0);
+        b.model = "Claude Sonnet 5".into();
+        b.project = "pulse".into();
+        let mut c = session_on_day(3, 6.0);
+        c.model = "Claude Opus 5".into();
+        c.project = "other".into();
+
+        let totals = aggregate_cost_totals(30, &[a, b, c]);
+
+        let model_sum: f64 = totals.by_model.iter().map(|m| m.cost).sum();
+        let project_sum: f64 = totals.by_project.iter().map(|p| p.cost).sum();
+        assert!((model_sum - totals.total_cost).abs() < 0.000_001);
+        assert!((project_sum - totals.total_cost).abs() < 0.000_001);
+
+        // Highest spend first, with sessions grouped rather than listed.
+        assert_eq!(totals.by_model[0].label, "Claude Opus 5");
+        assert!((totals.by_model[0].cost - 16.0).abs() < 0.000_001);
+        assert_eq!(totals.by_model[0].sessions, 2);
+        assert_eq!(totals.by_project[0].label, "pulse");
+        assert!((totals.by_project[0].cost - 14.0).abs() < 0.000_001);
     }
 }

@@ -17,6 +17,7 @@ import {
   getDiscordPreview,
   getDiscordSettings,
   getDiscordUser,
+  hasTauriIpc,
 } from "./api";
 
 export const health = writable<HealthResponse | null>(null);
@@ -180,9 +181,31 @@ export async function loadDiscordUser(): Promise<void> {
 }
 
 let snapshotUnlisten: Promise<UnlistenFn> | null = null;
+let snapshotPollTimer: ReturnType<typeof setInterval> | null = null;
+
+/** How often the browser fallback re-reads the snapshot. Matches the backend
+ *  poll interval, so the reviewed UI moves at the same cadence as the app. */
+const SNAPSHOT_POLL_MS = 5000;
+
+/**
+ * Polls for snapshots when push events are unavailable.
+ *
+ * Tauri's event transport only exists inside the Pulse webview. Opened in a
+ * plain browser for UI review, `listen` throws and the UI would otherwise show
+ * a single frozen snapshot for the rest of the session.
+ */
+function startSnapshotPolling(): void {
+  if (snapshotPollTimer) return;
+  void poll();
+  snapshotPollTimer = setInterval(() => void poll(), SNAPSHOT_POLL_MS);
+}
 
 export function startSnapshotSync(): void {
   if (snapshotUnlisten) return;
+  if (!hasTauriIpc()) {
+    startSnapshotPolling();
+    return;
+  }
   snapshotUnlisten = listen<AppSnapshot>("pulse://snapshot", (event) => {
     applySnapshot(event.payload);
   });
@@ -191,11 +214,15 @@ export function startSnapshotSync(): void {
     .catch((error) => {
       snapshotUnlisten = null;
       console.warn("Snapshot listener:", error);
-      void poll();
+      startSnapshotPolling();
     });
 }
 
 export function stopSnapshotSync(): void {
+  if (snapshotPollTimer) {
+    clearInterval(snapshotPollTimer);
+    snapshotPollTimer = null;
+  }
   const pendingUnlisten = snapshotUnlisten;
   snapshotUnlisten = null;
   void pendingUnlisten?.then((unlisten) => unlisten());

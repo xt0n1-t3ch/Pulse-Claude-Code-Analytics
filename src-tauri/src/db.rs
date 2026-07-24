@@ -460,7 +460,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct HistoricalSession {
     pub id: String,
     pub provider: String,
@@ -592,7 +592,11 @@ fn query_sessions(
         " ORDER BY COALESCE({history_ts}, datetime('now')) DESC, updated_at DESC"
     ));
 
-    let lim = limit.unwrap_or(100);
+    // `None` means "every row in the window", which is what aggregate callers
+    // need. Defaulting it to 100 silently truncated totals: a 299-session
+    // window reported the cost of its 100 newest sessions. SQLite treats a
+    // negative LIMIT as unlimited.
+    let lim = limit.unwrap_or(-1);
     sql.push_str(&format!(" LIMIT ?{param_idx}"));
     params_vec.push(Box::new(lim));
 
@@ -1396,6 +1400,76 @@ pub fn get_model_distribution(days: Option<i64>) -> Vec<(String, i64, f64)> {
     .unwrap_or_default()
 }
 
+/// One calendar day of spend, as aggregated by SQLite.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DailyCostRow {
+    pub date: String,
+    pub cost: f64,
+    pub sessions: i64,
+}
+
+/// Window-wide daily spend, aggregated in SQL.
+///
+/// The Reports timeline must describe the same window the analyzers see, so
+/// this deliberately does not reuse the capped session page: with more than
+/// the analyzer row cap in a window, summing the returned rows would zero-fill
+/// days whose sessions were discarded and understate the curve.
+///
+/// `from_date` is an inclusive calendar date (`YYYY-MM-DD`), matching the first
+/// day the caller intends to plot. Comparing on the date prefix keeps the
+/// boundary day whole instead of cutting it at the rolling `now - days`
+/// instant, which is what made the timeline disagree with its own totals.
+pub fn get_daily_costs(from_date: &str, project: Option<&str>) -> Vec<DailyCostRow> {
+    let Ok(conn) = db().lock() else { return vec![] };
+    let provider = active_provider_slug().to_string();
+    query_daily_costs(&conn, &provider, from_date, project)
+}
+
+fn query_daily_costs(
+    conn: &Connection,
+    provider: &str,
+    from_date: &str,
+    project: Option<&str>,
+) -> Vec<DailyCostRow> {
+    let history_ts = history_timestamp_expr();
+    // Sessions with no usable timestamp cannot be placed on a calendar day;
+    // dropping them here mirrors the frontend contract rather than inventing a
+    // spike on today.
+    let mut sql = format!(
+        "SELECT substr({history_ts}, 1, 10) AS day, COALESCE(SUM(total_cost), 0), COUNT(*)
+         FROM sessions
+         WHERE provider = ?1 AND {history_ts} IS NOT NULL AND substr({history_ts}, 1, 10) >= ?2"
+    );
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+        Box::new(provider.to_string()),
+        Box::new(from_date.to_string()),
+    ];
+    if let Some(project) = project {
+        sql.push_str(" AND project = ?3");
+        params_vec.push(Box::new(project.to_string()));
+    }
+    sql.push_str(" GROUP BY day ORDER BY day ASC");
+
+    let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = match conn.prepare(&sql) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            warn!("Failed to prepare daily cost query: {err}");
+            return vec![];
+        }
+    };
+    stmt.query_map(refs.as_slice(), |row| {
+        Ok(DailyCostRow {
+            date: row.get(0)?,
+            cost: row.get(1)?,
+            sessions: row.get(2)?,
+        })
+    })
+    .ok()
+    .map(|rows| rows.filter_map(|row| row.ok()).collect())
+    .unwrap_or_default()
+}
+
 pub fn export_all_data() -> serde_json::Value {
     let sessions = get_session_history(None, None, Some(10000));
     let daily = get_daily_stats(Some(365));
@@ -1610,6 +1684,61 @@ mod tests {
         assert_eq!(session_window_tokens(&two_hundred_k), 200_000);
     }
 
+    /// Opus 5 ships 1M as both its default and maximum window, so it must
+    /// report 1M even when a stale snapshot still says "200K".
+    #[test]
+    fn session_window_tokens_reports_1m_for_opus_5() {
+        for model in [
+            "claude-opus-5",
+            "claude-opus-5-20260724",
+            "claude-opus-5[1m]",
+        ] {
+            let stale = sample_session_info("200K", model, 10, 10);
+            assert_eq!(session_window_tokens(&stale), 1_000_000, "{model}");
+        }
+    }
+
+    /// `limit: None` must mean "every matching row". It used to silently
+    /// default to 100, which truncated aggregate queries: a 299-session window
+    /// reported the cost of only its 100 newest sessions.
+    #[test]
+    fn query_limit_none_is_unbounded_not_a_hidden_hundred() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn).expect("schema");
+
+        for i in 0..250 {
+            conn.execute(
+                "INSERT INTO sessions (id, provider, project, model, model_id, context_window,
+                    effort, started_at, total_cost, updated_at)
+                 VALUES (?1, 'claude', 'p', 'm', 'claude-opus-5', '1M', 'high',
+                    datetime('now'), 1.0, datetime('now'))",
+                rusqlite::params![format!("s{i}")],
+            )
+            .expect("insert");
+        }
+
+        let unbounded = query_sessions(
+            &conn, "claude", None, None, None, None, None, None, None, None, None, None,
+        );
+        assert_eq!(unbounded.len(), 250, "None must not cap the result set");
+
+        let capped = query_sessions(
+            &conn,
+            "claude",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        );
+        assert_eq!(capped.len(), 10, "an explicit limit still applies");
+    }
+
     #[test]
     fn session_used_tokens_uses_context_snapshot_not_lifetime_total() {
         let mut info = sample_session_info("1M", "claude-opus-4-8", 83_700, 8_580_000);
@@ -1658,6 +1787,89 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "session-a");
+    }
+
+    /// Provider slug used by the daily-aggregation fixtures. Pinned rather than
+    /// read from the global active provider, which another test can switch
+    /// between the insert and the query.
+    const FIXTURE_PROVIDER: &str = "claude";
+
+    /// Inserts one dated session so daily-aggregation tests can build a window
+    /// without going through the live upsert path.
+    fn insert_dated_session(conn: &Connection, id: &str, day: &str, project: &str, cost: f64) {
+        let provider = FIXTURE_PROVIDER.to_string();
+        let started = format!("{day}T12:00:00+00:00");
+        conn.execute(
+            "INSERT INTO sessions (id, provider, project, model, started_at, updated_at, total_cost)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, provider, project, "Claude Opus 5", started, started, cost],
+        )
+        .expect("insert dated session");
+    }
+
+    #[test]
+    fn daily_costs_aggregate_every_session_in_the_window() {
+        let conn = test_conn();
+        let provider = FIXTURE_PROVIDER.to_string();
+        insert_dated_session(&conn, "a", "2026-07-01", "repo", 10.0);
+        insert_dated_session(&conn, "b", "2026-07-01", "repo", 5.5);
+        insert_dated_session(&conn, "c", "2026-07-03", "repo", 2.0);
+
+        let rows = query_daily_costs(&conn, &provider, "2026-07-01", None);
+
+        assert_eq!(rows.len(), 2, "only days with sessions are returned");
+        assert_eq!(rows[0].date, "2026-07-01");
+        assert!((rows[0].cost - 15.5).abs() < 0.000_001);
+        assert_eq!(rows[0].sessions, 2);
+        assert_eq!(rows[1].date, "2026-07-03");
+    }
+
+    /// The boundary day is inclusive: a session earlier in the day than the
+    /// rolling `now - days` instant still belongs to the first plotted date.
+    #[test]
+    fn daily_costs_include_the_whole_boundary_day_and_exclude_earlier_days() {
+        let conn = test_conn();
+        let provider = FIXTURE_PROVIDER.to_string();
+        insert_dated_session(&conn, "before", "2026-06-30", "repo", 99.0);
+        insert_dated_session(&conn, "boundary", "2026-07-01", "repo", 4.0);
+
+        let rows = query_daily_costs(&conn, &provider, "2026-07-01", None);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2026-07-01");
+        assert!((rows[0].cost - 4.0).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn daily_costs_respect_the_project_filter() {
+        let conn = test_conn();
+        let provider = FIXTURE_PROVIDER.to_string();
+        insert_dated_session(&conn, "a", "2026-07-01", "repo-a", 10.0);
+        insert_dated_session(&conn, "b", "2026-07-01", "repo-b", 3.0);
+
+        let rows = query_daily_costs(&conn, &provider, "2026-07-01", Some("repo-b"));
+
+        assert_eq!(rows.len(), 1);
+        assert!((rows[0].cost - 3.0).abs() < 0.000_001);
+    }
+
+    /// Aggregation must cover the whole window even when the analyzer page cap
+    /// would have dropped the oldest sessions.
+    #[test]
+    fn daily_costs_are_not_limited_by_the_analyzer_row_cap() {
+        let conn = test_conn();
+        let provider = FIXTURE_PROVIDER.to_string();
+        for index in 0..120 {
+            let day = format!("2026-07-{:02}", (index % 30) + 1);
+            insert_dated_session(&conn, &format!("s{index}"), &day, "repo", 1.0);
+        }
+
+        let rows = query_daily_costs(&conn, &provider, "2026-07-01", None);
+        let total: f64 = rows.iter().map(|row| row.cost).sum();
+        let sessions: i64 = rows.iter().map(|row| row.sessions).sum();
+
+        assert_eq!(sessions, 120);
+        assert!((total - 120.0).abs() < 0.000_001);
     }
 
     #[test]
