@@ -456,14 +456,12 @@
   .dt-header, .dt-row { min-width: 760px; }
 
   @media (max-width: 1050px) {
-    .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .charts-row, .budget-forecast-row { grid-template-columns: 1fr; }
+    .charts-row { grid-template-columns: 1fr; }
+    .charts-row .pane + .pane { padding-left: 0; border-left: none; }
   }
 
   @media (max-width: 620px) {
-    .stats-row, .forecast-grid { grid-template-columns: 1fr; }
     .card { padding: 14px; }
-    .budget-empty { align-items: flex-start; flex-direction: column; }
     .budget-edit { flex-wrap: wrap; }
   }
 </style>

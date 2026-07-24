@@ -26,6 +26,10 @@
 
   function synthFakeUpdate(version: string): AppUpdateInfo {
     const tag = version.replace(/^v/i, "");
+    // The fake lane has no installed version to diff against, so grade the tag
+    // against the current 1.x line rather than hardcoding a severity.
+    const [major = 0, minor = 0] = tag.split(".").map((p) => Number.parseInt(p, 10) || 0);
+    const severity = major > 1 ? "major" : minor > 0 ? "minor" : "patch";
     return {
       current_version: "dev",
       latest_version: version,
@@ -36,6 +40,7 @@
       published_at: null,
       checked_at: new Date().toISOString(),
       assets: [],
+      severity,
     };
   }
 

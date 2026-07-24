@@ -608,7 +608,6 @@
     font-size: 10.5px;
     letter-spacing: 0;
   }
-  .hm-pill.warn .hm-dot { background: var(--warning); }
 
   /* ── LAYOUT ── */
   .discord-layout {
