@@ -9,6 +9,11 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "src"),
       "@testing-library/svelte": path.resolve(__dirname, "node_modules/@testing-library/svelte"),
+      // The suites live outside frontend/, so bare Tauri plugin specifiers do
+      // not resolve from their location. Pin them to this package's deps so
+      // dynamic imports inside components can be mocked.
+      "@tauri-apps/plugin-updater": path.resolve(__dirname, "node_modules/@tauri-apps/plugin-updater"),
+      "@tauri-apps/plugin-process": path.resolve(__dirname, "node_modules/@tauri-apps/plugin-process"),
     },
   },
   server: {

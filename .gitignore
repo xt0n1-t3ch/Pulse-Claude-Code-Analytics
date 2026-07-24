@@ -73,3 +73,7 @@ plan.md
 PLAN.md
 spec.md
 SPEC.md
+
+# Local-only scratch: design reference captures and browser tool output.
+.design-refs/
+.stealth-output/

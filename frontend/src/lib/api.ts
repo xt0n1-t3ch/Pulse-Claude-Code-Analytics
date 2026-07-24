@@ -1,4 +1,41 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+
+/**
+ * Tauri command dispatch, with a development fallback.
+ *
+ * Inside the Pulse window `invoke` talks to the Rust backend over the webview
+ * IPC. When the same bundle is opened in a plain browser (Vite dev server, for
+ * UI review), that IPC does not exist, so calls are routed to the debug-only
+ * localhost bridge instead. The bridge serves a read-only allowlist; anything
+ * else rejects, and both the bridge and this fallback are absent from release
+ * builds because `import.meta.env.DEV` is statically false there.
+ */
+const BRIDGE_ORIGIN = "http://127.0.0.1:1421";
+
+function hasTauriIpc(): boolean {
+    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+    if (hasTauriIpc() || !import.meta.env.DEV) {
+        return tauriInvoke<T>(command, args);
+    }
+    // The bridge is read-only by design, so a write has no backend to reach.
+    // Fail loudly here rather than letting the caller believe it persisted.
+    if (command.startsWith("set_") || command.startsWith("clear_")) {
+        throw new Error(
+            `${command} is a mutation; the read-only dev bridge cannot persist it. Run the packaged app to change settings.`,
+        );
+    }
+    // Forward the window so a 7d/30d/90d/1y switch queries the same range the
+    // packaged app would, instead of silently reusing the default.
+    const days = typeof args?.days === "number" ? `?days=${args.days}` : "";
+    const res = await fetch(`${BRIDGE_ORIGIN}/invoke/${command}${days}`);
+    if (!res.ok) {
+        throw new Error(`dev bridge rejected ${command}: ${res.status}`);
+    }
+    return (await res.json()) as T;
+}
 
 export interface HealthResponse {
     version: string;
@@ -446,6 +483,38 @@ export function getCostForecast(): Promise<CostForecast> {
     return invoke("get_cost_forecast");
 }
 
+/**
+ * Window-wide cost aggregates.
+ *
+ * Distinct from `getSessionHistory`, which returns a capped page for the table.
+ * KPIs must use these totals so a window with more sessions than the page size
+ * still reports its true spend.
+ */
+export interface CostTotals {
+    days: number;
+    sessions: number;
+    total_cost: number;
+    input_cost: number;
+    output_cost: number;
+    cache_write_cost: number;
+    cache_read_cost: number;
+    total_tokens: number;
+    cache_read_tokens: number;
+    pure_input_tokens: number;
+    by_model: CostSlice[];
+    by_project: CostSlice[];
+}
+
+export interface CostSlice {
+    label: string;
+    cost: number;
+    sessions: number;
+}
+
+export function getCostTotals(days?: number, project?: string): Promise<CostTotals> {
+    return invoke("get_cost_totals", { days: days ?? null, project: project ?? null });
+}
+
 export function getBudgetStatus(): Promise<BudgetStatus> {
     return invoke("get_budget_status");
 }
@@ -634,6 +703,14 @@ export interface ReportsBundle {
     cache_health: CacheHealthReport;
     model_routing: ModelRoutingReport;
     inflection_points: InflectionPoint[];
+    daily_costs: DailyCostPoint[];
+}
+
+/** One day on the Reports cost timeline. Zero-filled across the window. */
+export interface DailyCostPoint {
+    date: string;
+    cost: number;
+    sessions: number;
 }
 
 export function getReportsBundle(days?: number, project?: string): Promise<ReportsBundle> {
@@ -687,7 +764,12 @@ export interface AppUpdateAsset {
     download_url: string;
     size: number;
     content_type: string;
+    /** "windows" | "macos" | "linux", or null for non-installer assets. */
+    platform: string | null;
 }
+
+/** Size of the semver jump a release represents. */
+export type UpdateSeverity = "none" | "patch" | "minor" | "major";
 
 export interface AppUpdateInfo {
     current_version: string;
@@ -699,6 +781,7 @@ export interface AppUpdateInfo {
     published_at: string | null;
     checked_at: string;
     assets: AppUpdateAsset[];
+    severity: UpdateSeverity;
 }
 
 export function checkAppUpdate(): Promise<AppUpdateInfo> {
