@@ -947,6 +947,6 @@
   }
   .advice-btn:hover {
     background: var(--accent);
-    color: #1a1a1a;
+    color: var(--accent-fg);
   }
 </style>

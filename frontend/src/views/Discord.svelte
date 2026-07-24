@@ -158,16 +158,21 @@
       </span>
     </div>
     <div class="header-meta">
-      <span class="hm-pill" class:ok={ipcConnected} class:warn={!ipcConnected} title="Discord IPC status">
-        <span class="hm-dot"></span>
-        IPC · {ipcConnected ? "Connected" : ($health?.discord_status ?? "—")}
+      <!-- Broadcast state is the headline: it answers "is Discord showing me
+           right now?". It reads as a solid status chip. IPC and the asset key
+           are supporting diagnostics and stay quiet. -->
+      <span class="hm-state" class:live={discordEnabled} title="Broadcast state">
+        <span class="hm-beacon" class:live={discordEnabled}></span>
+        {discordEnabled ? "Broadcasting" : "Paused"}
       </span>
-      <span class="hm-pill hm-mono" title="Rich Presence asset key">
-        {previewAssetKey}
+      <span class="hm-divider" aria-hidden="true"></span>
+      <span class="hm-diag" class:warn={!ipcConnected} title="Discord IPC connection">
+        <span class="hm-diag-key">IPC</span>
+        <span class="hm-diag-val">{ipcConnected ? "Connected" : ($health?.discord_status || "Disconnected")}</span>
       </span>
-      <span class="hm-pill" class:ok={discordEnabled} title="Broadcast state">
-        <span class="hm-dot" class:live={discordEnabled}></span>
-        {discordEnabled ? "Live" : "Paused"}
+      <span class="hm-diag" title="Rich Presence asset key">
+        <span class="hm-diag-key">Asset</span>
+        <span class="hm-diag-val hm-mono">{previewAssetKey}</span>
       </span>
     </div>
   </div>
@@ -350,35 +355,90 @@
   .header-meta {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     flex-wrap: wrap;
     flex-shrink: 0;
   }
-  .hm-pill {
+
+  /* Primary: is presence actually broadcasting right now. */
+  .hm-state {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 5px 10px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
+    gap: 8px;
+    padding: 6px 13px 6px 11px;
     border-radius: var(--radius-full);
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    font-size: var(--fs-sm);
+    font-weight: 650;
+    letter-spacing: var(--letter-tight);
     color: var(--text-secondary);
     white-space: nowrap;
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease), color 0.2s var(--ease);
   }
-  .hm-pill.hm-mono { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); }
-  .hm-dot {
-    width: 6px; height: 6px; border-radius: 50%;
+  .hm-state.live {
+    color: var(--success);
+    background: var(--success-dim);
+    border-color: color-mix(in srgb, var(--success) 34%, transparent);
+  }
+
+  /* A pulsing beacon reads as "transmitting" in a way a static dot cannot. */
+  .hm-beacon {
+    position: relative;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
     background: var(--text-muted);
     flex-shrink: 0;
   }
-  .hm-dot.live { background: var(--success); box-shadow: 0 0 0 2px var(--success-dim); }
-  .hm-pill.ok { color: var(--success); }
-  .hm-pill.ok .hm-dot { background: var(--success); box-shadow: 0 0 0 2px var(--success-dim); }
-  .hm-pill.warn { color: var(--warning); }
-  .hm-pill.warn .hm-dot { background: var(--warning); }
+  .hm-beacon.live { background: var(--success); }
+  .hm-beacon.live::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 1.5px solid var(--success);
+    animation: hm-ping 2s var(--ease-out) infinite;
+  }
+  @keyframes hm-ping {
+    0%   { transform: scale(0.7); opacity: 0.9; }
+    70%  { transform: scale(1.7); opacity: 0; }
+    100% { transform: scale(1.7); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hm-beacon.live::after { animation: none; opacity: 0.35; }
+  }
+
+  .hm-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+  }
+
+  /* Secondary diagnostics: labelled key/value pairs, no chrome. */
+  .hm-diag {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: var(--fs-xs);
+    white-space: nowrap;
+  }
+  .hm-diag-key {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
+  }
+  .hm-diag-val {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .hm-diag.warn .hm-diag-val { color: var(--warning); }
+  .hm-mono {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0;
+  }
 
   /* ── LAYOUT ── */
   .discord-layout {
@@ -622,12 +682,17 @@
   /* ── Discord mock card ──────────────────────────────────────────────
      Faithful to a real Discord profile card, but every colour resolves
      through the --dc-* tokens in global.css so the light theme swaps in a
-     readable surface instead of inheriting Discord's dark palette. */
+     readable surface instead of inheriting Discord's dark palette.
+
+     Geometry (font sizes, radii, tracking) deliberately stays on Discord's
+     own values rather than Pulse's type scale. This panel previews what
+     Discord will actually render, so its proportions are part of the
+     contract; only colour is themed. */
   .dp-profile {
     position: relative;
     background: var(--dc-surface);
     border: 1px solid var(--dc-border);
-    border-radius: var(--radius-lg);
+    border-radius: 14px;
     overflow: hidden;
     box-shadow: var(--dc-shadow);
     transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
@@ -688,14 +753,14 @@
 
   .dp-username {
     padding: 10px 18px 0;
-    font-size: var(--fs-xl);
+    font-size: 20px;
     font-weight: 700;
-    letter-spacing: var(--letter-tight);
+    letter-spacing: -0.015em;
     color: var(--dc-text-primary);
-    line-height: var(--lh-tight);
+    line-height: 1.2;
   }
   .dp-tag {
-    font-size: var(--fs-md);
+    font-size: 14px;
     color: var(--dc-text-secondary);
     font-weight: 500;
     margin-left: 4px;
@@ -710,10 +775,10 @@
 
   .dp-section-title {
     padding: 0 18px 10px;
-    font-size: var(--fs-sm);
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: var(--letter-wider);
+    letter-spacing: 0.08em;
     color: var(--dc-text-secondary);
   }
 
@@ -721,15 +786,15 @@
     margin: 0 14px;
     background: var(--dc-surface-elevated);
     border: 1px solid var(--dc-border-soft);
-    border-radius: var(--radius-md);
+    border-radius: 8px;
     padding: 14px;
     transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
   }
   .dp-activity-header {
-    font-size: var(--fs-xs);
+    font-size: 10.5px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: var(--letter-wider);
+    letter-spacing: 0.08em;
     color: var(--dc-text-secondary);
     margin-bottom: 10px;
   }
@@ -743,7 +808,7 @@
   .dp-art-large {
     width: 60px;
     height: 60px;
-    border-radius: var(--radius-md);
+    border-radius: 10px;
     object-fit: cover;
     background: var(--dc-surface);
     box-shadow: var(--dc-art-shadow);
@@ -773,23 +838,23 @@
     flex: 1;
   }
   .dp-activity-name {
-    font-size: var(--fs-md);
+    font-size: 15px;
     font-weight: 700;
-    letter-spacing: var(--letter-tight);
+    letter-spacing: -0.005em;
     color: var(--dc-text-primary);
-    line-height: var(--lh-tight);
+    line-height: 1.2;
   }
   .dp-activity-details,
   .dp-activity-state {
-    font-size: var(--fs-base);
+    font-size: 12.5px;
     color: var(--dc-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    line-height: var(--lh-snug);
+    line-height: 1.35;
   }
   .dp-activity-elapsed {
-    font-size: var(--fs-sm);
+    font-size: 11.5px;
     color: var(--dc-text-muted);
     margin-top: 4px;
     font-variant-numeric: tabular-nums;

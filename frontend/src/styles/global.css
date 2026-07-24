@@ -34,6 +34,9 @@
   --danger: #ef4444;
   --danger-glow: rgba(239, 68, 68, 0.22);
   --danger-dim: rgba(239, 68, 68, 0.10);
+  /* Readable foreground when a surface is filled with --danger. Saturated red
+     needs a light label in both themes, so this does not flip with the theme. */
+  --danger-fg: #ffffff;
   --info: #7cb9e8;
   --info-glow: rgba(124, 185, 232, 0.22);
   --info-dim: rgba(124, 185, 232, 0.10);

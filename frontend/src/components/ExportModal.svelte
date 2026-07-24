@@ -173,6 +173,6 @@
   .btn { font-size: 12px; font-weight: 600; padding: 8px 16px; border-radius: var(--radius-sm); transition: all 0.15s ease; }
   .btn.secondary { color: var(--text-secondary); background: var(--bg-elevated); }
   .btn.secondary:hover { background: var(--bg-input); color: var(--text-primary); }
-  .btn.primary { color: #fff; background: var(--accent); }
+  .btn.primary { color: var(--accent-fg); background: var(--accent); }
   .btn.primary:hover { background: var(--accent-hover); }
 </style>

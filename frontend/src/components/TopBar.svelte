@@ -161,7 +161,10 @@
   }
 
   .win-close:hover {
-    color: #fff;
+    /* The close button fills with --danger on hover, which is a saturated red
+       in both themes, so the label needs a light foreground regardless of
+       theme. --accent-fg would flip to dark in light mode and vanish. */
+    color: var(--danger-fg);
     background: var(--danger);
   }
 </style>
