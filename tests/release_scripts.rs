@@ -361,6 +361,82 @@ fn release_assets_reject_empty_input_and_checksum_nonempty_input() {
         .expect("run asset collector");
     assert_failure_contains(&collected, "Missing required release asset");
 
+    write_complete_platform_artifacts(&artifacts);
+    let collected = release_assets_command(&artifacts, &output)
+        .output()
+        .expect("run asset collector");
+    assert_success(&collected);
+    assert!(output.join("pulse-windows-x64-Pulse.exe").is_file());
+    assert!(output.join("pulse-windows-x64.spdx.json").is_file());
+    let sums = read(output.join("SHA256SUMS.txt"));
+    assert!(sums.contains("  pulse-windows-x64-Pulse.exe\n"));
+    assert!(sums.contains("  pulse-windows-x64.spdx.json\n"));
+}
+
+#[test]
+fn release_assets_publish_a_signed_updater_manifest_for_every_platform() {
+    let fixture = TempDir::new().expect("fixture");
+    let artifacts = fixture.path().join("artifacts");
+    let output = fixture.path().join("release-assets");
+    write_complete_platform_artifacts(&artifacts);
+
+    let collected = release_assets_command(&artifacts, &output)
+        .output()
+        .expect("run asset collector");
+
+    assert_success(&collected);
+    let manifest = read(output.join("latest.json"));
+    assert!(manifest.contains(r#""version": "1.6.1""#), "{manifest}");
+    for (target, payload) in [
+        ("windows-x86_64", "pulse-windows-x64-Pulse.exe"),
+        ("darwin-aarch64", "pulse-macos-arm64-Pulse.app.tar.gz"),
+        ("darwin-x86_64", "pulse-macos-x64-Pulse.app.tar.gz"),
+        ("linux-x86_64", "pulse-linux-x64-Pulse.AppImage"),
+    ] {
+        assert!(manifest.contains(target), "{target} missing:\n{manifest}");
+        assert!(
+            manifest.contains(&format!(
+                "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/download/v1.6.1/{payload}"
+            )),
+            "{payload} download URL missing:\n{manifest}"
+        );
+        assert!(output.join(payload).is_file(), "{payload} not published");
+    }
+    assert!(manifest.contains("signature-for-windows"), "{manifest}");
+
+    // The manifest itself must be covered by the checksum file it ships with.
+    let sums = read(output.join("SHA256SUMS.txt"));
+    assert!(sums.contains("  latest.json\n"), "{sums}");
+    assert_eq!(sums.lines().count(), 15, "{sums}");
+}
+
+#[test]
+fn release_assets_reject_a_platform_without_its_updater_signature() {
+    let fixture = TempDir::new().expect("fixture");
+    let artifacts = fixture.path().join("artifacts");
+    let output = fixture.path().join("release-assets");
+    write_complete_platform_artifacts(&artifacts);
+    fs::remove_file(artifacts.join("pulse-linux-x64/pulse-linux-x64-Pulse.AppImage.sig"))
+        .expect("drop the Linux updater signature");
+
+    let collected = release_assets_command(&artifacts, &output)
+        .output()
+        .expect("run asset collector");
+
+    assert_failure_contains(&collected, ".AppImage.sig");
+}
+
+/// Writes one complete, signed artifact set so updater assertions start from a
+/// releasable state instead of rebuilding the fixture in each test.
+fn write_complete_platform_artifacts(artifacts: &Path) {
+    write(
+        artifacts.join("pulse-windows-x64/pulse-windows-x64-Pulse.exe"),
+        "exe",
+    );
+    write(
+        artifacts.join("pulse-windows-x64/pulse-windows-x64-Pulse.exe.sig"),
+        "signature-for-windows",
+    );
     write(
         artifacts.join("pulse-windows-x64/pulse-windows-x64-Pulse.msi"),
         "msi",
@@ -380,6 +456,12 @@ fn release_assets_reject_empty_input_and_checksum_nonempty_input() {
             )),
             "app",
         );
+        write(
+            artifacts.join(format!(
+                "pulse-{platform}/pulse-{platform}-Pulse.app.tar.gz.sig"
+            )),
+            &format!("signature-for-{platform}"),
+        );
     }
     for extension in ["deb", "rpm", "AppImage"] {
         write(
@@ -387,15 +469,10 @@ fn release_assets_reject_empty_input_and_checksum_nonempty_input() {
             extension,
         );
     }
-    let collected = release_assets_command(&artifacts, &output)
-        .output()
-        .expect("run asset collector");
-    assert_success(&collected);
-    assert!(output.join("pulse-windows-x64-Pulse.exe").is_file());
-    assert!(output.join("pulse-windows-x64.spdx.json").is_file());
-    let sums = read(output.join("SHA256SUMS.txt"));
-    assert!(sums.contains("  pulse-windows-x64-Pulse.exe\n"));
-    assert!(sums.contains("  pulse-windows-x64.spdx.json\n"));
+    write(
+        artifacts.join("pulse-linux-x64/pulse-linux-x64-Pulse.AppImage.sig"),
+        "signature-for-linux",
+    );
 }
 
 #[test]
@@ -405,6 +482,7 @@ fn platform_asset_collection_prevents_same_basename_mac_collisions() {
     for platform in ["macos-arm64", "macos-x64"] {
         let input = fixture.path().join(platform);
         write(input.join("Pulse.app.tar.gz"), platform);
+        write(input.join("Pulse.app.tar.gz.sig"), platform);
         write(input.join("Pulse.dmg"), platform);
 
         let output = platform_assets_command(&input, &artifacts, platform)
@@ -419,6 +497,12 @@ fn platform_asset_collection_prevents_same_basename_mac_collisions() {
             .is_file()
     );
     assert!(artifacts.join("pulse-macos-x64-Pulse.app.tar.gz").is_file());
+    assert!(
+        artifacts
+            .join("pulse-macos-arm64-Pulse.app.tar.gz.sig")
+            .is_file(),
+        "the updater signature must travel with its payload"
+    );
 }
 
 #[test]
@@ -466,6 +550,11 @@ fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
     assert!(release.contains("No release assets"));
     assert!(release.contains("new-windows-sbom.ps1"));
     assert!(release.contains("check-windows-sbom.ps1"));
+    assert!(
+        release.contains("Verify updater manifest targets every platform"),
+        "the release must prove latest.json covers every updater target"
+    );
+    assert!(release.contains("release-assets/latest.json"));
     assert!(freshness.contains("workflow_dispatch:"));
     assert!(freshness.contains("issues: write"));
     assert!(!ci.contains("git ls-remote"));
@@ -807,7 +896,11 @@ fn release_assets_command(artifacts: &Path, output: &Path) -> Command {
         .arg("-ArtifactsDirectory")
         .arg(artifacts)
         .arg("-OutputDirectory")
-        .arg(output);
+        .arg(output)
+        .arg("-Tag")
+        .arg("v1.6.1")
+        .arg("-Repository")
+        .arg("xt0n1-t3ch/Pulse-Claude-Code-Analytics");
     command
 }
 

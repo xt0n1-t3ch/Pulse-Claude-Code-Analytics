@@ -235,15 +235,29 @@ jobs:
 
       - name: Prepare complete release assets and checksums
         shell: pwsh
-        run: ./scripts/release-assets.ps1 -ArtifactsDirectory artifacts -OutputDirectory release-assets
+        run: ./scripts/release-assets.ps1 -ArtifactsDirectory artifacts -OutputDirectory release-assets -Tag "$env:GITHUB_REF_NAME" -Repository "$env:GITHUB_REPOSITORY"
 
       - name: Verify checksum manifest
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 11
-          test "$(wc -l < release-assets/SHA256SUMS.txt)" -eq 10
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 16
+          test "$(wc -l < release-assets/SHA256SUMS.txt)" -eq 15
           (cd release-assets && sha256sum --check SHA256SUMS.txt)
+
+      - name: Verify updater manifest targets every platform
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$(jq -r .version release-assets/latest.json)" = "${TAG#v}"
+          for target in windows-x86_64 darwin-aarch64 darwin-x86_64 linux-x86_64; do
+            url="$(jq -r --arg t "$target" '.platforms[$t].url' release-assets/latest.json)"
+            signature="$(jq -r --arg t "$target" '.platforms[$t].signature' release-assets/latest.json)"
+            test -n "$signature" && test "$signature" != "null"
+            test -f "release-assets/$(basename "$url")"
+          done
 
       - name: Extract curated release notes
         shell: bash
