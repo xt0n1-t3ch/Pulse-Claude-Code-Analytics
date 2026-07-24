@@ -112,6 +112,28 @@ describe("SessionCard", () => {
     expect(getByText(/Claude Opus 4\.8/)).toBeTruthy();
   });
 
+  it("renders the Opus 5 model display name", () => {
+    const { getByText } = render(SessionCard, {
+      props: { session: makeSession({ model: "Claude Opus 5", model_id: "claude-opus-5" }) },
+    });
+    expect(getByText(/Claude Opus 5/)).toBeTruthy();
+  });
+
+  it("omits the inflated-tokenizer marker for Opus 5", () => {
+    // Anthropic publishes no per-model tokenizer figure for Opus 5, so the
+    // backend reports false and the card must stay clean.
+    const { queryByTitle } = render(SessionCard, {
+      props: {
+        session: makeSession({
+          model: "Claude Opus 5",
+          model_id: "claude-opus-5",
+          has_inflated_tokenizer: false,
+        }),
+      },
+    });
+    expect(queryByTitle(/Inflated tokenizer/i)).toBeNull();
+  });
+
   it("renders Fable and Mythos model badges without inflated-tokenizer warnings", async () => {
     const { getByText, queryByTitle, rerender } = render(SessionCard, {
       props: {

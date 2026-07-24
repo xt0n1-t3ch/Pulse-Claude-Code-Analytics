@@ -290,16 +290,21 @@
       </span>
     </div>
     <div class="header-meta">
-      <span class="hm-pill" class:ok={ipcConnected} class:warn={!ipcConnected} title="Discord IPC status">
-        <span class="hm-dot"></span>
-        IPC · {ipcConnected ? "Connected" : ($health?.discord_status ?? "—")}
+      <!-- Broadcast state is the headline: it answers "is Discord showing me
+           right now?". IPC and the asset key are supporting diagnostics and
+           stay quiet rather than competing as three identical pills. -->
+      <span class="hm-state" class:live={discordEnabled} title="Broadcast state">
+        <span class="hm-beacon" class:live={discordEnabled}></span>
+        {discordEnabled ? "Broadcasting" : "Paused"}
       </span>
-      <span class="hm-pill hm-mono" title="Rich Presence asset key">
-        {previewAssetKey}
+      <span class="hm-divider" aria-hidden="true"></span>
+      <span class="hm-diag" class:warn={!ipcConnected} title="Discord IPC connection">
+        <span class="hm-diag-key">IPC</span>
+        <span class="hm-diag-val">{ipcConnected ? "Connected" : ($health?.discord_status || "Disconnected")}</span>
       </span>
-      <span class="hm-pill" class:ok={discordEnabled} title="Broadcast state">
-        <span class="hm-dot" class:live={discordEnabled}></span>
-        {discordEnabled ? "Live" : "Paused"}
+      <span class="hm-diag" title="Rich Presence asset key">
+        <span class="hm-diag-key">Asset</span>
+        <span class="hm-diag-val hm-mono">{previewAssetKey}</span>
       </span>
     </div>
   </div>
@@ -519,34 +524,90 @@
   .header-meta {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     flex-wrap: wrap;
     flex-shrink: 0;
   }
-  .hm-pill {
+
+  /* Primary: is presence actually broadcasting right now. */
+  .hm-state {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 5px 10px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
+    gap: 8px;
+    padding: 6px 13px 6px 11px;
     border-radius: var(--radius-full);
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    font-size: var(--fs-sm);
+    font-weight: 650;
+    letter-spacing: var(--letter-tight);
     color: var(--text-secondary);
     white-space: nowrap;
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease), color 0.2s var(--ease);
   }
-  .hm-pill.hm-mono { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); }
-  .hm-dot {
-    width: 6px; height: 6px; border-radius: 50%;
+  .hm-state.live {
+    color: var(--success);
+    background: var(--success-dim);
+    border-color: color-mix(in srgb, var(--success) 34%, transparent);
+  }
+
+  /* A pulsing beacon reads as "transmitting" in a way a static dot cannot. */
+  .hm-beacon {
+    position: relative;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
     background: var(--text-muted);
     flex-shrink: 0;
   }
-  .hm-dot.live { background: var(--success); box-shadow: 0 0 0 2px var(--success-dim); }
-  .hm-pill.ok { color: var(--success); }
-  .hm-pill.ok .hm-dot { background: var(--success); box-shadow: 0 0 0 2px var(--success-dim); }
-  .hm-pill.warn { color: var(--warning); }
+  .hm-beacon.live { background: var(--success); }
+  .hm-beacon.live::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 50%;
+    border: 1.5px solid var(--success);
+    animation: hm-ping 2s var(--ease-out) infinite;
+  }
+  @keyframes hm-ping {
+    0%   { transform: scale(0.7); opacity: 0.9; }
+    70%  { transform: scale(1.7); opacity: 0; }
+    100% { transform: scale(1.7); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hm-beacon.live::after { animation: none; opacity: 0.35; }
+  }
+
+  .hm-divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+  }
+
+  /* Secondary diagnostics: labelled key/value pairs, no chrome. */
+  .hm-diag {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: var(--fs-xs);
+    white-space: nowrap;
+  }
+  .hm-diag-key {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
+  }
+  .hm-diag-val {
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  .hm-diag.warn .hm-diag-val { color: var(--warning); }
+  .hm-mono {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0;
+  }
   .hm-pill.warn .hm-dot { background: var(--warning); }
 
   /* ── LAYOUT ── */
@@ -611,7 +672,7 @@
     background: var(--text-muted);
     transform: translateY(-50%);
     transition: left 0.22s var(--spring), background 0.2s var(--ease);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--shadow-xs);
   }
   .big-toggle input:checked ~ .toggle-track {
     background: color-mix(in srgb, var(--success) 30%, var(--bg-elevated));
@@ -620,7 +681,7 @@
   .big-toggle input:checked ~ .toggle-track .toggle-thumb {
     left: 22px;
     background: var(--success);
-    box-shadow: 0 0 10px var(--success-glow), 0 1px 2px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 0 10px var(--success-glow), var(--shadow-xs);
   }
   .bt-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .bt-title {
@@ -825,7 +886,7 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, transparent 55%, rgba(0, 0, 0, 0.18) 100%);
+    background: linear-gradient(180deg, transparent 55%, var(--preview-scrim) 100%);
     pointer-events: none;
   }
   .dp-banner-default {
