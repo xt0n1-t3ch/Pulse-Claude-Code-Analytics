@@ -2929,6 +2929,19 @@ fn analyzer_sessions(days: Option<i64>) -> Vec<crate::db::HistoricalSession> {
     crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
 }
 
+/// Analyzer session page for a fixed window, exposed for the debug-only dev
+/// bridge so it can answer analyzer commands without an async runtime.
+#[cfg(debug_assertions)]
+pub fn analyzer_sessions_for(days: i64) -> Vec<crate::db::HistoricalSession> {
+    analyzer_sessions(Some(days))
+}
+
+/// Active analyzer provider, exposed for the debug-only dev bridge.
+#[cfg(debug_assertions)]
+pub fn analyzer_provider_for_bridge() -> Provider {
+    analyzer_provider()
+}
+
 fn analyzer_roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
     (
         cc_discord_presence::config::projects_paths(),
@@ -3145,7 +3158,15 @@ pub async fn get_reports_bundle(days: Option<i64>, project: Option<String>) -> R
             project.as_deref(),
             Some(5000),
         );
-        build_reports_bundle_from_roots(provider, days, sessions, claude_roots, codex_roots)
+        let daily_costs = window_daily_costs(days.unwrap_or(30), project.as_deref());
+        build_reports_bundle_from_roots(
+            provider,
+            days,
+            sessions,
+            daily_costs,
+            claude_roots,
+            codex_roots,
+        )
     })
     .await
 }
@@ -3156,7 +3177,15 @@ pub fn reports_bundle_blocking(days: i64, project: Option<String>) -> ReportsBun
     let provider = analyzer_provider();
     let (claude_roots, codex_roots) = analyzer_roots();
     let sessions = crate::db::get_session_history(Some(days), project.as_deref(), Some(5000));
-    build_reports_bundle_from_roots(provider, Some(days), sessions, claude_roots, codex_roots)
+    let daily_costs = window_daily_costs(days, project.as_deref());
+    build_reports_bundle_from_roots(
+        provider,
+        Some(days),
+        sessions,
+        daily_costs,
+        claude_roots,
+        codex_roots,
+    )
 }
 
 /// Window-wide cost totals for the Cost Analysis KPIs.
@@ -3262,42 +3291,49 @@ fn into_sorted_slices(map: std::collections::HashMap<&str, (f64, usize)>) -> Vec
     slices
 }
 
-/// Rolls session history into a zero-filled daily spend series for the last
-/// `days` days, oldest first.
+/// First calendar date plotted for a `days`-long window, inclusive.
+///
+/// The series spans today plus `days - 1` earlier dates. Aggregating from this
+/// date keeps the boundary day whole, so a session that lands earlier in the
+/// day than the rolling `now - days` cutoff still appears on the curve that
+/// describes it.
+fn window_start_date(days: i64) -> chrono::NaiveDate {
+    let span = days.max(1);
+    chrono::Utc::now().date_naive() - chrono::Duration::days(span - 1)
+}
+
+/// Reads window-wide daily spend straight from SQLite.
+///
+/// Separate from the analyzer session page on purpose: the analyzers accept a
+/// capped page of recent rows, but a timeline built from that page would
+/// zero-fill days whose sessions were discarded.
+fn window_daily_costs(days: i64, project: Option<&str>) -> Vec<crate::db::DailyCostRow> {
+    let from = window_start_date(days).format("%Y-%m-%d").to_string();
+    crate::db::get_daily_costs(&from, project)
+}
+
+/// Zero-fills SQL daily totals into one point per day, oldest first.
 ///
 /// Zero-filling matters for the timeline: a day with no sessions is a real
 /// observation (you did not spend), not a missing sample. Plotting only the
 /// days that exist would silently compress idle stretches and distort the
 /// shape of the curve.
-///
-/// Sessions are bucketed by the calendar date of `started_at`; sessions with
-/// no start timestamp cannot be placed on a day and are skipped.
-fn daily_cost_series(sessions: &[crate::db::HistoricalSession], days: i64) -> Vec<DailyCostPoint> {
+fn daily_cost_series(rows: &[crate::db::DailyCostRow], days: i64) -> Vec<DailyCostPoint> {
     use std::collections::HashMap;
 
-    let mut by_date: HashMap<String, (f64, i64)> = HashMap::new();
-    for s in sessions {
-        let Some(started) = s.started_at.as_deref() else {
-            continue;
-        };
-        // Timestamps are RFC3339; the calendar day is the leading 10 chars.
-        if started.len() < 10 {
-            continue;
-        }
-        let entry = by_date.entry(started[..10].to_string()).or_insert((0.0, 0));
-        entry.0 += s.total_cost;
-        entry.1 += 1;
-    }
+    let by_date: HashMap<&str, (f64, i64)> = rows
+        .iter()
+        .map(|row| (row.date.as_str(), (row.cost, row.sessions)))
+        .collect();
 
     let span = days.max(1);
-    let today = chrono::Utc::now().date_naive();
+    let start = window_start_date(days);
     (0..span)
-        .rev()
         .map(|offset| {
-            let date = (today - chrono::Duration::days(offset))
+            let date = (start + chrono::Duration::days(offset))
                 .format("%Y-%m-%d")
                 .to_string();
-            let (cost, sessions) = by_date.get(&date).copied().unwrap_or((0.0, 0));
+            let (cost, sessions) = by_date.get(date.as_str()).copied().unwrap_or((0.0, 0));
             DailyCostPoint {
                 date,
                 cost,
@@ -3311,6 +3347,7 @@ pub fn build_reports_bundle_from_roots(
     provider: Provider,
     days: Option<i64>,
     sessions: Vec<crate::db::HistoricalSession>,
+    daily_costs: Vec<crate::db::DailyCostRow>,
     claude_roots: Vec<PathBuf>,
     codex_roots: Vec<PathBuf>,
 ) -> ReportsBundle {
@@ -3357,7 +3394,7 @@ pub fn build_reports_bundle_from_roots(
         capabilities,
         days: days.unwrap_or(30),
         total_sessions: sessions.len(),
-        daily_costs: daily_cost_series(&sessions, days.unwrap_or(30)),
+        daily_costs: daily_cost_series(&daily_costs, days.unwrap_or(30)),
         recommendations,
         trace_overview,
         tool_frequency,
@@ -3983,6 +4020,17 @@ mod tests {
     // ---- Reports cost timeline ---------------------------------------
 
     /// Builds a history row that landed `days_ago` days before today.
+    /// A SQL daily total placed `days_ago` calendar days before today.
+    fn cost_row(days_ago: i64, cost: f64, sessions: i64) -> crate::db::DailyCostRow {
+        let date = chrono::Utc::now().date_naive() - chrono::Duration::days(days_ago);
+        crate::db::DailyCostRow {
+            date: date.format("%Y-%m-%d").to_string(),
+            cost,
+            sessions,
+        }
+    }
+
+    /// A stored session dated `days_ago` calendar days before today.
     fn session_on_day(days_ago: i64, cost: f64) -> crate::db::HistoricalSession {
         let date = chrono::Utc::now().date_naive() - chrono::Duration::days(days_ago);
         crate::db::HistoricalSession {
@@ -4006,7 +4054,7 @@ mod tests {
     /// must appear as a zero point rather than vanish from the timeline.
     #[test]
     fn daily_cost_series_zero_fills_days_without_sessions() {
-        let series = daily_cost_series(&[session_on_day(1, 12.5)], 5);
+        let series = daily_cost_series(&[cost_row(1, 12.5, 1)], 5);
         assert_eq!(series.len(), 5);
         let zero_days = series.iter().filter(|p| p.cost == 0.0).count();
         assert_eq!(zero_days, 4);
@@ -4016,41 +4064,31 @@ mod tests {
     }
 
     #[test]
-    fn daily_cost_series_sums_multiple_sessions_on_the_same_day() {
-        let series = daily_cost_series(
-            &[
-                session_on_day(2, 3.0),
-                session_on_day(2, 4.5),
-                session_on_day(2, 0.5),
-            ],
-            5,
-        );
+    fn daily_cost_series_carries_the_aggregated_day_total() {
+        let series = daily_cost_series(&[cost_row(2, 8.0, 3)], 5);
         let day = series.iter().find(|p| p.sessions > 0).expect("busy day");
         assert!((day.cost - 8.0).abs() < 0.000_001);
         assert_eq!(day.sessions, 3);
     }
 
-    /// Sessions with no start timestamp cannot be placed on a calendar day.
-    /// They must be skipped rather than defaulting onto today and inventing a
-    /// spike that never happened.
-    #[test]
-    fn daily_cost_series_skips_sessions_without_a_start_timestamp() {
-        let undated = crate::db::HistoricalSession {
-            started_at: None,
-            total_cost: 99.0,
-            ..Default::default()
-        };
-        let series = daily_cost_series(&[undated], 3);
-        assert!(series.iter().all(|p| p.cost == 0.0));
-        assert!(series.iter().all(|p| p.sessions == 0));
-    }
-
     #[test]
     fn daily_cost_series_ignores_sessions_outside_the_window() {
         // 60 days ago is outside a 7-day window; the series stays flat.
-        let series = daily_cost_series(&[session_on_day(60, 40.0)], 7);
+        let series = daily_cost_series(&[cost_row(60, 40.0, 1)], 7);
         assert_eq!(series.len(), 7);
         assert!(series.iter().all(|p| p.cost == 0.0));
+    }
+
+    /// The first plotted date is the same day the SQL aggregate starts from,
+    /// so a session on the boundary day is charted instead of silently
+    /// disagreeing with the analyzers that counted it.
+    #[test]
+    fn daily_cost_series_plots_the_boundary_day_of_the_window() {
+        let series = daily_cost_series(&[cost_row(6, 7.25, 2)], 7);
+        let first = series.first().expect("first day");
+        assert_eq!(first.date, cost_row(6, 0.0, 0).date);
+        assert!((first.cost - 7.25).abs() < 0.000_001);
+        assert_eq!(first.sessions, 2);
     }
 
     // ---- Cost Analysis KPI totals ------------------------------------

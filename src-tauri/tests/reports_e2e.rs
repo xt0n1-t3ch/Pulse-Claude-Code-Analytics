@@ -138,6 +138,7 @@ fn bundle_aggregates_fixture_traces() {
         Provider::Claude,
         Some(30),
         fixture.sessions.clone(),
+        Vec::new(),
         claude_roots(&fixture),
         Vec::new(),
     );
@@ -174,6 +175,7 @@ fn bundle_scans_jsonl_tree_exactly_once() {
         Provider::Claude,
         Some(30),
         fixture.sessions.clone(),
+        Vec::new(),
         claude_roots(&fixture),
         Vec::new(),
     );
@@ -202,6 +204,7 @@ fn codex_bundle_exposes_cache_health_without_claude_model_routing() {
         Provider::Codex,
         Some(30),
         sessions,
+        Vec::new(),
         Vec::new(),
         Vec::new(),
     );
