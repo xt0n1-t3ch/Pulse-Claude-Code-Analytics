@@ -42,13 +42,29 @@
 
   let histSessions = $state<HistoricalSession[]>([]);
 
+  // `totals` is owned by the effect below, which reacts to the project filter
+  // and to live-session deltas; fetching it here too would only duplicate the
+  // first request.
   async function loadData(): Promise<void> {
-    [histSessions, totals, forecast, budgetStatus] = await Promise.all([
+    [histSessions, forecast, budgetStatus] = await Promise.all([
       getSessionHistory(30, undefined, 200),
-      getCostTotals(30),
       getCostForecast(),
       getBudgetStatus(),
     ]);
+  }
+
+  /**
+   * Reloads only the window aggregate.
+   *
+   * Two things invalidate it while the view is open: switching the project
+   * filter, and a live session accruing cost. Without this the KPIs would keep
+   * describing whatever the first `onMount` fetch saw, and a filtered project
+   * would fall back to summing the capped table page.
+   */
+  async function refreshTotals(project: string): Promise<void> {
+    const next = await getCostTotals(30, project || undefined);
+    // Ignore a response that lost the race against a newer filter selection.
+    if (project === projectFilter) totals = next;
   }
 
   async function saveBudget(): Promise<void> {
@@ -60,9 +76,16 @@
     editingBudget = false;
   }
 
+  let projectFilter = $state("");
+
   onMount(() => { loadData(); });
 
-  let projectFilter = $state("");
+  // Live session deltas and filter changes both invalidate the aggregate.
+  $effect(() => {
+    const project = projectFilter;
+    void $sessions;
+    void refreshTotals(project);
+  });
 
   let allSessions = $derived.by(() => {
     const live = $sessions.map((s) => ({
@@ -90,37 +113,38 @@
   let filtered = $derived(projectFilter ? allSessions.filter((s) => s.project === projectFilter) : allSessions);
   let costExportRows = $derived([...filtered].sort((a, b) => b.cost - a.cost).map((s) => ({ ...s } as Record<string, unknown>)));
 
-  /** True when no project filter is applied, so the window-wide totals apply.
-   *  Filtering to one project has to fall back to summing the loaded rows. */
-  let unfiltered = $derived(projectFilter === "");
+  /** The aggregate is fetched for the active filter, so it always describes
+   *  the same population the KPIs claim. Summing `filtered` is only a fallback
+   *  for the first paint, before the aggregate arrives. */
+  let hasTotals = $derived(totals !== null && totals.days > 0);
   let totalCost = $derived(
-    unfiltered && totals ? totals.total_cost : filtered.reduce((sum, s) => sum + s.cost, 0),
+    hasTotals && totals ? totals.total_cost : filtered.reduce((sum, s) => sum + s.cost, 0),
   );
-  let sessionCount = $derived(unfiltered && totals ? totals.sessions : filtered.length);
+  let sessionCount = $derived(hasTotals && totals ? totals.sessions : filtered.length);
   let avgCost = $derived(sessionCount ? totalCost / sessionCount : 0);
   let maxCost = $derived(filtered.reduce((m, s) => Math.max(m, s.cost), 0));
   // Per 1M tokens: at real usage the per-1K figure rounds to $0.00, so 1M is the
   // meaningful unit (e.g. $0.67 / 1M rather than $0.00 / 1K).
   let costPerMToken = $derived.by(() => {
-    const tot = unfiltered && totals
+    const tot = hasTotals && totals
       ? totals.total_tokens
       : filtered.reduce((s, x) => s + x.tokens, 0);
     return tot > 0 ? (totalCost / tot) * 1_000_000 : 0;
   });
 
   let totalInputCost = $derived(
-    unfiltered && totals ? totals.input_cost : filtered.reduce((s, x) => s + x.input_cost, 0),
+    hasTotals && totals ? totals.input_cost : filtered.reduce((s, x) => s + x.input_cost, 0),
   );
   let totalOutputCost = $derived(
-    unfiltered && totals ? totals.output_cost : filtered.reduce((s, x) => s + x.output_cost, 0),
+    hasTotals && totals ? totals.output_cost : filtered.reduce((s, x) => s + x.output_cost, 0),
   );
   let totalCacheWCost = $derived(
-    unfiltered && totals
+    hasTotals && totals
       ? totals.cache_write_cost
       : filtered.reduce((s, x) => s + x.cache_write_cost, 0),
   );
   let totalCacheRCost = $derived(
-    unfiltered && totals
+    hasTotals && totals
       ? totals.cache_read_cost
       : filtered.reduce((s, x) => s + x.cache_read_cost, 0),
   );
@@ -134,7 +158,7 @@
     // Mixing a window-wide token total with a rate computed from the visible
     // page produced a wildly inflated figure, so both sides come from `totals`
     // when it is available.
-    if (unfiltered && totals) {
+    if (hasTotals && totals) {
       // Rate and token counts both come from the window aggregate, so the two
       // sides of the multiplication are always the same population.
       if (totals.pure_input_tokens <= 0 || totals.input_cost <= 0) return 0;
@@ -149,7 +173,7 @@
 
   let costByProject = $derived.by(() => {
     // Window-wide when unfiltered, so the bars reconcile with Total Spent.
-    if (unfiltered && totals) {
+    if (hasTotals && totals) {
       return totals.by_project.map((p) => [p.label, p.cost] as [string, number]);
     }
     const map: Record<string, number> = {};
@@ -158,7 +182,7 @@
   });
 
   let modelCosts = $derived.by(() => {
-    if (unfiltered && totals) {
+    if (hasTotals && totals) {
       return totals.by_model.map((m) => [m.label, m.cost] as [string, number]);
     }
     const map: Record<string, number> = {};
@@ -186,7 +210,13 @@
   <div class="view-header">
     <h2 class="view-title">Cost Analysis</h2>
     <div class="filters">
-      <select bind:value={projectFilter}>
+      <!-- Explicit handler rather than `bind:value`: the selection drives a
+           backend refetch, so the assignment needs to be visible at the seam
+           the aggregate depends on. -->
+      <select
+        value={projectFilter}
+        onchange={(event) => (projectFilter = event.currentTarget.value)}
+      >
         <option value="">All Projects</option>
         {#each projects as p}<option value={p}>{p}</option>{/each}
       </select>

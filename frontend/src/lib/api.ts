@@ -12,7 +12,9 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
  */
 const BRIDGE_ORIGIN = "http://127.0.0.1:1421";
 
-function hasTauriIpc(): boolean {
+/** True when running inside the Pulse webview, where Tauri IPC and events
+ *  exist. False in a plain browser reviewing the UI through the dev bridge. */
+export function hasTauriIpc(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
@@ -28,9 +30,14 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
         );
     }
     // Forward the window so a 7d/30d/90d/1y switch queries the same range the
-    // packaged app would, instead of silently reusing the default.
-    const days = typeof args?.days === "number" ? `?days=${args.days}` : "";
-    const res = await fetch(`${BRIDGE_ORIGIN}/invoke/${command}${days}`);
+    // packaged app would, instead of silently reusing the default. The session
+    // id travels the same way for the Context view's single-session lookup.
+    const query = new URLSearchParams();
+    if (typeof args?.days === "number") query.set("days", String(args.days));
+    if (typeof args?.sessionId === "string") query.set("sessionId", args.sessionId);
+    if (typeof args?.project === "string") query.set("project", args.project);
+    const suffix = query.size > 0 ? `?${query}` : "";
+    const res = await fetch(`${BRIDGE_ORIGIN}/invoke/${command}${suffix}`);
     if (!res.ok) {
         throw new Error(`dev bridge rejected ${command}: ${res.status}`);
     }

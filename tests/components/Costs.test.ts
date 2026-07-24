@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor } from "@testing-library/svelte";
+import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import type { HistoricalSession, CostForecast, BudgetStatus, CostTotals } from "@/lib/api";
 
@@ -84,7 +84,17 @@ const totals: CostTotals = {
     { label: "other", cost: 5, sessions: 1 },
   ],
 };
-const getCostTotals = vi.fn(async () => totals);
+/** Aggregate for a single project, so a filtered view can be told apart from
+ *  the unfiltered one. */
+const projectTotals: CostTotals = {
+  ...totals,
+  sessions: 1,
+  total_cost: 10,
+  by_project: [{ label: "pulse", cost: 10, sessions: 1 }],
+};
+const getCostTotals = vi.fn(async (_days?: number, project?: string) =>
+  project ? projectTotals : totals,
+);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -92,7 +102,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     getSessionHistory: () => getSessionHistory(),
     getCostForecast: () => getCostForecast(),
-    getCostTotals: () => getCostTotals(),
+    getCostTotals: (days?: number, project?: string) => getCostTotals(days, project),
     getBudgetStatus: () => getBudgetStatus(),
     setBudget: () => setBudget(),
   };
@@ -178,4 +188,57 @@ describe("Costs.svelte", () => {
     expect(container.querySelector(".ck-cap")).not.toBeNull();
     expect(await findByText(/under the .* cap/)).toBeTruthy();
   });
+
+  /** A filtered project may have more sessions than the capped table page, so
+   *  its KPIs must come from an aggregate fetched for that project. */
+  it("reloads the window aggregate for the selected project", async () => {
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { container } = render(Costs);
+    await tick();
+    await waitFor(() => expect(getCostTotals).toHaveBeenCalled());
+
+    const select = container.querySelector("select") as HTMLSelectElement;
+    // The option list is derived from loaded sessions, so wait for it before
+    // selecting: assigning an absent value silently no-ops.
+    await waitFor(() =>
+      expect([...select.options].some((o) => o.value === "pulse")).toBe(true),
+    );
+    await fireEvent.change(select, { target: { value: "pulse" } });
+    await tick();
+
+    await waitFor(() =>
+      expect(getCostTotals).toHaveBeenCalledWith(30, "pulse"),
+    );
+    await waitFor(() => {
+      const values = [...container.querySelectorAll(".is-value")].map((e) => e.textContent?.trim());
+      expect(values[3]).toBe("$" + projectTotals.total_cost.toFixed(2));
+    });
+  });
+
+  /** With a session still running, a KPI fetched once on mount silently goes
+   *  stale while the table keeps moving. */
+  it("refreshes the aggregate when the live session snapshot changes", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    render(Costs);
+    await tick();
+    await waitFor(() => expect(getCostTotals).toHaveBeenCalled());
+    const initialCalls = getCostTotals.mock.calls.length;
+
+    sessions.set([]);
+    await tick();
+
+    await waitFor(() =>
+      expect(getCostTotals.mock.calls.length).toBeGreaterThan(initialCalls),
+    );
+  });
 });
+
+
+
+
+
+
+
+
+
