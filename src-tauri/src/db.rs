@@ -218,7 +218,7 @@ fn init_schema(conn: &Connection) {
     );
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Default)]
 pub struct HistoricalSession {
     pub id: String,
     pub provider: String,
@@ -350,7 +350,11 @@ fn query_sessions(
         " ORDER BY COALESCE({history_ts}, datetime('now')) DESC, updated_at DESC"
     ));
 
-    let lim = limit.unwrap_or(100);
+    // `None` means "every row in the window", which is what aggregate callers
+    // need. Defaulting it to 100 silently truncated totals: a 299-session
+    // window reported the cost of its 100 newest sessions. SQLite treats a
+    // negative LIMIT as unlimited.
+    let lim = limit.unwrap_or(-1);
     sql.push_str(&format!(" LIMIT ?{param_idx}"));
     params_vec.push(Box::new(lim));
 
@@ -1188,6 +1192,46 @@ mod tests {
             let stale = sample_session_info("200K", model, 10, 10);
             assert_eq!(session_window_tokens(&stale), 1_000_000, "{model}");
         }
+    }
+
+    /// `limit: None` must mean "every matching row". It used to silently
+    /// default to 100, which truncated aggregate queries: a 299-session window
+    /// reported the cost of only its 100 newest sessions.
+    #[test]
+    fn query_limit_none_is_unbounded_not_a_hidden_hundred() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
+        init_schema(&conn);
+
+        for i in 0..250 {
+            conn.execute(
+                "INSERT INTO sessions (id, provider, project, model, model_id, context_window,
+                    effort, started_at, total_cost, updated_at)
+                 VALUES (?1, 'claude', 'p', 'm', 'claude-opus-5', '1M', 'high',
+                    datetime('now'), 1.0, datetime('now'))",
+                rusqlite::params![format!("s{i}")],
+            )
+            .expect("insert");
+        }
+
+        let unbounded = query_sessions(
+            &conn, None, None, None, None, None, None, None, None, None, None,
+        );
+        assert_eq!(unbounded.len(), 250, "None must not cap the result set");
+
+        let capped = query_sessions(
+            &conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        );
+        assert_eq!(capped.len(), 10, "an explicit limit still applies");
     }
 
     #[test]

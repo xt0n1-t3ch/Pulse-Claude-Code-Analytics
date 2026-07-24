@@ -4,14 +4,18 @@
   import Chart from "../components/Chart.svelte";
   import { sessions, metrics } from "../lib/stores";
   import { fmtCost, fmtTokens, fmtPct } from "../lib/utils";
-  import { getSessionHistory, getCostForecast, getBudgetStatus, setBudget } from "../lib/api";
-  import type { HistoricalSession, CostForecast, BudgetStatus } from "../lib/api";
+  import { getSessionHistory, getCostForecast, getCostTotals, getBudgetStatus, setBudget } from "../lib/api";
+  import type { HistoricalSession, CostForecast, CostTotals, BudgetStatus } from "../lib/api";
   import type { ChartConfiguration, Chart as ChartType } from "chart.js/auto";
   import ExportModal from "../components/ExportModal.svelte";
   import type { ExportColumn } from "../lib/export";
+  import BudgetCockpit from "../components/BudgetCockpit.svelte";
 
   let showExport = $state(false);
   let forecast = $state<CostForecast | null>(null);
+  /** Window-wide aggregates. The session table is a capped page, so KPIs read
+   *  from here instead of summing the visible rows. */
+  let totals = $state<CostTotals | null>(null);
   let budgetStatus = $state<BudgetStatus | null>(null);
   let editingBudget = $state(false);
   let budgetInput = $state("");
@@ -35,8 +39,9 @@
   let histSessions = $state<HistoricalSession[]>([]);
 
   async function loadData(): Promise<void> {
-    [histSessions, forecast, budgetStatus] = await Promise.all([
+    [histSessions, totals, forecast, budgetStatus] = await Promise.all([
       getSessionHistory(30, undefined, 200),
+      getCostTotals(30),
       getCostForecast(),
       getBudgetStatus(),
     ]);
@@ -81,23 +86,57 @@
   let filtered = $derived(projectFilter ? allSessions.filter((s) => s.project === projectFilter) : allSessions);
   let costExportRows = $derived([...filtered].sort((a, b) => b.cost - a.cost).map((s) => ({ ...s } as Record<string, unknown>)));
 
-  let totalCost = $derived(filtered.reduce((sum, s) => sum + s.cost, 0));
-  let avgCost = $derived(filtered.length ? totalCost / filtered.length : 0);
+  /** True when no project filter is applied, so the window-wide totals apply.
+   *  Filtering to one project has to fall back to summing the loaded rows. */
+  let unfiltered = $derived(projectFilter === "");
+  let totalCost = $derived(
+    unfiltered && totals ? totals.total_cost : filtered.reduce((sum, s) => sum + s.cost, 0),
+  );
+  let sessionCount = $derived(unfiltered && totals ? totals.sessions : filtered.length);
+  let avgCost = $derived(sessionCount ? totalCost / sessionCount : 0);
   let maxCost = $derived(filtered.reduce((m, s) => Math.max(m, s.cost), 0));
   // Per 1M tokens: at real usage the per-1K figure rounds to $0.00, so 1M is the
   // meaningful unit (e.g. $0.67 / 1M rather than $0.00 / 1K).
   let costPerMToken = $derived.by(() => {
-    const tot = filtered.reduce((s, x) => s + x.tokens, 0);
+    const tot = unfiltered && totals
+      ? totals.total_tokens
+      : filtered.reduce((s, x) => s + x.tokens, 0);
     return tot > 0 ? (totalCost / tot) * 1_000_000 : 0;
   });
 
-  let totalInputCost = $derived(filtered.reduce((s, x) => s + x.input_cost, 0));
-  let totalOutputCost = $derived(filtered.reduce((s, x) => s + x.output_cost, 0));
-  let totalCacheWCost = $derived(filtered.reduce((s, x) => s + x.cache_write_cost, 0));
-  let totalCacheRCost = $derived(filtered.reduce((s, x) => s + x.cache_read_cost, 0));
+  let totalInputCost = $derived(
+    unfiltered && totals ? totals.input_cost : filtered.reduce((s, x) => s + x.input_cost, 0),
+  );
+  let totalOutputCost = $derived(
+    unfiltered && totals ? totals.output_cost : filtered.reduce((s, x) => s + x.output_cost, 0),
+  );
+  let totalCacheWCost = $derived(
+    unfiltered && totals
+      ? totals.cache_write_cost
+      : filtered.reduce((s, x) => s + x.cache_write_cost, 0),
+  );
+  let totalCacheRCost = $derived(
+    unfiltered && totals
+      ? totals.cache_read_cost
+      : filtered.reduce((s, x) => s + x.cache_read_cost, 0),
+  );
   let costTotal = $derived(totalInputCost + totalOutputCost + totalCacheWCost + totalCacheRCost);
 
   let cacheSavings = $derived.by(() => {
+    // Savings = what those cached tokens would have cost at the full input
+    // rate, minus what they actually cost as cache reads.
+    //
+    // The rate must be derived from the same population as the token counts.
+    // Mixing a window-wide token total with a rate computed from the visible
+    // page produced a wildly inflated figure, so both sides come from `totals`
+    // when it is available.
+    if (unfiltered && totals) {
+      // Rate and token counts both come from the window aggregate, so the two
+      // sides of the multiplication are always the same population.
+      if (totals.pure_input_tokens <= 0 || totals.input_cost <= 0) return 0;
+      const rate = totals.input_cost / totals.pure_input_tokens;
+      return Math.max(0, totals.cache_read_tokens * rate - totals.cache_read_cost);
+    }
     const cacheReadTokens = filtered.reduce((s, x) => s + x.cache_read_tokens, 0);
     const pureInput = filtered.reduce((s, x) => s + Math.max(0, x.input_tokens - x.cache_write_tokens - x.cache_read_tokens), 0);
     const inputCostRate = pureInput > 0 && totalInputCost > 0 ? totalInputCost / pureInput : 5 / 1_000_000;
@@ -105,12 +144,19 @@
   });
 
   let costByProject = $derived.by(() => {
+    // Window-wide when unfiltered, so the bars reconcile with Total Spent.
+    if (unfiltered && totals) {
+      return totals.by_project.map((p) => [p.label, p.cost] as [string, number]);
+    }
     const map: Record<string, number> = {};
     filtered.forEach((s) => (map[s.project] = (map[s.project] || 0) + s.cost));
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   });
 
   let modelCosts = $derived.by(() => {
+    if (unfiltered && totals) {
+      return totals.by_model.map((m) => [m.label, m.cost] as [string, number]);
+    }
     const map: Record<string, number> = {};
     filtered.forEach((s) => (map[s.model] = (map[s.model] || 0) + s.cost));
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
@@ -143,76 +189,51 @@
     </div>
   </div>
 
-  <div class="stats-row">
-    <StatCard label="Total Spent (30d)" value={fmtCost(totalCost)} />
-    <StatCard label="Avg / Session" value={fmtCost(avgCost)} />
-    <StatCard label="Cost / 1M Tokens" value={fmtCost(costPerMToken)} />
-    <StatCard label="Cache Savings" value={fmtCost(cacheSavings)} />
-  </div>
+  <BudgetCockpit
+    {forecast}
+    budget={budgetStatus}
+    onSetBudget={() => {
+      editingBudget = true;
+      budgetInput = String(budgetStatus?.monthly_budget || 200);
+    }}
+  />
 
-  <div class="budget-forecast-row">
-    {#if forecast && forecast.spent_this_month > 0}
-      <div class="card">
-        <h3 class="card-title">Monthly Forecast</h3>
-        <div class="forecast-grid">
-          <div class="forecast-item">
-            <span class="fg-label">Spent This Month</span>
-            <span class="fg-value">{fmtCost(forecast.spent_this_month)}</span>
-          </div>
-          <div class="forecast-item">
-            <span class="fg-label">Daily Average</span>
-            <span class="fg-value">{fmtCost(forecast.daily_average)}</span>
-          </div>
-          <div class="forecast-item">
-            <span class="fg-label">Projected Total</span>
-            <span class="fg-value accent">{fmtCost(forecast.projected_monthly)}</span>
-          </div>
-          <div class="forecast-item">
-            <span class="fg-label">Progress</span>
-            <span class="fg-value">{forecast.days_elapsed}/{forecast.days_in_month} days</span>
-          </div>
-        </div>
-      </div>
-    {/if}
+  {#if editingBudget}
+    <div class="budget-edit">
+      <input type="number" min="0" step="10" bind:value={budgetInput} placeholder="Monthly budget ($)" class="budget-input" />
+      <button class="budget-save-btn" onclick={saveBudget}>Save</button>
+      <button class="budget-cancel-btn" onclick={() => editingBudget = false}>Cancel</button>
+    </div>
+  {/if}
 
-    <div class="card">
-      <h3 class="card-title">Budget Tracking</h3>
-      {#if budgetStatus && budgetStatus.monthly_budget > 0}
-        <div class="budget-info">
-          <div class="budget-header">
-            <span class="budget-amount">{fmtCost(budgetStatus.spent_this_month)} / {fmtCost(budgetStatus.monthly_budget)}</span>
-            <span class="budget-pct" class:over={budgetStatus.pct_used > 100}>{fmtPct(budgetStatus.pct_used)}</span>
-          </div>
-          <div class="budget-bar-track">
-            <div class="budget-bar-fill" class:warning={budgetStatus.pct_used > budgetStatus.alert_threshold_pct} class:danger={budgetStatus.pct_used > 100} style="width:{Math.min(budgetStatus.pct_used, 100)}%"></div>
-          </div>
-          {#if budgetStatus.over_budget}
-            <div class="budget-warning">Projected to exceed budget by {fmtCost(budgetStatus.projected_monthly - budgetStatus.monthly_budget)}</div>
-          {/if}
-          <button class="budget-edit-btn" onclick={() => { editingBudget = true; budgetInput = String(budgetStatus?.monthly_budget ?? 0); }}>Change Budget</button>
-        </div>
-      {:else}
-        <div class="budget-empty">
-          <div class="budget-empty-copy">
-            <span class="budget-empty-title">No monthly budget set</span>
-            <span class="budget-empty-sub">Track spend against a monthly cap and get a heads-up before you overshoot.</span>
-          </div>
-          <button class="budget-set-btn" onclick={() => { editingBudget = true; budgetInput = "200"; }}>Set Budget</button>
-        </div>
-      {/if}
-      {#if editingBudget}
-        <div class="budget-edit">
-          <input type="number" min="0" step="10" bind:value={budgetInput} placeholder="Monthly budget ($)" class="budget-input" />
-          <button class="budget-save-btn" onclick={saveBudget}>Save</button>
-          <button class="budget-cancel-btn" onclick={() => editingBudget = false}>Cancel</button>
-        </div>
-      {/if}
+  <!-- Supporting figures: spacing and rules only, no boxes competing with the
+       cockpit above. -->
+  <div class="inline-stats">
+    <div class="is-item">
+      <span class="is-label">Avg / session</span>
+      <span class="is-value">{fmtCost(avgCost)}</span>
+      <span class="is-meta">{sessionCount} {sessionCount === 1 ? "session" : "sessions"}</span>
+    </div>
+    <div class="is-item">
+      <span class="is-label">Cost / 1M tokens</span>
+      <span class="is-value">{fmtCost(costPerMToken)}</span>
+      <span class="is-meta">blended rate</span>
+    </div>
+    <div class="is-item">
+      <span class="is-label">Cache savings</span>
+      <span class="is-value">{fmtCost(cacheSavings)}</span>
+      <span class="is-meta">vs uncached input</span>
+    </div>
+    <div class="is-item">
+      <span class="is-label">Total spent (30d)</span>
+      <span class="is-value">{fmtCost(totalCost)}</span>
+      <span class="is-meta">window total</span>
     </div>
   </div>
 
   <div class="charts-row">
-    <div class="card">
-      <h3 class="card-title">Cost by Type</h3>
+    <section class="pane">
+      <h3 class="pane-title">Cost by Type</h3>
       {#if costTotal > 0}
         <div class="cost-type-bar">
           <div class="cost-seg input" style="width:{(totalInputCost / costTotal) * 100}%"></div>
@@ -229,11 +250,11 @@
       {:else}
         <div class="empty-hint">No cost data yet</div>
       {/if}
-    </div>
+    </section>
 
     {#if modelCosts.length > 0}
-      <div class="card">
-        <h3 class="card-title">Cost per Model</h3>
+      <section class="pane">
+        <h3 class="pane-title">Cost per Model</h3>
         <div class="model-cost-list">
           {#each modelCosts as [model, cost]}
             <div class="mc-row">
@@ -245,7 +266,7 @@
             </div>
           {/each}
         </div>
-      </div>
+      </section>
     {/if}
   </div>
 
@@ -311,8 +332,61 @@
   .view-header { display: flex; align-items: center; gap: 12px; }
   .view-title { font-size: 20px; font-weight: 700; }
   .filters { margin-left: auto; }
-  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  /* Supporting figures read as one row of text, separated by rules rather
+     than four boxes competing with the cockpit gauge above them. */
+  .inline-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    padding: 18px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .is-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 0 20px;
+    border-left: 1px solid var(--border);
+  }
+  .is-item:first-child { padding-left: 0; border-left: none; }
+  .is-label {
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
+  }
+  .is-value {
+    font-family: var(--font-mono);
+    font-size: var(--fs-2xl);
+    font-weight: 700;
+    letter-spacing: var(--letter-tight);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+  .is-meta { font-size: var(--fs-xs); color: var(--text-muted); }
+  @media (max-width: 900px) {
+    .inline-stats { grid-template-columns: repeat(2, 1fr); row-gap: 18px; }
+    .is-item:nth-child(3) { padding-left: 0; border-left: none; }
+  }
+
+  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+
+  /* Panes sit on the page surface; a hairline divides the pair instead of
+     wrapping each half in its own card. */
+  .pane { display: flex; flex-direction: column; }
+  .charts-row .pane + .pane {
+    padding-left: 40px;
+    border-left: 1px solid var(--border);
+  }
+  .pane-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+  }
 
   .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; }
   .card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
@@ -363,30 +437,8 @@
 
   .empty-hint { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
 
-  .budget-forecast-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .forecast-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .forecast-item { display: flex; flex-direction: column; gap: 3px; }
-  .fg-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
-  .fg-value { font-size: 18px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-  .fg-value.accent { color: var(--accent); }
-
-  .budget-info { display: flex; flex-direction: column; gap: 8px; }
-  .budget-header { display: flex; justify-content: space-between; align-items: center; }
-  .budget-amount { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-  .budget-pct { font-size: 14px; font-weight: 700; color: var(--success); font-variant-numeric: tabular-nums; }
-  .budget-pct.over { color: var(--danger); }
-  .budget-bar-track { height: 8px; background: var(--bg-elevated); border-radius: 99px; overflow: hidden; }
-  .budget-bar-fill { height: 100%; background: var(--success); border-radius: 99px; transition: width 0.4s var(--ease); }
-  .budget-bar-fill.warning { background: var(--warning); }
-  .budget-bar-fill.danger { background: var(--danger); }
-  .budget-warning { font-size: 11px; color: var(--danger); font-weight: 600; }
-  .budget-edit-btn { font-size: 11px; color: var(--text-muted); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; align-self: flex-start; }
-  .budget-empty { display: flex; align-items: center; justify-content: space-between; gap: 20px; font-size: 13px; color: var(--text-muted); }
-  .budget-empty-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .budget-empty-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
-  .budget-empty-sub { font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
-  .budget-set-btn { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--accent-fg); background: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 6px 14px; cursor: pointer; transition: opacity 0.15s ease, transform 0.15s ease; }
-  .budget-set-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  /* Forecast and budget rendering now lives in BudgetCockpit.svelte; only the
+     inline budget editor remains in this view. */
   .budget-edit { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
   .budget-input { flex: 1; padding: 7px 12px; font: inherit; font-size: 12px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); outline: none; transition: border-color 0.15s ease; }
   .budget-input:focus { border-color: var(--accent); }
