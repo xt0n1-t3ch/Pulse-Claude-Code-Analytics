@@ -170,6 +170,47 @@ describe("Discord.svelte", () => {
     expect(getByText("xt0n1")).toBeTruthy();
   });
 
+  /** The headline answers "is Discord showing me right now?", so it has to
+   *  agree with the IPC diagnostic beside it. */
+  it("reports Broadcasting only when Rich Presence is enabled and IPC is connected", async () => {
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    const state = container.querySelector(".hm-state");
+    expect(state?.textContent?.trim()).toBe("Broadcasting");
+    expect(state?.classList.contains("live")).toBe(true);
+  });
+
+  it("waits rather than claiming a broadcast while Discord IPC is disconnected", async () => {
+    const { health } = await import("@/lib/stores");
+    health.set({ ...healthFixture, discord_status: "Disconnected" });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    const state = container.querySelector(".hm-state");
+    expect(state?.textContent?.trim()).toBe("Waiting for Discord");
+    expect(state?.classList.contains("live")).toBe(false);
+    expect(state?.classList.contains("waiting")).toBe(true);
+  });
+
+  it("reports Paused when Rich Presence is switched off", async () => {
+    const { health } = await import("@/lib/stores");
+    discordSettings = { ...discordSettings, enabled: false };
+    health.set({ ...healthFixture, discord_enabled: false });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+    await tick();
+
+    const state = container.querySelector(".hm-state");
+    expect(state?.textContent?.trim()).toBe("Paused");
+    expect(state?.classList.contains("waiting")).toBe(false);
+  });
+
   it("renders the backend Discord payload instead of recomputing branch visibility locally", async () => {
     const { sessions, discordPresencePreview } = await import("@/lib/stores");
     const session = makeSession("active1", "PropertyAlpha-Agent");

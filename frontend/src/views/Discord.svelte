@@ -272,6 +272,23 @@
 
   let discordStatus = $derived(($health?.discord_status ?? "—").toLowerCase());
   let ipcConnected = $derived(discordStatus.includes("connect") && !discordStatus.includes("dis"));
+
+  /**
+   * Broadcast state as three distinct facts, because "enabled" alone is not
+   * "visible on Discord": with the toggle on but IPC down (Discord closed, or
+   * the publisher retrying) nothing is being shown, and a green
+   * "Broadcasting" would contradict the IPC diagnostic beside it.
+   */
+  let broadcastState = $derived(
+    !discordEnabled ? "paused" : ipcConnected ? "live" : "waiting",
+  );
+  let broadcastLabel = $derived(
+    broadcastState === "live"
+      ? "Broadcasting"
+      : broadcastState === "waiting"
+        ? "Waiting for Discord"
+        : "Paused",
+  );
 </script>
 
 <div class="discord-view" style="--provider-accent: {$providerProfile.accent}">
@@ -293,9 +310,20 @@
       <!-- Broadcast state is the headline: it answers "is Discord showing me
            right now?". IPC and the asset key are supporting diagnostics and
            stay quiet rather than competing as three identical pills. -->
-      <span class="hm-state" class:live={discordEnabled} title="Broadcast state">
-        <span class="hm-beacon" class:live={discordEnabled}></span>
-        {discordEnabled ? "Broadcasting" : "Paused"}
+      <span
+        class="hm-state"
+        class:live={broadcastState === "live"}
+        class:waiting={broadcastState === "waiting"}
+        title={broadcastState === "waiting"
+          ? "Rich Presence is enabled but Discord IPC is not connected"
+          : "Broadcast state"}
+      >
+        <span
+          class="hm-beacon"
+          class:live={broadcastState === "live"}
+          class:waiting={broadcastState === "waiting"}
+        ></span>
+        {broadcastLabel}
       </span>
       <span class="hm-divider" aria-hidden="true"></span>
       <span class="hm-diag" class:warn={!ipcConnected} title="Discord IPC connection">
@@ -550,6 +578,12 @@
     background: var(--success-dim);
     border-color: color-mix(in srgb, var(--success) 34%, transparent);
   }
+  /* Enabled but not connected: amber, so it never reads as a live broadcast. */
+  .hm-state.waiting {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 12%, transparent);
+    border-color: color-mix(in srgb, var(--warning) 34%, transparent);
+  }
 
   /* A pulsing beacon reads as "transmitting" in a way a static dot cannot. */
   .hm-beacon {
@@ -561,6 +595,7 @@
     flex-shrink: 0;
   }
   .hm-beacon.live { background: var(--success); }
+  .hm-beacon.waiting { background: var(--warning); }
   .hm-beacon.live::after {
     content: '';
     position: absolute;
