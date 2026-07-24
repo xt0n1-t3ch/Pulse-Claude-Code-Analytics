@@ -440,7 +440,7 @@
     background: var(--text-muted);
     transform: translateY(-50%);
     transition: left 0.22s var(--spring), background 0.2s var(--ease);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--shadow-xs);
   }
   .big-toggle input:checked ~ .toggle-track {
     background: color-mix(in srgb, var(--success) 30%, var(--bg-elevated));
@@ -449,7 +449,7 @@
   .big-toggle input:checked ~ .toggle-track .toggle-thumb {
     left: 22px;
     background: var(--success);
-    box-shadow: 0 0 10px var(--success-glow), 0 1px 2px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 0 10px var(--success-glow), var(--shadow-xs);
   }
   .bt-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .bt-title {
@@ -553,7 +553,7 @@
     cursor: pointer;
     transition: background 0.15s var(--ease);
   }
-  .field-cell:hover { background: rgba(255, 255, 255, 0.015); }
+  .field-cell:hover { background: var(--bg-card-hover); }
   .field-cell:nth-child(-n+2) { border-top: none; }
   .field-cell:nth-child(2n+1) { border-left: none; }
   @media (max-width: 620px) {
@@ -619,20 +619,20 @@
     box-shadow: 0 0 0 3px var(--success-dim), 0 0 10px var(--success-glow);
   }
 
-  /* ── Discord mock card — premium, Discord-faithful, editorial rhythm ── */
+  /* ── Discord mock card ──────────────────────────────────────────────
+     Faithful to a real Discord profile card, but every colour resolves
+     through the --dc-* tokens in global.css so the light theme swaps in a
+     readable surface instead of inheriting Discord's dark palette. */
   .dp-profile {
     position: relative;
-    background: #1e1f22;
-    border: 1px solid rgba(255, 255, 255, 0.055);
-    border-radius: 14px;
+    background: var(--dc-surface);
+    border: 1px solid var(--dc-border);
+    border-radius: var(--radius-lg);
     overflow: hidden;
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.4),
-      0 1px 0 rgba(255, 255, 255, 0.035) inset,
-      0 20px 56px rgba(0, 0, 0, 0.6),
-      0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--dc-shadow);
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
   }
-  .dp-body { padding: 0 0 18px; color: #dbdee1; }
+  .dp-body { padding: 0 0 18px; color: var(--dc-text-body); }
 
   .dp-banner {
     height: 68px;
@@ -644,13 +644,13 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, transparent 55%, rgba(0, 0, 0, 0.18) 100%);
+    background: linear-gradient(180deg, transparent 55%, var(--dc-scrim) 100%);
     pointer-events: none;
   }
   .dp-banner-default {
     background:
       radial-gradient(120% 140% at 15% 0%, color-mix(in srgb, var(--provider-accent) 22%, transparent) 0%, transparent 62%),
-      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 14%, #1e1f22) 0%, #1e1f22 70%);
+      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 14%, var(--dc-surface)) 0%, var(--dc-surface) 70%);
   }
 
   .dp-avatar-ring {
@@ -663,12 +663,13 @@
     width: 80px;
     height: 80px;
     border-radius: 50%;
-    background: #2b2d31;
-    border: 6px solid #1e1f22;
+    background: var(--dc-surface-elevated);
+    border: 6px solid var(--dc-surface);
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
   }
   .dp-avatar img { width: 100%; height: 100%; object-fit: cover; }
 
@@ -679,50 +680,57 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: #23a55a;
-    border: 5px solid #1e1f22;
-    transition: background 0.2s var(--ease);
+    background: var(--dc-online);
+    border: 5px solid var(--dc-surface);
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
   }
-  .dp-status-dot.offline { background: #80848e; }
+  .dp-status-dot.offline { background: var(--dc-offline); }
 
   .dp-username {
     padding: 10px 18px 0;
-    font-size: 20px;
+    font-size: var(--fs-xl);
     font-weight: 700;
-    letter-spacing: -0.015em;
-    color: #f2f3f5;
-    line-height: 1.2;
+    letter-spacing: var(--letter-tight);
+    color: var(--dc-text-primary);
+    line-height: var(--lh-tight);
   }
-  .dp-tag { font-size: 14px; color: #b5bac1; font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+  .dp-tag {
+    font-size: var(--fs-md);
+    color: var(--dc-text-secondary);
+    font-weight: 500;
+    margin-left: 4px;
+    letter-spacing: 0;
+  }
 
   .dp-separator {
     margin: 14px 18px 12px;
     height: 1px;
-    background: rgba(255, 255, 255, 0.065);
+    background: var(--dc-divider);
   }
 
   .dp-section-title {
     padding: 0 18px 10px;
-    font-size: 11px;
+    font-size: var(--fs-sm);
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #b5bac1;
+    letter-spacing: var(--letter-wider);
+    color: var(--dc-text-secondary);
   }
 
   .dp-activity-card {
     margin: 0 14px;
-    background: #2b2d31;
-    border: 1px solid rgba(255, 255, 255, 0.035);
-    border-radius: 8px;
+    background: var(--dc-surface-elevated);
+    border: 1px solid var(--dc-border-soft);
+    border-radius: var(--radius-md);
     padding: 14px;
+    transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
   }
   .dp-activity-header {
-    font-size: 10.5px;
+    font-size: var(--fs-xs);
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #b5bac1;
+    letter-spacing: var(--letter-wider);
+    color: var(--dc-text-secondary);
     margin-bottom: 10px;
   }
   .dp-activity-body { display: flex; gap: 14px; align-items: flex-start; }
@@ -735,12 +743,10 @@
   .dp-art-large {
     width: 60px;
     height: 60px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     object-fit: cover;
-    background: #1e1f22;
-    box-shadow:
-      0 0 0 1px rgba(0, 0, 0, 0.35),
-      0 2px 6px rgba(0, 0, 0, 0.35);
+    background: var(--dc-surface);
+    box-shadow: var(--dc-art-shadow);
     -webkit-user-drag: none;
     user-select: none;
   }
@@ -752,9 +758,9 @@
     height: 24px;
     border-radius: 50%;
     object-fit: cover;
-    background: #2b2d31;
-    border: 2.5px solid #2b2d31;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    background: var(--dc-surface-elevated);
+    border: 2.5px solid var(--dc-surface-elevated);
+    box-shadow: var(--dc-art-shadow);
     -webkit-user-drag: none;
     user-select: none;
   }
@@ -767,24 +773,24 @@
     flex: 1;
   }
   .dp-activity-name {
-    font-size: 15px;
+    font-size: var(--fs-md);
     font-weight: 700;
-    letter-spacing: -0.005em;
-    color: #f2f3f5;
-    line-height: 1.2;
+    letter-spacing: var(--letter-tight);
+    color: var(--dc-text-primary);
+    line-height: var(--lh-tight);
   }
   .dp-activity-details,
   .dp-activity-state {
-    font-size: 12.5px;
-    color: #b5bac1;
+    font-size: var(--fs-base);
+    color: var(--dc-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    line-height: 1.35;
+    line-height: var(--lh-snug);
   }
   .dp-activity-elapsed {
-    font-size: 11.5px;
-    color: #80848e;
+    font-size: var(--fs-sm);
+    color: var(--dc-text-muted);
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
   }

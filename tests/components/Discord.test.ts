@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
@@ -218,5 +220,98 @@ describe("Discord.svelte", () => {
     await fireEvent.change(toggle);
 
     await waitFor(() => expect(setDiscordEnabled).toHaveBeenCalledWith(false));
+  });
+
+  describe("live preview theme-awareness", () => {
+    /** Every colour-bearing rule in the Discord mock must resolve through a
+     *  --dc-* token so the light theme can substitute a readable surface. */
+    const THEMED_SELECTORS = [
+      ".dp-profile",
+      ".dp-body",
+      ".dp-avatar",
+      ".dp-status-dot",
+      ".dp-username",
+      ".dp-tag",
+      ".dp-separator",
+      ".dp-section-title",
+      ".dp-activity-card",
+      ".dp-activity-header",
+      ".dp-art-large",
+      ".dp-art-small",
+      ".dp-activity-name",
+      ".dp-activity-details",
+      ".dp-activity-elapsed",
+    ];
+
+    /** Svelte scopes component styles at build time and happy-dom does not
+     *  materialize them, so the source `<style>` block is the honest place to
+     *  assert on. */
+    function componentCss(): string {
+      // Vitest runs with the frontend package as cwd.
+      const source = readFileSync(resolve(process.cwd(), "src/views/Discord.svelte"), "utf8");
+      const style = source.match(/<style>([\s\S]*)<\/style>/);
+      return style?.[1] ?? "";
+    }
+
+    it("declares no hardcoded colours anywhere in the view", () => {
+      const css = componentCss();
+      expect(css.length).toBeGreaterThan(0);
+      // Neither hex literals nor raw rgb()/rgba() may appear: both bypass the
+      // theme tokens and are exactly what made the preview unreadable in light
+      // mode before the redesign.
+      expect(css.match(/#[0-9a-fA-F]{3,8}\b/g)).toBeNull();
+      expect(css.match(/rgba?\(/g)).toBeNull();
+    });
+
+    it("routes every Discord mock surface through a --dc-* token", () => {
+      const css = componentCss();
+      for (const selector of THEMED_SELECTORS) {
+        const cls = selector.slice(1);
+        const block = css.match(new RegExp(`\\.${cls}\\s*(,[^{]*)?\\{([^}]*)\\}`));
+        expect(block, `${selector} rule must exist`).not.toBeNull();
+        expect(block?.[2] ?? "", `${selector} must use a --dc-* token`).toMatch(/var\(--dc-/);
+      }
+    });
+
+    it("keeps the preview rendered in both dark and light themes", async () => {
+      const Discord = (await import("@/views/Discord.svelte")).default;
+
+      for (const theme of ["dark", "light"]) {
+        document.documentElement.setAttribute("data-theme", theme);
+        const { container, unmount } = render(Discord);
+        await tick();
+
+        expect(container.querySelector(".dp-profile"), theme).not.toBeNull();
+        expect(container.querySelector(".dp-activity-card"), theme).not.toBeNull();
+        expect(container.querySelector(".dp-username")?.textContent, theme).toContain("xt0n1");
+        unmount();
+      }
+      document.documentElement.removeAttribute("data-theme");
+    });
+
+    it("renders an intentional empty state when there is no session", async () => {
+      const { sessions, discordPresencePreview } = await import("@/lib/stores");
+      sessions.set([]);
+      discordPresencePreview.set(null);
+
+      const Discord = (await import("@/views/Discord.svelte")).default;
+      const { container } = render(Discord);
+      await tick();
+
+      expect(container.querySelector(".dp-profile")).not.toBeNull();
+      expect(container.querySelector(".dp-activity-details")?.textContent).toBe("No active session");
+      expect(container.querySelector(".dp-activity-state")?.textContent).toBe("Idle");
+    });
+
+    it("marks the status dot offline when presence is paused", async () => {
+      const { health } = await import("@/lib/stores");
+      health.set({ ...healthFixture, discord_enabled: false, discord_status: "Disconnected" });
+
+      const Discord = (await import("@/views/Discord.svelte")).default;
+      const { container } = render(Discord);
+      await tick();
+
+      expect(container.querySelector(".dp-status-dot.offline")).not.toBeNull();
+    });
   });
 });

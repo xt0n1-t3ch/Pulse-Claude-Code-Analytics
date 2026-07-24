@@ -93,6 +93,31 @@
   --topbar-height: 48px;
   --content-max: 1280px;
 
+  /* Discord Rich Presence preview surface.
+     The preview mirrors a real Discord card, whose palette is fixed and dark.
+     Routing it through tokens keeps the mock recognizable while letting the
+     light theme substitute a readable surface instead of inheriting dark hex
+     values that fail contrast on a white page. Dark theme values are Discord's
+     own (#1e1f22 chrome, #2b2d31 elevated, #23a55a online). */
+  --dc-surface: #1e1f22;
+  --dc-surface-elevated: #2b2d31;
+  --dc-border: rgba(255, 255, 255, 0.055);
+  --dc-border-soft: rgba(255, 255, 255, 0.035);
+  --dc-divider: rgba(255, 255, 255, 0.065);
+  --dc-text-primary: #f2f3f5;
+  --dc-text-body: #dbdee1;
+  --dc-text-secondary: #b5bac1;
+  --dc-text-muted: #80848e;
+  --dc-online: #23a55a;
+  --dc-offline: #80848e;
+  --dc-scrim: rgba(0, 0, 0, 0.18);
+  --dc-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.035) inset,
+    0 20px 56px rgba(0, 0, 0, 0.6),
+    0 4px 12px rgba(0, 0, 0, 0.4);
+  --dc-art-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.35);
+
   font-family: var(--font-sans);
   font-size: var(--fs-base);
   line-height: var(--lh-normal);
@@ -152,6 +177,30 @@
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.12);
+
+  /* Light-theme Discord preview surface. Keeps Discord's visual hierarchy
+     (card darker-than-page chrome becomes lighter-than-page, elevated block
+     still separates from the card) with text contrast that passes AA on a
+     white page. The online/offline dots keep Discord's own hues, darkened
+     just enough to read against a light surface. */
+  --dc-surface: #ffffff;
+  --dc-surface-elevated: #f2f3f5;
+  --dc-border: #e3e5e8;
+  --dc-border-soft: #ebedef;
+  --dc-divider: #e3e5e8;
+  --dc-text-primary: #060607;
+  --dc-text-body: #2e3338;
+  --dc-text-secondary: #4e5058;
+  --dc-text-muted: #5c5e66;
+  --dc-online: #1a8245;
+  --dc-offline: #6d6f78;
+  --dc-scrim: rgba(0, 0, 0, 0.10);
+  --dc-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.06),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 20px 56px rgba(0, 0, 0, 0.10),
+    0 4px 12px rgba(0, 0, 0, 0.06);
+  --dc-art-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.10);
 }
 
 *, *::before, *::after {
