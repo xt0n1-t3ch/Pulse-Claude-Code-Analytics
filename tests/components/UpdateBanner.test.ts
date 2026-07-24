@@ -15,12 +15,23 @@ function makeUpdate(overrides: Partial<AppUpdateInfo> = {}): AppUpdateInfo {
     published_at: "2026-06-01T00:00:00Z",
     checked_at: "2026-06-10T00:00:00Z",
     assets: [],
+    severity: "minor",
     ...overrides,
   };
 }
 
 const checkAppUpdate = vi.fn<[], Promise<AppUpdateInfo>>();
 const openAppReleasePage = vi.fn<[(string | null | undefined)?], Promise<void>>();
+
+/** Stand-ins for the Tauri updater/process plugins. Hoisted so the dynamic
+ *  `import()` inside the component resolves to these, not the real modules. */
+const { updaterCheck, relaunch } = vi.hoisted(() => ({
+  updaterCheck: vi.fn(),
+  relaunch: vi.fn(async () => undefined),
+}));
+
+vi.mock("@tauri-apps/plugin-updater", () => ({ check: updaterCheck }));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -44,6 +55,8 @@ describe("UpdateBanner.svelte", () => {
     checkAppUpdate.mockReset();
     openAppReleasePage.mockReset();
     openAppReleasePage.mockResolvedValue(undefined);
+    updaterCheck.mockReset();
+    relaunch.mockClear();
     localStorage.clear();
     setSearch("");
   });
@@ -57,8 +70,9 @@ describe("UpdateBanner.svelte", () => {
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
 
-    expect(await findByText("Update available")).toBeTruthy();
-    expect(await findByText("1.1.0 → 1.2.0")).toBeTruthy();
+    expect(await findByText("Feature update")).toBeTruthy();
+    expect(await findByText("1.1.0")).toBeTruthy();
+    expect(await findByText("1.2.0")).toBeTruthy();
     expect(checkAppUpdate).toHaveBeenCalledTimes(1);
   });
 
@@ -76,7 +90,7 @@ describe("UpdateBanner.svelte", () => {
     const UpdateBanner = await loadBanner();
     const { container, findByText } = render(UpdateBanner);
 
-    await findByText("Update available");
+    await findByText("Feature update");
     await fireEvent.click(await findByText("Later"));
 
     await waitFor(
@@ -91,8 +105,8 @@ describe("UpdateBanner.svelte", () => {
     const UpdateBanner = await loadBanner();
     const { container, findByText } = render(UpdateBanner);
 
-    await findByText("Update available");
-    await fireEvent.click(await findByText("Skip version"));
+    await findByText("Feature update");
+    await fireEvent.click(await findByText("Skip"));
 
     expect(localStorage.getItem(SKIP_KEY)).toBe("1.2.0");
     await waitFor(
@@ -122,16 +136,53 @@ describe("UpdateBanner.svelte", () => {
 
     window.dispatchEvent(new CustomEvent("pulse:check-updates"));
 
-    expect(await findByText("Update available")).toBeTruthy();
+    expect(await findByText("Feature update")).toBeTruthy();
   });
 
-  it("Open release calls openAppReleasePage with the release url", async () => {
+  it("installs in-app instead of opening the release page", async () => {
     checkAppUpdate.mockResolvedValue(makeUpdate());
+    const downloadAndInstall = vi.fn(async (onEvent: (e: unknown) => void) => {
+      onEvent({ event: "Started", data: { contentLength: 1000 } });
+      onEvent({ event: "Progress", data: { chunkLength: 1000 } });
+      onEvent({ event: "Finished" });
+    });
+    updaterCheck.mockResolvedValue({ downloadAndInstall });
+
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
 
-    await findByText("Update available");
-    await fireEvent.click(await findByText("Open release"));
+    await findByText("Feature update");
+    await fireEvent.click(await findByText("Get update"));
+
+    await waitFor(() => expect(downloadAndInstall).toHaveBeenCalledTimes(1));
+    // The whole point: no trip to GitHub.
+    expect(openAppReleasePage).not.toHaveBeenCalled();
+    expect(await findByText("Restart to finish")).toBeTruthy();
+  });
+
+  it("restarts the app when the user confirms after install", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate());
+    updaterCheck.mockResolvedValue({ downloadAndInstall: vi.fn(async () => undefined) });
+
+    const UpdateBanner = await loadBanner();
+    const { findByText } = render(UpdateBanner);
+
+    await findByText("Feature update");
+    await fireEvent.click(await findByText("Get update"));
+    await fireEvent.click(await findByText("Restart to finish"));
+
+    await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1));
+  });
+
+  it("falls back to the release page when the updater channel has nothing", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate());
+    updaterCheck.mockResolvedValue(null);
+
+    const UpdateBanner = await loadBanner();
+    const { findByText } = render(UpdateBanner);
+
+    await findByText("Feature update");
+    await fireEvent.click(await findByText("Get update"));
 
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
@@ -139,19 +190,132 @@ describe("UpdateBanner.svelte", () => {
     );
   });
 
+  /** A failed install must stay honest: surface the error and offer the
+   *  manual route rather than silently claiming success. */
+  it("surfaces a failed install and offers the release page as a fallback", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate());
+    updaterCheck.mockRejectedValue(new Error("signature mismatch"));
+
+    const UpdateBanner = await loadBanner();
+    const { findByText } = render(UpdateBanner);
+
+    await findByText("Feature update");
+    await fireEvent.click(await findByText("Get update"));
+
+    expect(await findByText(/In-app install failed/)).toBeTruthy();
+    expect(await findByText("Open release")).toBeTruthy();
+    expect(await findByText("Retry install")).toBeTruthy();
+  });
+
   it("synthesizes a fake update from ?fakeUpdate without calling the backend", async () => {
     setSearch("?fakeUpdate=9.9.9");
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
 
-    expect(await findByText("Update available")).toBeTruthy();
-    expect(await findByText("dev → 9.9.9")).toBeTruthy();
+    // 9.9.9 is a major jump from the 1.x line the fake lane grades against.
+    expect(await findByText("Major update")).toBeTruthy();
+    expect(await findByText("dev")).toBeTruthy();
+    expect(await findByText("9.9.9")).toBeTruthy();
     expect(checkAppUpdate).not.toHaveBeenCalled();
 
-    await fireEvent.click(await findByText("Open release"));
+    await fireEvent.click(await findByText("Get update"));
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
       "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v9.9.9",
     );
+  });
+
+  it("grades the fakeUpdate lane by its tag instead of a fixed severity", async () => {
+    setSearch("?fakeUpdate=2.0.0");
+    const UpdateBanner = await loadBanner();
+    const { container, findByText } = render(UpdateBanner);
+
+    expect(await findByText("Major update")).toBeTruthy();
+    expect(container.querySelector(".update-pop.sev-major")).not.toBeNull();
+  });
+
+  it("labels the update by the severity the backend reported", async () => {
+    const cases: Array<[AppUpdateInfo["severity"], string]> = [
+      ["patch", "Patch update"],
+      ["minor", "Feature update"],
+      ["major", "Major update"],
+    ];
+    for (const [severity, label] of cases) {
+      checkAppUpdate.mockResolvedValue(makeUpdate({ severity }));
+      const UpdateBanner = await loadBanner();
+      const { findByText, unmount } = render(UpdateBanner);
+      expect(await findByText(label)).toBeTruthy();
+      unmount();
+      checkAppUpdate.mockReset();
+    }
+  });
+
+  it("tints the popup by severity so the size of the jump is visible at a glance", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate({ severity: "major" }));
+    const UpdateBanner = await loadBanner();
+    const { container, findByText } = render(UpdateBanner);
+
+    await findByText("Major update");
+    expect(container.querySelector(".update-pop.sev-major")).not.toBeNull();
+  });
+
+  it("surfaces only the installer for the host platform", async () => {
+    // happy-dom reports a Windows-ish user agent, so the .exe is the match.
+    checkAppUpdate.mockResolvedValue(
+      makeUpdate({
+        assets: [
+          {
+            name: "Pulse_1.2.0_x64-setup.exe",
+            download_url: "https://example.invalid/Pulse.exe",
+            size: 8_388_608,
+            content_type: "application/octet-stream",
+            platform: "windows",
+          },
+          {
+            name: "pulse_1.2.0_amd64.deb",
+            download_url: "https://example.invalid/pulse.deb",
+            size: 7_340_032,
+            content_type: "application/octet-stream",
+            platform: "linux",
+          },
+          {
+            name: "checksums.txt",
+            download_url: "https://example.invalid/checksums.txt",
+            size: 128,
+            content_type: "text/plain",
+            platform: null,
+          },
+        ],
+      }),
+    );
+    const UpdateBanner = await loadBanner();
+    const { container, findByText, queryByText } = render(UpdateBanner);
+
+    await findByText("Feature update");
+    const asset = container.querySelector(".up-asset");
+    if (asset) {
+      expect(asset.textContent).toContain("Pulse_1.2.0_x64-setup.exe");
+      expect(asset.textContent).toContain("8.0 MB");
+    }
+    // Non-installer assets never surface.
+    expect(queryByText("checksums.txt")).toBeNull();
+  });
+
+  it("previews at most three release-note highlights with markdown stripped", async () => {
+    checkAppUpdate.mockResolvedValue(
+      makeUpdate({
+        release_notes: "## What's new\n- First thing\n* Second thing\n- Third thing\n- Fourth thing",
+      }),
+    );
+    const UpdateBanner = await loadBanner();
+    const { container, findByText } = render(UpdateBanner);
+
+    await findByText("Feature update");
+    const items = Array.from(container.querySelectorAll(".up-highlights li")).map(
+      (li) => li.textContent,
+    );
+    expect(items).toEqual(["What's new", "First thing", "Second thing"]);
+    expect(items.join(" ")).not.toContain("#");
+    expect(items.join(" ")).not.toContain("- ");
   });
 });
