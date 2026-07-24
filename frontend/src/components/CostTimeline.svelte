@@ -91,11 +91,18 @@
         ),
   );
 
-  /** Phrase a multiplier the way a reader would say it out loud. */
+  /**
+   * Phrase a multiplier the way a reader would say it out loud.
+   *
+   * The detector's multiplier is already `today / baseline`, so a drop is
+   * stated as the share of the baseline that disappeared. Reporting its
+   * reciprocal instead would claim a 0.2 multiplier "fell 5× below" the
+   * baseline, which is not what a fifth of the baseline means.
+   */
   function describe(inf: InflectionPoint): string {
     if (inf.multiplier < 1) {
-      const factor = 1 / Math.max(inf.multiplier, 0.0001);
-      return `fell to ${factor.toFixed(1)}× below the rolling baseline`;
+      const drop = (1 - Math.max(inf.multiplier, 0)) * 100;
+      return `fell ${drop.toFixed(0)}% below the rolling baseline (${inf.multiplier.toFixed(2)}× baseline)`;
     }
     return `ran ${inf.multiplier.toFixed(1)}× the rolling baseline`;
   }

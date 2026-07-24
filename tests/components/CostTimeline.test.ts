@@ -84,15 +84,18 @@ describe("CostTimeline.svelte", () => {
     expect(getByText(new RegExp(points[3].date))).toBeTruthy();
   });
 
-  /** A drop reports a multiplier below 1. Phrasing it as "ran 0.2x the
-   *  baseline" reads like a rounding artefact; it is a 5x fall. */
-  it("phrases a drop as a fall below the baseline, not a fractional multiple", () => {
+  /** The detector's multiplier is already today/baseline, so a 0.2 day is a
+   *  fifth of the baseline: an 80% drop. Reporting its reciprocal would claim
+   *  a "5x fall", which is not what the number means. */
+  it("states a drop as a percentage decrease and the real ratio", () => {
     const points = series([20, 18, 4]);
     const { getByText, queryByText } = render(CostTimeline, {
       props: { points, inflections: [inflection(points[2].date, 0.2)] },
     });
 
-    expect(getByText(/5\.0× below the rolling baseline/)).toBeTruthy();
+    expect(getByText(/fell 80% below the rolling baseline/)).toBeTruthy();
+    expect(getByText(/0\.20× baseline/)).toBeTruthy();
+    expect(queryByText(/5\.0× below/)).toBeNull();
     expect(queryByText(/ran 0\.2×/)).toBeNull();
   });
 
@@ -108,7 +111,7 @@ describe("CostTimeline.svelte", () => {
     });
 
     // 0.1x is a 10x fall, which outranks the 1.6x spike.
-    expect(getByText(/10\.0× below the rolling baseline/)).toBeTruthy();
+    expect(getByText(/fell 90% below the rolling baseline/)).toBeTruthy();
   });
 
   it("states plainly when spend held to its baseline", () => {
