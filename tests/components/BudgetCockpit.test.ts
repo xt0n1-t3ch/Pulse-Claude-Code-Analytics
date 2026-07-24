@@ -76,6 +76,51 @@ describe("BudgetCockpit.svelte", () => {
     expect(getByText(/Already .* over the/)).toBeTruthy();
   });
 
+  /** The configured threshold is a heads-up in its own right. Spending $85 of
+   *  a $100 cap at an 80% threshold has to warn even when the projection still
+   *  lands under the cap. */
+  it("warns once spend crosses the configured alert threshold", () => {
+    const { container, getByText } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({ spent_this_month: 85, projected_monthly: 95, daily_average: 3.5 }),
+        budget: {
+          monthly_budget: 100,
+          alert_threshold_pct: 80,
+          spent_this_month: 85,
+          pct_used: 85,
+          projected_monthly: 95,
+          over_budget: false,
+        },
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".cockpit.warn")).not.toBeNull();
+    expect(container.querySelector(".cockpit.over")).toBeNull();
+    expect(getByText(/past your 80% alert threshold/)).toBeTruthy();
+  });
+
+  /** A zero threshold means the user disabled it, so only the projection
+   *  should be able to raise a warning. */
+  it("stays healthy under the cap when no alert threshold is configured", () => {
+    const { container } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({ spent_this_month: 85, projected_monthly: 95, daily_average: 3.5 }),
+        budget: {
+          monthly_budget: 100,
+          alert_threshold_pct: 0,
+          spent_this_month: 85,
+          pct_used: 85,
+          projected_monthly: 95,
+          over_budget: false,
+        },
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".cockpit.warn")).toBeNull();
+  });
+
   /** The gauge is only readable if spend, projection and cap share a scale
    *  and stay in order along the track. */
   it("places spend, projection and cap in ascending order on one track", () => {

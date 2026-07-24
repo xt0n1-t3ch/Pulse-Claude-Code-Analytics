@@ -45,11 +45,21 @@
   let projectedPct = $derived(pct(projected));
   let capPct = $derived(hasCap ? pct(cap) : 0);
 
-  /** Over cap is danger; on course to cross it is caution. */
+  /**
+   * Over cap is danger; on course to cross it, or already past the configured
+   * alert threshold, is caution.
+   *
+   * The threshold has to be honoured on its own: spending $85 of a $100 cap at
+   * an 80% threshold is exactly the heads-up the user asked for, even when a
+   * $95 projection still lands under the cap.
+   */
+  let alertThreshold = $derived(budget?.alert_threshold_pct ?? 0);
+  let spentShareOfCap = $derived(hasCap && cap > 0 ? (spent / cap) * 100 : 0);
   let status = $derived.by((): "none" | "ok" | "warn" | "over" => {
     if (!hasCap) return "none";
     if (spent > cap) return "over";
     if (projected > cap) return "warn";
+    if (alertThreshold > 0 && spentShareOfCap >= alertThreshold) return "warn";
     return "ok";
   });
 
@@ -69,7 +79,10 @@
       return `Already ${fmtCost(spent - cap)} over the ${fmtCost(cap)} cap with ${forecast.days_in_month - forecast.days_elapsed} days left.`;
     }
     if (status === "warn") {
-      return `On course to overshoot the ${fmtCost(cap)} cap by ${fmtCost(overshoot)}.`;
+      if (overshoot > 0) {
+        return `On course to overshoot the ${fmtCost(cap)} cap by ${fmtCost(overshoot)}.`;
+      }
+      return `${spentShareOfCap.toFixed(0)}% of the ${fmtCost(cap)} cap already spent, past your ${alertThreshold.toFixed(0)}% alert threshold.`;
     }
     return `On course for ${fmtCost(projected)}, ${fmtCost(headroom)} under the ${fmtCost(cap)} cap.`;
   });
