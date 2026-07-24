@@ -2,6 +2,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import type { ReportsBundle } from "@/lib/api";
 
+/** Ten days ending today, so date-derived assertions stay stable. */
+function makeDailyCosts(): ReportsBundle["daily_costs"] {
+  const today = new Date();
+  return Array.from({ length: 10 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (9 - i));
+    const date = d.toISOString().slice(0, 10);
+    // One clear peak on the 4th day, two idle days, rest modest.
+    const cost = i === 3 ? 42 : i === 5 || i === 6 ? 0 : 6;
+    return { date, cost, sessions: cost > 0 ? 2 : 0 };
+  });
+}
+
 function makeBundle(): ReportsBundle {
   return {
     provider: "claude",
@@ -98,6 +111,7 @@ function makeBundle(): ReportsBundle {
       diagnosis: "Mostly Opus.",
     },
     inflection_points: [],
+    daily_costs: makeDailyCosts(),
   };
 }
 
@@ -160,5 +174,41 @@ describe("Reports.svelte", () => {
     await waitFor(() => {
       expect(container.querySelector(".reload-banner")).toBeNull();
     });
+  });
+
+  describe("cost timeline", () => {
+    it("renders the timeline chart from the bundle series", async () => {
+      const Reports = (await import("@/views/Reports.svelte")).default;
+      const { container } = render(Reports);
+
+      await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+      flushAll();
+
+      await waitFor(() => {
+        expect(container.querySelector(".timeline-hero")).not.toBeNull();
+      });
+      // The area and line paths are the chart; both must be drawn.
+      expect(container.querySelector("path.tl-line")).not.toBeNull();
+      expect(container.querySelector("path.tl-area")).not.toBeNull();
+    });
+
+    it("summarises spend from the same series the chart plots", async () => {
+      const Reports = (await import("@/views/Reports.svelte")).default;
+      const { container, findByText } = render(Reports);
+
+      await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+      flushAll();
+
+      await waitFor(() => {
+        expect(container.querySelector(".th-stats")).not.toBeNull();
+      });
+      // 7 active days at $6 plus one $42 peak = $84 total.
+      expect(await findByText("$84.00")).toBeTruthy();
+      // Peak day readout comes from the max of the series.
+      expect(await findByText("$42.00")).toBeTruthy();
+      // Average is over active days only (84 / 8 = 10.50), not all 10 days.
+      expect(await findByText("$10.50")).toBeTruthy();
+    });
+
   });
 });

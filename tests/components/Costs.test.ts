@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
-import type { HistoricalSession, CostForecast, BudgetStatus } from "@/lib/api";
+import type { HistoricalSession, CostForecast, BudgetStatus, CostTotals } from "@/lib/api";
 
 vi.mock("@/components/Chart.svelte", async () => ({
   default: (await import("../fixtures/ChartStub.svelte")).default,
@@ -65,12 +65,34 @@ const getCostForecast = vi.fn(async () => forecast);
 const getBudgetStatus = vi.fn(async () => budget);
 const setBudget = vi.fn(async () => undefined);
 
+/** Window-wide aggregate matching `histList`, since the KPIs read from here
+ *  rather than summing the visible page. */
+const totals: CostTotals = {
+  days: 30,
+  sessions: histList.length,
+  total_cost: histList.reduce((s, h) => s + h.total_cost, 0),
+  input_cost: histList.reduce((s, h) => s + h.input_cost, 0),
+  output_cost: histList.reduce((s, h) => s + h.output_cost, 0),
+  cache_write_cost: histList.reduce((s, h) => s + h.cache_write_cost, 0),
+  cache_read_cost: histList.reduce((s, h) => s + h.cache_read_cost, 0),
+  total_tokens: histList.reduce((s, h) => s + h.total_tokens, 0),
+  cache_read_tokens: histList.reduce((s, h) => s + h.cache_read_tokens, 0),
+  pure_input_tokens: 40_000,
+  by_model: [{ label: "Claude Opus 4.8", cost: histList.reduce((s, h) => s + h.total_cost, 0), sessions: 2 }],
+  by_project: [
+    { label: "pulse", cost: 10, sessions: 1 },
+    { label: "other", cost: 5, sessions: 1 },
+  ],
+};
+const getCostTotals = vi.fn(async () => totals);
+
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
     getSessionHistory: () => getSessionHistory(),
     getCostForecast: () => getCostForecast(),
+    getCostTotals: () => getCostTotals(),
     getBudgetStatus: () => getBudgetStatus(),
     setBudget: () => setBudget(),
   };
@@ -80,19 +102,43 @@ describe("Costs.svelte", () => {
   beforeEach(async () => {
     getSessionHistory.mockClear();
     getCostForecast.mockClear();
+    getCostTotals.mockClear();
     getBudgetStatus.mockClear();
     const { sessions } = await import("@/lib/stores");
     sessions.set([]);
   });
 
-  it("mounts and shows the four cost KPI tiles", async () => {
+  it("leads with the budget cockpit and supporting inline figures", async () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container } = render(Costs);
     await tick();
 
     await waitFor(() => expect(getSessionHistory).toHaveBeenCalled());
-    const labels = [...container.querySelectorAll(".stat-label")].map((e) => e.textContent?.trim());
-    expect(labels).toEqual(["Total Spent (30d)", "Avg / Session", "Cost / 1M Tokens", "Cache Savings"]);
+    // The gauge is the hero, not a row of equal-weight tiles.
+    await waitFor(() => expect(container.querySelector(".cockpit")).not.toBeNull());
+
+    const labels = [...container.querySelectorAll(".is-label")].map((e) => e.textContent?.trim());
+    expect(labels).toEqual([
+      "Avg / session",
+      "Cost / 1M tokens",
+      "Cache savings",
+      "Total spent (30d)",
+    ]);
+  });
+
+  it("reads KPI totals from the window aggregate, not the visible page", async () => {
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { container } = render(Costs);
+    await tick();
+
+    await waitFor(() => expect(getCostTotals).toHaveBeenCalled());
+    await waitFor(() => expect(container.querySelector(".is-value")).not.toBeNull());
+
+    const values = [...container.querySelectorAll(".is-value")].map((e) => e.textContent?.trim());
+    // Total spent mirrors the aggregate exactly.
+    expect(values[3]).toBe("$" + totals.total_cost.toFixed(2));
+    // Average divides by the aggregate session count.
+    expect(values[0]).toBe("$" + (totals.total_cost / totals.sessions).toFixed(2));
   });
 
   it("renders a Cost by Type breakdown whose legend reconciles to the per-component total", async () => {
@@ -121,13 +167,15 @@ describe("Costs.svelte", () => {
     expect(getByText("Session Details")).toBeTruthy();
   });
 
-  it("shows budget tracking from the budget status fixture", async () => {
+  it("plots spend, projection and cap on the cockpit gauge", async () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
-    const { getByText } = render(Costs);
+    const { container, findByText } = render(Costs);
     await tick();
 
-    await waitFor(() => expect(getByText("Budget Tracking")).toBeTruthy());
-    expect(getByText("Change Budget")).toBeTruthy();
-    expect(getByText("$30.00 / $100.00")).toBeTruthy();
+    await waitFor(() => expect(container.querySelector(".ck-track")).not.toBeNull());
+    // $30 spent, $93 projected, $100 cap: healthy, and the cap tick is drawn.
+    expect(container.querySelector(".ck-figure")?.textContent).toContain("30.00");
+    expect(container.querySelector(".ck-cap")).not.toBeNull();
+    expect(await findByText(/under the .* cap/)).toBeTruthy();
   });
 });

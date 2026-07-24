@@ -18,6 +18,8 @@
   import { addToast } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
   import { fmtCost } from "../lib/utils";
+  import CostTimeline from "../components/CostTimeline.svelte";
+  import type { DailyCostPoint } from "../lib/api";
 
   let cache = $state<CacheHealthReport | null>(null);
   let recs = $state<Recommendation[]>([]);
@@ -27,6 +29,7 @@
   let prompts = $state<PromptComplexityReport | null>(null);
   let health = $state<SessionHealthReport | null>(null);
   let trace = $state<TraceOverview | null>(null);
+  let dailyCosts = $state<DailyCostPoint[]>([]);
   let loading = $state(true);
   let hasLoaded = $state(false);
   let days = $state(30);
@@ -52,6 +55,7 @@
       prompts = bundle.prompt_complexity;
       health = bundle.session_health;
       trace = bundle.trace_overview;
+      dailyCosts = bundle.daily_costs ?? [];
     } catch (err) {
       console.warn("reports_bundle failed:", err);
     } finally {
@@ -153,6 +157,26 @@
       (a, b) => severityOrder[a.severity] - severityOrder[b.severity],
     ),
   );
+
+  // ---- Cost timeline summary ------------------------------------------
+  // Derived from the same series the chart plots, so the readouts under the
+  // chart can never disagree with the curve above them.
+  let totalCost = $derived(dailyCosts.reduce((sum, p) => sum + p.cost, 0));
+  /** Averaged over days with activity, not the whole window: an idle day is
+   *  not a cheap day, and including it would understate real daily spend. */
+  let activeDays = $derived(dailyCosts.filter((p) => p.sessions > 0).length);
+  let avgDailyCost = $derived(activeDays === 0 ? 0 : totalCost / activeDays);
+  let peakDay = $derived(
+    dailyCosts.length === 0
+      ? null
+      : dailyCosts.reduce((a, b) => (b.cost > a.cost ? b : a)),
+  );
+  let inflectionDayCount = $derived(
+    new Set(inflections.map((i) => i.date)).size,
+  );
+  let inflectionShare = $derived(
+    dailyCosts.length === 0 ? 0 : (inflectionDayCount / dailyCosts.length) * 100,
+  );
 </script>
 
 <div class="reports-view">
@@ -203,6 +227,40 @@
       </div>
     {/if}
     <div class="report-body" class:reloading={loading && hasLoaded}>
+    <section class="timeline-hero">
+      <div class="th-head">
+        <div class="th-titles">
+          <h3 class="th-title">Cost Timeline</h3>
+          <p class="th-sub">Daily spend across the selected window, with cost inflections marked on the curve.</p>
+        </div>
+      </div>
+
+      <CostTimeline points={dailyCosts} {inflections} />
+
+      <div class="th-stats">
+        <div class="th-stat">
+          <span class="ths-label">Total cost</span>
+          <span class="ths-value">{fmtCost(totalCost)}</span>
+          <span class="ths-meta">{dailyCosts.length} days analysed</span>
+        </div>
+        <div class="th-stat">
+          <span class="ths-label">Avg active day</span>
+          <span class="ths-value">{fmtCost(avgDailyCost)}</span>
+          <span class="ths-meta">{activeDays} {activeDays === 1 ? "day" : "days"} with sessions</span>
+        </div>
+        <div class="th-stat">
+          <span class="ths-label">Peak day</span>
+          <span class="ths-value">{peakDay ? fmtCost(peakDay.cost) : "—"}</span>
+          <span class="ths-meta">{peakDay && peakDay.cost > 0 ? peakDay.date : "no spend yet"}</span>
+        </div>
+        <div class="th-stat">
+          <span class="ths-label">Inflection days</span>
+          <span class="ths-value">{inflectionDayCount}</span>
+          <span class="ths-meta">{inflectionShare.toFixed(0)}% of window</span>
+        </div>
+      </div>
+    </section>
+
     {#if cache && $providerProfile.claudeOnlyAnalytics}
       <section class="card hero-card">
         <div class="hero-left">
@@ -287,9 +345,9 @@
       {/if}
 
       <section class="card">
-        <h3 class="card-title">Inflection Timeline</h3>
+        <h3 class="card-title">Inflection Detail</h3>
         <p class="card-sub">
-          Days where cost-per-session deviated ≥2× from the rolling baseline.
+          The days marked on the timeline, with what moved on each one.
         </p>
         {#if inflections.length === 0}
           <div class="empty-inline">
@@ -608,7 +666,10 @@
 
   .btn-primary {
     background: var(--accent);
-    color: #1a1a1a;
+    /* Must be the accent's paired foreground, not a fixed dark value: in the
+       light theme --accent is near-black, so a hardcoded dark colour renders
+       dark-on-dark and the label disappears. */
+    color: var(--accent-fg);
     border-color: var(--accent);
   }
   .btn-primary:hover {
@@ -630,6 +691,72 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 20px;
+  }
+
+  /* ── Cost timeline hero ──────────────────────────────────────────────
+     The timeline is the spine of this screen, so it sits on the page
+     surface with generous padding rather than inside a card competing
+     with the sections below it. */
+  .timeline-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px 24px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .th-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+  .th-titles { display: flex; flex-direction: column; gap: 4px; }
+  .th-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--accent);
+  }
+  .th-sub {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    max-width: 62ch;
+  }
+
+  /* Readouts separated by hairlines and spacing only — no nested cards. */
+  .th-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .th-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 0 18px;
+    border-left: 1px solid var(--border);
+  }
+  .th-stat:first-child { padding-left: 0; border-left: none; }
+  .ths-label {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
+  }
+  .ths-value {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xl);
+    font-weight: 700;
+    letter-spacing: var(--letter-tight);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+  .ths-meta { font-size: var(--fs-xs); color: var(--text-muted); }
+
+  @media (max-width: 900px) {
+    .th-stats { grid-template-columns: repeat(2, 1fr); row-gap: 16px; }
+    .th-stat:nth-child(3) { padding-left: 0; border-left: none; }
   }
 
   .card-title {
@@ -1004,7 +1131,7 @@
 
   .btn-fix:hover {
     background: var(--accent);
-    color: #1a1a1a;
+    color: var(--accent-fg);
   }
 
   .report-body {

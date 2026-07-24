@@ -20,6 +20,7 @@ const helpers = vi.hoisted(() => {
     days: 30,
     total_sessions: 0,
     recommendations: [],
+    daily_costs: [],
     trace_overview: {
       provider: "claude",
       provider_display: "Claude Code",
