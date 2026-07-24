@@ -61,10 +61,19 @@ fn create_or_show_tray(app: &tauri::AppHandle) {
 }
 
 fn main() {
+    // Debug builds also serve the read-only dev bridge so the UI can be
+    // reviewed in a browser against real backend data.
+    #[cfg(debug_assertions)]
+    pulse::dev_bridge::spawn();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        // In-app updates: downloads and installs signed releases without
+        // sending the user to the GitHub releases page.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             commands::start_background_poller(app.handle().clone());
             commands::refresh_usage();
@@ -106,6 +115,7 @@ fn main() {
             commands::get_hourly_activity,
             commands::get_top_sessions,
             commands::get_cost_forecast,
+            commands::get_cost_totals,
             commands::get_budget_status,
             commands::set_budget,
             commands::get_model_distribution,
