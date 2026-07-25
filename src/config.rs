@@ -425,6 +425,18 @@ pub fn claude_home() -> PathBuf {
         .join(".claude")
 }
 
+/// Serializes tests that redirect `CLAUDE_HOME`.
+///
+/// The variable is process-global, so two tests swapping it concurrently make
+/// each other read the wrong tree. It lives beside `claude_home()` — the reader
+/// they are redirecting — so every module shares one lock instead of each
+/// growing its own.
+#[cfg(test)]
+pub fn home_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 pub fn projects_path() -> PathBuf {
     claude_home().join("projects")
 }

@@ -106,6 +106,15 @@ impl DiscordPresence {
             if self.client.is_some() {
                 let _ = self.clear_activity();
             }
+            // Drop the dedup and heartbeat state along with the activity.
+            // Keeping them would make the first update after re-enabling look
+            // like an already-published payload, so `should_skip_publish` would
+            // suppress it and Discord would stay blank until the 30s heartbeat
+            // expired.
+            self.last_sent = None;
+            self.last_publish_at = None;
+            self.last_heartbeat_at = None;
+            self.idle_start_epoch = None;
             return Ok(());
         }
 
