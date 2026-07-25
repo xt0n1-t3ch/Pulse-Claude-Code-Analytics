@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { fmtTokens, fmtPct } from "../lib/utils";
   import {
     getContextBreakdown,
@@ -22,17 +21,18 @@
   let showSkills = $state(true);
 
   let breakdownRequest = 0;
+  let breakdownListRequest = 0;
+  let lastBreakdownKey = "";
 
   $effect(() => {
-    const list = $sessions;
+    const list = $sessions.filter((session) => !session.is_idle);
     if (list.length === 0) {
       selectedSessionId = null;
       return;
     }
     const current = list.find((s) => s.session_id === selectedSessionId);
-    if (!current || current.is_idle) {
-      const active = list.find((s) => !s.is_idle) ?? list[0];
-      selectedSessionId = active.session_id;
+    if (!current) {
+      selectedSessionId = list[0].session_id;
     }
   });
 
@@ -50,8 +50,13 @@
     }
   }
 
-  async function loadBreakdowns(): Promise<void> {
-    breakdowns = await getContextBreakdowns();
+  async function loadBreakdowns(activeIds: string[]): Promise<void> {
+    const request = ++breakdownListRequest;
+    const active = new Set(activeIds);
+    const next = await getContextBreakdowns();
+    if (request === breakdownListRequest) {
+      breakdowns = next.filter((entry) => active.has(entry.session_id) && !entry.is_idle);
+    }
   }
 
   $effect(() => {
@@ -59,8 +64,20 @@
     loadBreakdown();
   });
 
-  onMount(() => {
-    void loadBreakdowns();
+  $effect(() => {
+    const activeIds = $sessions
+      .filter((session) => !session.is_idle)
+      .map((session) => session.session_id)
+      .sort();
+    const key = `${$providerProfile.id}:${activeIds.join(",")}`;
+    if (key === lastBreakdownKey) return;
+    lastBreakdownKey = key;
+    if (activeIds.length === 0) {
+      breakdownListRequest++;
+      breakdowns = [];
+      return;
+    }
+    void loadBreakdowns(activeIds);
   });
 
   function clampPct(pct: number): number {

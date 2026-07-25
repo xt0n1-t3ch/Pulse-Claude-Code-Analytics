@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use cc_discord_presence::codex::account_usage::{
-    AccountUsageManager, effective_limits_from_envelopes, fresh_envelopes,
+    AccountUsageManager, AccountUsageReading, effective_limits_from_envelopes, fresh_envelopes,
 };
 use cc_discord_presence::codex::config::{
     DesktopPresenceDesign, PresenceConfig as CodexPresenceConfig, PresenceSurface,
@@ -235,6 +235,25 @@ pub fn start_background_poller(app: tauri::AppHandle) {
     INITIAL_SNAPSHOT_READY.store(false, Ordering::Release);
     SNAPSHOT_POLLER_STARTED.store(true, Ordering::Release);
     let data = Arc::clone(shared());
+    let (codex_usage_trigger, codex_usage_requests) = std::sync::mpsc::sync_channel::<()>(1);
+    let codex_usage_force = Arc::new(AtomicBool::new(false));
+    let codex_usage_latest = Arc::new(Mutex::new(None::<Result<AccountUsageReading, String>>));
+
+    {
+        let force = Arc::clone(&codex_usage_force);
+        let latest = Arc::clone(&codex_usage_latest);
+        thread::spawn(move || {
+            let mut manager = AccountUsageManager::default();
+            while codex_usage_requests.recv().is_ok() {
+                let result = manager
+                    .get_usage(force.swap(false, Ordering::AcqRel))
+                    .map_err(|error| error.to_string());
+                if let Ok(mut slot) = latest.lock() {
+                    *slot = Some(result);
+                }
+            }
+        });
+    }
 
     seed_discord_state_from_disk();
 
@@ -249,7 +268,6 @@ pub fn start_background_poller(app: tauri::AppHandle) {
         let mut claude_discord = ClaudeDiscordPresence::new(claude_config.effective_client_id());
         let mut codex_discord = CodexDiscordPresence::new(codex_config.effective_client_id());
         let mut codex_plan_detector = PlanDetector::new();
-        let mut codex_usage_mgr = AccountUsageManager::default();
         let mut claude_publisher = PublisherLease::new(cc_discord_presence::config::lock_path());
         let mut codex_publisher =
             PublisherLease::new(cc_discord_presence::codex::config::lock_path());
@@ -421,7 +439,17 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         chrono::Utc::now(),
                         chrono::Duration::minutes(15),
                     );
-                    let account_usage = codex_usage_mgr.get_usage(force_refresh);
+                    if force_refresh {
+                        codex_usage_force.store(true, Ordering::Release);
+                    }
+                    // The account protocol has independent response timeouts;
+                    // never hold session persistence or Discord updates on it.
+                    let _ = codex_usage_trigger.try_send(());
+                    let account_usage = codex_usage_latest
+                        .lock()
+                        .ok()
+                        .and_then(|slot| slot.clone())
+                        .unwrap_or_else(|| Err("Codex account quota read is pending".to_string()));
                     let (usage_envelopes, codex_usage, codex_usage_error) = match account_usage {
                         Ok(reading) => {
                             let snapshot = reading.usage_snapshot();

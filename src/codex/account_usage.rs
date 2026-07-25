@@ -377,10 +377,12 @@ fn wire_envelope(
 }
 
 fn wire_window(window: WireUsageWindow) -> Option<UsageWindow> {
-    let window_minutes = window.window_duration_mins?;
-    if window_minutes == 0 || !window.used_percent.is_finite() {
+    if !window.used_percent.is_finite() {
         return None;
     }
+    // The app-server schema allows an unknown duration while still reporting
+    // an authoritative percentage. Zero is the core model's unknown sentinel.
+    let window_minutes = window.window_duration_mins.unwrap_or(0);
     let used_percent = window.used_percent.clamp(0.0, 100.0);
     Some(UsageWindow {
         used_percent,

@@ -385,7 +385,7 @@ describe("Discord.svelte", () => {
   it("rolls a privacy toggle back when persistence fails", async () => {
     setDiscordDisplayPrefs.mockRejectedValueOnce(new Error("disk full"));
     const Discord = (await import("@/views/Discord.svelte")).default;
-    const { getByText } = render(Discord);
+    const { getByText, getByRole } = render(Discord);
     await waitFor(() => expect(getDiscordSettings).toHaveBeenCalledTimes(1));
 
     const branchToggle = getByText("Git branch")
@@ -395,6 +395,9 @@ describe("Discord.svelte", () => {
     await fireEvent.change(branchToggle);
 
     await waitFor(() => expect(branchToggle.checked).toBe(true));
+    expect(getByRole("status", { name: "Discord settings save status" }).textContent).toContain(
+      "Save failed",
+    );
   });
 
   it("lets Codex switch desktop identity through the persisted design control", async () => {

@@ -39,6 +39,7 @@
   }
 
   function limitLabel(minutes: number): string {
+    if (minutes <= 0) return "Account limit";
     if (minutes === 300) return "5h Limit";
     if (minutes === 10080) return "Weekly Limit";
     return `${windowLabel(minutes)} Limit`;
@@ -229,6 +230,7 @@
   let focusContextUsed = $derived(focusSession?.context_used_tokens ?? 0);
   let focusContextWindow = $derived(focusSession?.context_window_tokens ?? 0);
   let focusContextRemaining = $derived(Math.max(0, focusContextWindow - focusContextUsed));
+  let focusIsLive = $derived(Boolean(focusSession && !focusSession.is_idle));
   let focusPureInput = $derived(focusSession
     ? Math.max(0, focusSession.input_tokens - focusSession.cache_write_tokens - focusSession.cache_read_tokens)
     : 0
@@ -289,8 +291,8 @@
       <div class="focus-head">
         <div>
           <div class="view-kicker">
-            <span class="focus-dot" class:live={Boolean(focusSession)}></span>
-            {focusSession ? "Live session" : "Latest session"}
+            <span class="focus-dot" class:live={focusIsLive}></span>
+            {focusIsLive ? "Live session" : focusSession ? "Recent session" : "Latest session"}
           </div>
           <h1>{focusName}</h1>
           <div class="focus-meta">
@@ -300,8 +302,8 @@
             <span>{focusDuration > 0 ? fmtDuration(focusDuration) : "Waiting"}</span>
           </div>
         </div>
-        <span class="focus-state" class:live={Boolean(focusSession)}>
-          {focusSession ? "Running" : "History"}
+        <span class="focus-state" class:live={focusIsLive}>
+          {focusIsLive ? "Running" : focusSession ? "Idle" : "History"}
         </span>
       </div>
 
@@ -320,10 +322,10 @@
         </div>
       </div>
 
-      <div class="focus-chart" aria-label="Live session token composition">
+      <div class="focus-chart" aria-label="Session token composition">
         {#if focusSession && focusTokenTotal > 0}
           <div class="focus-chart-head">
-            <strong>Live token mix</strong>
+            <strong>{focusIsLive ? "Live token mix" : "Recent token mix"}</strong>
             <span>{fmtTokens(focusTokenTotal)} observed · backend session counters</span>
           </div>
           <div class="mix-track" aria-hidden="true">

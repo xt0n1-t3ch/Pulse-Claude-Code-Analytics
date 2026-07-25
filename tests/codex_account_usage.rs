@@ -86,3 +86,22 @@ fn credits_only_account_response_remains_renderable() {
     );
     assert!(reading.envelopes[0].limits.primary.is_none());
 }
+
+#[test]
+fn quota_percentage_survives_an_unknown_window_duration() {
+    let observed_at = Utc.timestamp_opt(1_785_000_000, 0).single().unwrap();
+    let reading = parse_rate_limits_response(
+        r#"{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":85,"windowDurationMins":null,"resetsAt":null},"credits":null},"rateLimitsByLimitId":null}}"#,
+        observed_at,
+    )
+    .expect("unknown-duration quota should remain available");
+
+    let window = reading.envelopes[0]
+        .limits
+        .primary
+        .as_ref()
+        .expect("primary quota");
+    assert_eq!(window.used_percent, 85.0);
+    assert_eq!(window.remaining_percent, 15.0);
+    assert_eq!(window.window_minutes, 0);
+}

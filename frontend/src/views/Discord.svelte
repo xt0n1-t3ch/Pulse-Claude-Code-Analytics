@@ -29,7 +29,16 @@
 
   let discordEnabled = $state(true);
   let settingsPending = $state(false);
-  let saveStatus = $derived(settingsPending ? "Saving changes…" : "Saved automatically");
+  let saveState = $state<"loading" | "saving" | "saved" | "error">("loading");
+  let saveStatus = $derived(
+    saveState === "loading"
+      ? "Loading settings…"
+      : saveState === "saving"
+        ? "Saving changes…"
+        : saveState === "error"
+          ? "Save failed"
+          : "Saved automatically",
+  );
 
   $effect(() => {
     if ($discordSettings) discordEnabled = $discordSettings.enabled;
@@ -41,7 +50,9 @@
       const settings = await loadDiscordSettings();
       discordEnabled = settings.enabled;
       await refreshDiscordPresencePreview();
+      if (!settingsPending) saveState = "saved";
     } catch (error) {
+      if (!settingsPending) saveState = "error";
       addToast(`Discord settings failed to load: ${String(error)}`, "danger", 5000);
     }
   });
@@ -51,11 +62,14 @@
     const previous = discordEnabled;
     discordEnabled = !previous;
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setDiscordEnabled(discordEnabled));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       discordEnabled = previous;
+      saveState = "error";
       addToast(`Rich Presence update failed: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -67,11 +81,14 @@
     const previous = $discordPreview;
     discordPreview.set(next);
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setDiscordDisplayPrefs(previewToDisplayPrefs(next)));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       discordPreview.set(previous);
+      saveState = "error";
       addToast(`Discord privacy update failed: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -116,11 +133,14 @@
       applyDiscordSettings({ ...previous, desktop_design: design });
     }
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setCodexDesktopDesign(design));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       if (previous) applyDiscordSettings(previous);
+      saveState = "error";
       addToast(`Desktop identity update failed: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -209,6 +229,7 @@
   }
 
   function windowLabel(minutes: number): string {
+    if (minutes <= 0) return "Current";
     if (minutes === 300) return "5h";
     if (minutes === 1440) return "24h";
     if (minutes === 10080) return "7d";
@@ -280,11 +301,14 @@
     const previous = $discordSettings;
     applyDiscordSettings({ ...previous, field_order: order });
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setDiscordFieldOrder(order));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       applyDiscordSettings(previous);
+      saveState = "error";
       addToast(`Field order failed to save: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -335,7 +359,8 @@
     <div class="header-meta">
       <span
         class="save-state"
-        class:saving={settingsPending}
+        class:saving={saveState === "saving" || saveState === "loading"}
+        class:failed={saveState === "error"}
         role="status"
         aria-label="Discord settings save status"
       >{saveStatus}</span>
@@ -603,6 +628,8 @@
 
   .save-state.saving { color: var(--warning); }
   .save-state.saving::before { background: var(--warning); animation: pulse 1s var(--ease) infinite; }
+  .save-state.failed { color: var(--danger); }
+  .save-state.failed::before { background: var(--danger); }
 
   /* Primary: is presence actually broadcasting right now. */
   .hm-state {

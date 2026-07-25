@@ -263,6 +263,19 @@ describe("Dashboard.svelte", () => {
     expect(container.querySelector("[data-session-focus]")?.textContent).toContain("cc-discord-presence");
   });
 
+  it("labels retained idle snapshots as recent rather than live", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([{ ...liveSession("idle-1", "Retained session", 10_000, 353_400, "Waiting"), is_idle: true }]);
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container } = render(Dashboard);
+    await tick();
+
+    expect(container.querySelector("[data-session-focus]")?.textContent).toContain("Recent session");
+    expect(container.querySelector("[data-session-focus]")?.textContent).toContain("Idle");
+    expect(container.querySelector("[data-session-focus]")?.textContent).not.toContain("Live session");
+  });
+
   it("renders the cost breakdown that reconciles to the estimated total", async () => {
     const Dashboard = (await import("@/views/Dashboard.svelte")).default;
     const { container, getByText } = render(Dashboard);
