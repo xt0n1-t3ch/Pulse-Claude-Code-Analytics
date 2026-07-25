@@ -5,8 +5,19 @@
 
   const CELL = 18;
   const HOURS = Array.from({ length: 24 }, (_, i) => i);
+  const hourFormatter = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    hour12: true,
+  });
+  const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Local time";
 
   let maxCount = $derived(Math.max(...data.map(d => d.session_count), 1));
+  let totalSessions = $derived(data.reduce((sum, entry) => sum + entry.session_count, 0));
+  let activeHours = $derived(data.filter((entry) => entry.session_count > 0).length);
+  let peak = $derived.by(() => data.reduce<HourlyActivity | null>(
+    (best, entry) => !best || entry.session_count > best.session_count ? entry : best,
+    null,
+  ));
 
   function intensity(hour: number): number {
     const entry = data.find(d => d.hour === hour);
@@ -23,10 +34,9 @@
   }
 
   function hourLabel(h: number): string {
-    if (h === 0) return "12a";
-    if (h < 12) return h + "a";
-    if (h === 12) return "12p";
-    return (h - 12) + "p";
+    // The backend has already grouped UTC timestamps into the machine's local
+    // hour. Intl owns the user's AM/PM convention instead of hand-built `5p`.
+    return hourFormatter.format(new Date(2026, 0, 1, h, 0, 0));
   }
 
   function sessionCount(hour: number): number {
@@ -35,7 +45,7 @@
 </script>
 
 <div class="heatmap">
-  <div class="heatmap-grid">
+  <div class="heatmap-grid" role="img" aria-label={`${totalSessions} sessions across ${activeHours} active hours`}>
     {#each HOURS as h}
       <div
         class="heatmap-cell"
@@ -49,6 +59,12 @@
       <span class="heatmap-label">{hourLabel(h)}</span>
     {/each}
   </div>
+  <div class="heatmap-summary">
+    <span>{totalSessions} sessions</span>
+    <span>{activeHours} active hours</span>
+    <span>Peak {peak ? hourLabel(peak.hour) : "—"}</span>
+    <span class="timezone">Local time · {localTimeZone}</span>
+  </div>
   <div class="heatmap-legend">
     <span class="legend-text">Less</span>
     {#each [0, 0.25, 0.5, 0.75, 1] as v}
@@ -61,10 +77,12 @@
 <style>
   .heatmap { display: flex; flex-direction: column; gap: 6px; max-width: 100%; min-width: 0; }
   .heatmap-grid { display: grid; grid-template-columns: repeat(24, minmax(4px, 1fr)); gap: 2px; }
-  .heatmap-cell { border-radius: 3px; transition: background 0.2s ease; cursor: default; }
+  .heatmap-cell { border-radius: 3px; outline: 1px solid transparent; transition: background 0.2s ease, outline-color 0.15s ease; cursor: default; }
+  .heatmap-cell:hover { outline-color: var(--border-hover); }
   .heatmap-labels { display: flex; justify-content: space-between; height: 14px; }
   .heatmap-label { font-size: 9px; color: var(--text-muted); font-weight: 500; }
   .heatmap-legend { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
+  .heatmap-summary { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--text-secondary); font: 600 10px var(--font-mono); }
   .legend-text { font-size: 9px; color: var(--text-muted); }
   .legend-cell { width: 10px; height: 10px; border-radius: 2px; }
 </style>

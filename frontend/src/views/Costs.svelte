@@ -208,7 +208,7 @@
 
 <div class="costs-view">
   <div class="view-header">
-    <h2 class="view-title">Cost Analysis</h2>
+    <h2 class="view-title">Costs</h2>
     <div class="filters">
       <!-- Explicit handler rather than `bind:value`: the selection drives a
            backend refetch, so the assignment needs to be visible at the seam
@@ -305,7 +305,7 @@
   </div>
 
   {#if costByProject.length > 0}
-    <div class="card">
+    <div class="card surface-matte">
       <h3 class="card-title">Cost by Project</h3>
       <div
         class="chart-container"
@@ -316,7 +316,7 @@
     </div>
   {/if}
 
-  <div class="card">
+  <div class="card surface-matte">
     <div class="card-title-row">
       <h3 class="card-title">Session Details</h3>
       {#if filtered.length > 0}
@@ -363,7 +363,7 @@
 
 <style>
   .costs-view { display: flex; flex-direction: column; gap: 16px; }
-  .view-header { display: flex; align-items: center; gap: 12px; }
+  .view-header { display: flex; align-items: flex-end; gap: 20px; }
   .view-title { font-size: 20px; font-weight: 700; }
   .filters { margin-left: auto; }
   /* Supporting figures read as one row of text, separated by rules rather

@@ -4,11 +4,9 @@
   import {
     getContextBreakdown,
     getContextBreakdowns,
-    getSessionsContextUsage,
     type ContextBreakdown,
     type ContextFileEntry,
     type SessionContextBreakdown,
-    type SessionContextUsage,
   } from "../lib/api";
   import { addToast } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
@@ -16,7 +14,6 @@
 
   let ctx = $state<ContextBreakdown | null>(null);
   let breakdowns = $state<SessionContextBreakdown[]>([]);
-  let sessionUsage = $state<SessionContextUsage[]>([]);
   let selectedSessionId = $state<string | null>(null);
   let refreshing = $state(false);
   let loaded = $state(false);
@@ -53,10 +50,6 @@
     }
   }
 
-  async function loadUsage(): Promise<void> {
-    sessionUsage = await getSessionsContextUsage();
-  }
-
   async function loadBreakdowns(): Promise<void> {
     breakdowns = await getContextBreakdowns();
   }
@@ -68,7 +61,6 @@
 
   onMount(() => {
     void loadBreakdowns();
-    void loadUsage();
   });
 
   function clampPct(pct: number): number {
@@ -214,41 +206,29 @@
   ] : []);
 
   let usedBarPct = $derived(barSegs.reduce((s, b) => s + b.pct, 0));
+  let selectedEntry = $derived(
+    breakdowns.find((entry) => entry.session_id === selectedSessionId) ?? breakdowns[0] ?? null,
+  );
 </script>
 
 <div class="ctx-page">
-  {#if ctx}
-    <div class="view-header">
-      <h2 class="view-title">Context Window</h2>
-      <div class="header-meta">
-        {#if refreshing}<span class="refreshing-dot" aria-label="Refreshing"></span>{/if}
-        <span class="model-chip">{ctx.model}</span>
-      </div>
+  <div class="view-header">
+    <div class="view-title-line">
+      <h2 class="view-title">Context</h2>
+      {#if breakdowns.length > 0}<span class="active-count">{breakdowns.length} active</span>{/if}
     </div>
+    <div class="header-meta">
+      {#if refreshing}<span class="refreshing-dot" aria-label="Refreshing"></span>{/if}
+      {#if ctx}<span class="model-chip">{ctx.model}</span>{/if}
+    </div>
+  </div>
 
-    {#if $sessions.length > 0}
-      <div class="session-strip" role="tablist">
-        {#each $sessions as s (s.session_id)}
-          <button
-            class="session-pill"
-            class:active={s.session_id === selectedSessionId}
-            class:idle={s.is_idle}
-            role="tab"
-            aria-selected={s.session_id === selectedSessionId}
-            onclick={() => (selectedSessionId = s.session_id)}
-          >
-            <span class="pill-project">{s.project}</span>
-            <span class="pill-model">{s.model}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-
+  {#if ctx}
     {#if breakdowns.length > 0}
       <div class="active-section">
         <div class="advice-title-row">
-          <h3 class="advice-title">Active context windows</h3>
-          <span class="advice-count">{breakdowns.length}</span>
+          <h3 class="advice-title">Live windows</h3>
+          <span class="advice-sub">Select one to inspect its current provider-reported fill.</span>
         </div>
         <div class="active-grid">
           {#each breakdowns as entry (entry.session_id)}
@@ -286,7 +266,14 @@
       </div>
     {/if}
 
-    <div class="hero-card">
+    <div class="hero-card surface-matte">
+      <div class="hero-owner">
+        <div>
+          <span>Selected session</span>
+          <strong>{selectedEntry?.project ?? "Active session"}</strong>
+        </div>
+        <span>{ctx.model}</span>
+      </div>
       <div class="hero-top">
         <div class="hero-numbers">
           <span class="hero-used">{fmtTokens(ctx.used_tokens)}</span>
@@ -365,44 +352,6 @@
       </div>
     {/if}
 
-    {#if sessionUsage.length > 0}
-      <div class="usage-card">
-        <div class="advice-header">
-          <div class="advice-title-row">
-            <h3 class="advice-title">Per-session utilization</h3>
-            <span class="advice-count">{sessionUsage.length}</span>
-          </div>
-          <p class="advice-sub">
-            Context fill across recent sessions — each with a tailored recommendation.
-          </p>
-        </div>
-        <ul class="usage-list">
-          {#each sessionUsage as row (row.session_id)}
-            {@const rowPct = clampPct(row.utilization_pct)}
-            <li class="usage-row">
-              <div class="usage-head">
-                <span class="usage-project">{row.project}</span>
-                <span class="usage-model">{row.model_display}</span>
-                <span class="usage-pct" style="color: {utilizationColor(rowPct)}">
-                  {fmtPct(rowPct)}
-                </span>
-              </div>
-              <div class="usage-track">
-                <div
-                  class="usage-fill"
-                  style="width: {rowPct}%; background: {utilizationColor(rowPct)}"
-                ></div>
-              </div>
-              <div class="usage-meta">
-                <span>{fmtTokens(row.used_tokens)} / {fmtTokens(row.window_tokens)}</span>
-                <span class="usage-rec">{row.recommendation}</span>
-              </div>
-            </li>
-          {/each}
-        </ul>
-      </div>
-    {/if}
-
     <div class="sub-grid">
       {#if ctx.mcp_tools.length > 0}
         <div class="sub-card">
@@ -468,21 +417,27 @@
       {/if}
     </div>
   {:else if !loaded}
-    <div class="hero-card loading">
-      <div class="spinner"></div>
-      <span>Loading context data...</span>
-    </div>
+    <section class="context-state state-panel" aria-live="polite">
+      <span class="state-eyebrow">Context telemetry</span>
+      <h3>Reading the active context window</h3>
+      <p>Pulse is resolving session usage, instruction inventory, and compaction headroom.</p>
+      <div class="state-progress" aria-hidden="true"><span></span></div>
+    </section>
   {:else}
-    <div class="hero-card loading">
-      <span>No active sessions to inspect.</span>
-    </div>
+    <section class="context-state state-panel">
+      <span class="state-eyebrow">Context telemetry</span>
+      <h3>No active context to inspect</h3>
+      <p>Start a session and Pulse will place its live window, inventory, and pressure signals here.</p>
+    </section>
   {/if}
 </div>
 
 <style>
   .ctx-page { display: flex; flex-direction: column; gap: 14px; }
 
-  .view-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .view-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .view-title-line { display: flex; align-items: center; gap: 10px; }
+  .active-count { padding: 3px 8px; color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--radius-full); font: 600 10px var(--font-mono); }
   .header-meta { display: flex; align-items: center; gap: 10px; }
   .refreshing-dot {
     width: 7px;
@@ -506,38 +461,6 @@
     letter-spacing: 0.01em;
   }
 
-  /* Session pill strip */
-  .session-strip {
-    display: flex;
-    gap: 8px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-  }
-  .session-pill {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-    flex-shrink: 0;
-    padding: 8px 14px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    transition: all 0.15s var(--ease);
-    text-align: left;
-    font: inherit;
-  }
-  .session-pill:hover { border-color: var(--border-hover); }
-  .session-pill.active { border-color: var(--accent); background: var(--accent-dim); }
-  .session-pill.idle { opacity: 0.6; }
-  .pill-project { font-size: 12px; font-weight: 700; color: var(--text-primary); }
-  .pill-model {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-  }
-
   /* All-active context cards */
   .active-section { display: flex; flex-direction: column; gap: 12px; }
   .active-grid {
@@ -551,7 +474,7 @@
     flex-direction: column;
     gap: 9px;
     padding: 14px 16px;
-    background: var(--panel-sheen), var(--bg-card);
+    background: var(--surface-panel);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     cursor: pointer;
@@ -561,9 +484,8 @@
     transition: border-color 0.15s var(--ease), background 0.15s var(--ease),
       transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
   }
-  .active-ctx-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: var(--panel-edge); pointer-events: none; }
   .active-ctx-card:hover { border-color: var(--border-hover); transform: var(--lift); }
-  .active-ctx-card.selected { border-color: var(--accent); background: var(--panel-sheen), var(--accent-dim); box-shadow: var(--shadow-ring); }
+  .active-ctx-card.selected { border-color: var(--info); background: var(--surface-panel); box-shadow: inset 0 -2px 0 var(--info); }
   .active-ctx-card.idle { opacity: 0.6; }
   .act-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .act-project { font-size: 13px; font-weight: 700; color: var(--text-primary); }
@@ -593,63 +515,23 @@
   }
   .act-tokens { flex-shrink: 0; }
 
-  /* Per-session utilization */
-  .usage-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 20px;
-  }
-  .usage-list { list-style: none; display: flex; flex-direction: column; gap: 12px; }
-  .usage-row {
-    padding: 12px 14px;
-    background: var(--bg-elevated);
-    border-radius: var(--radius-md);
-  }
-  .usage-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-  .usage-project { font-size: 13px; font-weight: 700; color: var(--text-primary); }
-  .usage-model {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-  }
-  .usage-pct {
-    margin-left: auto;
-    font-size: 13px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
-  .usage-track {
-    height: 6px;
-    background: var(--bg-primary);
-    border-radius: 99px;
-    overflow: hidden;
-    margin-bottom: 8px;
-  }
-  .usage-fill { height: 100%; border-radius: 99px; transition: width 0.4s var(--ease); }
-  .usage-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: 11px;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-  .usage-rec { color: var(--text-secondary); line-height: 1.4; }
-
-  /* Hero card */
-  /* The one hero panel per view carries the stronger sheen so it reads as the
-     primary object rather than another card in the stack. */
+  /* Selected session detail stays matte; hierarchy comes from type and data. */
   .hero-card {
     position: relative;
-    background: var(--panel-sheen-strong), var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
     padding: 22px 24px;
     overflow: hidden;
   }
-  .hero-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: var(--panel-edge); pointer-events: none; }
-  .hero-card.loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 60px; color: var(--text-muted); font-size: 13px; }
+  .hero-owner { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--divider); }
+  .hero-owner > div { display: flex; flex-direction: column; gap: 3px; }
+  .hero-owner span { color: var(--text-muted); font: 600 10px var(--font-mono); }
+  .hero-owner strong { color: var(--text-primary); font-size: 14px; }
+  .context-state { min-height: 196px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 28px 30px; }
+  .context-state h3 { margin-top: 8px; font-size: 18px; }
+  .context-state p { max-width: 540px; margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+  .state-eyebrow { color: var(--text-secondary); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+  .state-progress { width: min(360px, 100%); height: 3px; margin-top: 22px; overflow: hidden; background: var(--bg-elevated); }
+  .state-progress span { display: block; width: 36%; height: 100%; background: var(--info); animation: context-load 1.35s var(--ease-in-out) infinite alternate; }
+  @keyframes context-load { from { transform: translateX(-20%); } to { transform: translateX(190%); } }
 
   .hero-top {
     display: flex;
@@ -798,7 +680,6 @@
   .item-tokens { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
   /* Spinner */
-  .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   /* Advice / recommendations */
@@ -903,13 +784,12 @@
   @media (max-width: 800px) {
     .active-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .cat-grid { grid-template-columns: 1fr; }
-    .hero-card, .usage-card { padding: 16px; }
+    .hero-card { padding: 16px; }
   }
 
   @media (max-width: 620px) {
     .active-grid { grid-template-columns: 1fr; }
-    .hero-top, .usage-head { align-items: flex-start; flex-wrap: wrap; }
-    .usage-pct { margin-left: 0; }
+    .hero-top { align-items: flex-start; flex-wrap: wrap; }
     .hero-used { font-size: 23px; }
     .advice-head { align-items: flex-start; flex-wrap: wrap; }
   }

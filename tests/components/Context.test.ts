@@ -103,7 +103,7 @@ describe("Context.svelte", () => {
     getSessionsContextUsage.mockClear();
   });
 
-  it("renders the session pill strip for seeded sessions and a per-session list", async () => {
+  it("renders one active-session selector without a second stale history list", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
 
@@ -111,15 +111,13 @@ describe("Context.svelte", () => {
     const { container } = render(Context);
     await tick();
 
-    await waitFor(() => {
-      expect(container.querySelectorAll(".session-pill").length).toBe(2);
-    });
-    const projects = [...container.querySelectorAll(".pill-project")].map((el) => el.textContent?.trim());
+    await waitFor(() => expect(container.querySelectorAll(".active-ctx-card").length).toBe(2));
+    const projects = [...container.querySelectorAll(".act-project")].map((el) => el.textContent?.trim());
     expect(projects).toContain("pulse");
     expect(projects).toContain("other");
-    await waitFor(() => {
-      expect(container.querySelector(".usage-row")).not.toBeNull();
-    });
+    expect(container.querySelector(".session-pill")).toBeNull();
+    expect(container.querySelector(".usage-row")).toBeNull();
+    expect(getSessionsContextUsage).not.toHaveBeenCalled();
   });
 
   it("renders a context card for every active session simultaneously", async () => {

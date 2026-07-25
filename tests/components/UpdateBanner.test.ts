@@ -152,15 +152,31 @@ describe("UpdateBanner.svelte", () => {
     const { findByText } = render(UpdateBanner);
 
     await findByText("Feature update");
-    await fireEvent.click(await findByText("Get update"));
+    await fireEvent.click(await findByText("Update"));
 
     await waitFor(() => expect(downloadAndInstall).toHaveBeenCalledTimes(1));
     // The whole point: no trip to GitHub.
     expect(openAppReleasePage).not.toHaveBeenCalled();
-    expect(await findByText("Restart to finish")).toBeTruthy();
+    await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1));
   });
 
-  it("restarts the app when the user confirms after install", async () => {
+  it("uses one approved Update action to install the signed release and relaunch", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate());
+    const downloadAndInstall = vi.fn(async () => undefined);
+    updaterCheck.mockResolvedValue({ downloadAndInstall });
+
+    const UpdateBanner = await loadBanner();
+    const { findByText } = render(UpdateBanner);
+
+    expect(await findByText("New Update Available")).toBeTruthy();
+    await fireEvent.click(await findByText("Update"));
+
+    await waitFor(() => expect(downloadAndInstall).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1));
+    expect(openAppReleasePage).not.toHaveBeenCalled();
+  });
+
+  it("restarts the app as the final step of the approved Update action", async () => {
     checkAppUpdate.mockResolvedValue(makeUpdate());
     updaterCheck.mockResolvedValue({ downloadAndInstall: vi.fn(async () => undefined) });
 
@@ -168,8 +184,7 @@ describe("UpdateBanner.svelte", () => {
     const { findByText } = render(UpdateBanner);
 
     await findByText("Feature update");
-    await fireEvent.click(await findByText("Get update"));
-    await fireEvent.click(await findByText("Restart to finish"));
+    await fireEvent.click(await findByText("Update"));
 
     await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1));
   });
@@ -182,7 +197,7 @@ describe("UpdateBanner.svelte", () => {
     const { findByText } = render(UpdateBanner);
 
     await findByText("Feature update");
-    await fireEvent.click(await findByText("Get update"));
+    await fireEvent.click(await findByText("Update"));
 
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
@@ -200,11 +215,11 @@ describe("UpdateBanner.svelte", () => {
     const { findByText } = render(UpdateBanner);
 
     await findByText("Feature update");
-    await fireEvent.click(await findByText("Get update"));
+    await fireEvent.click(await findByText("Update"));
 
     expect(await findByText(/In-app install failed/)).toBeTruthy();
     expect(await findByText("Open release")).toBeTruthy();
-    expect(await findByText("Retry install")).toBeTruthy();
+    expect(await findByText("Retry update")).toBeTruthy();
   });
 
   it("synthesizes a fake update from ?fakeUpdate without calling the backend", async () => {
@@ -218,7 +233,7 @@ describe("UpdateBanner.svelte", () => {
     expect(await findByText("9.9.9")).toBeTruthy();
     expect(checkAppUpdate).not.toHaveBeenCalled();
 
-    await fireEvent.click(await findByText("Get update"));
+    await fireEvent.click(await findByText("Update"));
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
       "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v9.9.9",

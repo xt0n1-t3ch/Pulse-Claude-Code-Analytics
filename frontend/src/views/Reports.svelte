@@ -88,10 +88,13 @@
     }
   });
 
+  let actionableRecs = $derived(
+    recs.filter((rec) => !["cache-healthy", "all-good"].includes(rec.id) && rec.fix_prompt.trim().length > 0),
+  );
   let filteredRecs = $derived(
     severityFilter === "all"
-      ? recs
-      : recs.filter((r) => r.severity === severityFilter),
+      ? actionableRecs
+      : actionableRecs.filter((r) => r.severity === severityFilter),
   );
 
   async function handleFix(rec: Recommendation): Promise<void> {
@@ -188,15 +191,9 @@
 
 <div class="reports-view">
   <header class="view-header">
-    <div>
-      <h2 class="view-title">Reports &amp; Insights</h2>
-      <p class="view-sub">
-        Deep analysis of your {$providerProfile.productName} usage — {capabilities.model_routing
-          ? "cache efficiency, model routing, cost spikes, and ready-to-paste fixes."
-          : capabilities.cache_health
-            ? "cache efficiency, cost trends, tool mix, and ready-to-paste fixes."
-            : "cost trends, tool mix, prompt complexity, and ready-to-paste fixes."}
-      </p>
+    <div class="view-title-group">
+      <h2 class="view-title">Reports</h2>
+      <p class="view-sub">{days === 365 ? "1 year" : `${days} days`} · selected analysis window</p>
     </div>
     <div class="controls">
       <div class="segmented">
@@ -513,7 +510,7 @@
         <div>
           <h3 class="card-title">Recommendations</h3>
           <p class="card-sub">
-            Actionable items generated from your real session history.
+            Actionable findings from the current {days === 365 ? "1-year" : `${days}-day`} saved-session window. No-action duplicates are omitted.
           </p>
         </div>
         <div class="severity-tabs">
@@ -526,7 +523,7 @@
               {t.label}
               {#if t.id !== "all"}
                 <span class="count-pill">
-                  {recs.filter((r) => r.severity === t.id).length}
+                  {actionableRecs.filter((r) => r.severity === t.id).length}
                 </span>
               {/if}
             </button>
@@ -536,9 +533,9 @@
 
       {#if !hasLoaded}
         <div class="empty-inline">Loading…</div>
-      {:else if recs.length === 0}
+      {:else if actionableRecs.length === 0}
         <div class="empty-inline">
-          No recommendations yet — start a session to populate the analysis.
+          No actionable findings in this window.
         </div>
       {:else if sortedRecs.length === 0}
         <div class="empty-inline">No items match this filter.</div>

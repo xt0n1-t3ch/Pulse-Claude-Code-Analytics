@@ -163,7 +163,7 @@ describe("Discord.svelte", () => {
     const { container, getByText } = render(Discord);
     await tick();
 
-    expect(getByText("Discord")).toBeTruthy();
+    expect(getByText("Broadcast")).toBeTruthy();
     expect(container.querySelector(".dp-profile")).not.toBeNull();
     await waitFor(() => {
       expect(container.querySelector(".dp-activity-details")?.textContent).toContain("pulse");
@@ -352,6 +352,36 @@ describe("Discord.svelte", () => {
     });
   });
 
+  it("makes the backend-owned autosave lifecycle visible", async () => {
+    let resolveSave!: (settings: DiscordSettings) => void;
+    setDiscordDisplayPrefs.mockImplementationOnce(
+      () => new Promise<DiscordSettings>((resolve) => {
+        resolveSave = resolve;
+      }),
+    );
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { getByText, getByRole } = render(Discord);
+    await waitFor(() => expect(getDiscordSettings).toHaveBeenCalledTimes(1));
+
+    const branchToggle = getByText("Git branch")
+      .closest(".field-cell")
+      ?.querySelector("input") as HTMLInputElement;
+    await fireEvent.change(branchToggle);
+
+    expect(getByRole("status", { name: "Discord settings save status" }).textContent).toContain(
+      "Saving changes",
+    );
+    resolveSave({
+      ...discordSettings,
+      display_prefs: { ...discordSettings.display_prefs, show_branch: false },
+    });
+    await waitFor(() => {
+      expect(getByRole("status", { name: "Discord settings save status" }).textContent).toContain(
+        "Saved automatically",
+      );
+    });
+  });
+
   it("rolls a privacy toggle back when persistence fails", async () => {
     setDiscordDisplayPrefs.mockRejectedValueOnce(new Error("disk full"));
     const Discord = (await import("@/views/Discord.svelte")).default;
@@ -520,6 +550,13 @@ describe("Discord.svelte", () => {
       // mode before the redesign.
       expect(css.match(/#[0-9a-fA-F]{3,8}\b/g)).toBeNull();
       expect(css.match(/rgba?\(/g)).toBeNull();
+    });
+
+    it("stacks field controls before the two-column layout can clip at app widths", () => {
+      const css = componentCss();
+      expect(css).toMatch(
+        /@media \(max-width: 1180px\)[\s\S]*?\.field-grid\s*\{\s*grid-template-columns:\s*1fr;/,
+      );
     });
 
     it("routes every Discord mock surface through a --dc-* token", () => {

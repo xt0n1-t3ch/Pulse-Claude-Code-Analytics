@@ -54,7 +54,7 @@ const minimalBundle: ReportsBundle = {
       description: "Generated in flow test.",
       estimated_savings: null,
       action: "Do the thing",
-      fix_prompt: "",
+      fix_prompt: "Apply the flow recommendation.",
       color: "#7cb9e8",
     },
   ],
@@ -209,7 +209,7 @@ describe("Phase 5 flow", () => {
     getReportsBundle.mockClear();
   });
 
-  it("re-queries the breakdown when a different session pill is selected", async () => {
+  it("re-queries the breakdown when a different live context is selected", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
 
@@ -220,14 +220,14 @@ describe("Phase 5 flow", () => {
     await waitFor(() => expect(getContextBreakdown).toHaveBeenCalled());
     const callsBefore = getContextBreakdown.mock.calls.length;
 
-    let otherPill: HTMLElement | undefined;
+    let otherContext: HTMLElement | undefined;
     await waitFor(() => {
-      otherPill = [...container.querySelectorAll<HTMLElement>(".session-pill")].find((p) =>
-        p.textContent?.includes("other"),
+      otherContext = [...container.querySelectorAll<HTMLElement>(".active-ctx-card")].find((card) =>
+        card.textContent?.includes("other"),
       );
-      expect(otherPill).toBeTruthy();
+      expect(otherContext).toBeTruthy();
     });
-    await fireEvent.click(otherPill!);
+    await fireEvent.click(otherContext!);
 
     await waitFor(() => {
       expect(getContextBreakdown.mock.calls.length).toBeGreaterThan(callsBefore);

@@ -335,11 +335,11 @@ describe("poll() to stores to Dashboard full flow", () => {
     const { container, getByText } = render(Dashboard);
     await tick();
 
-    await waitFor(() => expect(getByText(/Plan Usage Limits/)).toBeTruthy());
+    await waitFor(() => expect(getByText(/Account quota/)).toBeTruthy());
     const kpiValues = [...container.querySelectorAll(".stats-row .stat-value")].map((e) => e.textContent?.trim());
     expect(kpiValues[0]).toBe("$8.00");
     await waitFor(() => {
-      expect(container.querySelectorAll(".session-list .session-card").length).toBe(2);
+      expect(container.querySelectorAll("[data-session-instance]").length).toBe(2);
     });
   });
 });

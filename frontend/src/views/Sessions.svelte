@@ -140,8 +140,10 @@
 
 <div class="sessions-view">
   <div class="view-header">
-    <h2 class="view-title">Sessions</h2>
-    <span class="view-sub">{filtered.length} active</span>
+    <div class="title-line">
+      <h2 class="view-title">Sessions</h2>
+      <span class="view-sub">{filtered.length} active</span>
+    </div>
     <div class="filters">
       <select bind:value={projectFilter}>
         <option value="">All Projects</option>
@@ -157,7 +159,7 @@
     </div>
   </div>
 
-  <div class="stats-row">
+  <div class="stats-row metric-strip">
     <StatCard label="Total Tokens" value={fmtTokens(totalTokens || (summary?.total_tokens ?? 0))} />
     <StatCard label="Total Cost" value={fmtCost(totalCost || (summary?.total_cost ?? 0))} />
     <StatCard label="Avg Duration" value={summary ? fmtDuration(summary.avg_duration_secs) : "—"} />
@@ -166,9 +168,9 @@
 
   <div class="session-list">
     {#if filtered.length === 0}
-      <div class="empty-state">
-        <div class="empty-icon">✳</div>
-        <div class="empty-text">No sessions match filters</div>
+      <div class="empty-state state-panel">
+        <div class="empty-text">No live sessions match these filters</div>
+        <div class="empty-sub">Change the project or sort controls, or use the history ledger below.</div>
       </div>
     {:else}
       {#each filtered as session (session.session_id)}
@@ -180,7 +182,7 @@
   </div>
 
   {#if topSessions.length > 0}
-    <div class="card">
+    <div class="card surface-matte">
       <h3 class="card-title">Most Costly Sessions (30 days)</h3>
       <div class="top-table">
         <div class="top-header">
@@ -205,7 +207,7 @@
     </div>
   {/if}
 
-  <div class="card">
+  <div class="card surface-matte">
     <div class="card-title-row">
       <h3 class="card-title">Session History</h3>
       <div class="title-actions">
@@ -369,14 +371,14 @@
 
 <style>
   .sessions-view { display: flex; flex-direction: column; gap: 16px; }
-  .view-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .view-header { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+  .title-line { display: flex; align-items: center; gap: 10px; }
   .view-title { font-size: 20px; font-weight: 700; }
-  .view-sub { font-size: 12px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 10px; border-radius: 99px; }
+  .view-sub { font-size: 11px; color: var(--text-muted); border: 1px solid var(--border); padding: 3px 9px; border-radius: 99px; font-family: var(--font-mono); }
   .filters { margin-left: auto; display: flex; gap: 8px; }
-  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stats-row { grid-template-columns: repeat(4, 1fr); }
 
-  .card { position: relative; background: var(--panel-sheen), var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; overflow: hidden; }
-  .card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: var(--panel-edge); pointer-events: none; }
+  .card { position: relative; background: var(--surface-panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; overflow: hidden; }
   .card-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .card-title-row .card-title { margin-bottom: 0; }
   .card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 14px; }
@@ -386,9 +388,9 @@
   .action-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 
   .session-list { display: flex; flex-direction: column; gap: 8px; }
-  .empty-state { text-align: center; padding: 40px; }
-  .empty-icon { font-size: 28px; color: var(--accent); margin-bottom: 8px; }
-  .empty-text { font-size: 14px; color: var(--text-secondary); }
+  .empty-state { text-align: center; padding: 34px 24px; }
+  .empty-text { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .empty-sub { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
 
   .top-table { font-size: 12px; --top-cols: 30px 2fr 1.5fr 90px 80px 80px; }
   .top-header { display: grid; grid-template-columns: var(--top-cols); gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }

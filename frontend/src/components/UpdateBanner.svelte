@@ -15,7 +15,7 @@
   let opening = $state(false);
 
   /** In-app install lifecycle. `idle` also covers "not attempted yet". */
-  type InstallPhase = "idle" | "downloading" | "installing" | "ready" | "failed";
+  type InstallPhase = "idle" | "downloading" | "installing" | "failed";
   let phase = $state<InstallPhase>("idle");
   let downloaded = $state(0);
   let downloadTotal = $state(0);
@@ -183,19 +183,13 @@
           phase = "installing";
         }
       });
-
-      phase = "ready";
-    } catch (err) {
-      phase = "failed";
-      installError = String(err);
-    }
-  }
-
-  async function restartNow(): Promise<void> {
-    try {
+      phase = "installing";
+      // The Update click is the explicit effect checkpoint. Relaunch only
+      // after the signed updater reports a successful install.
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (err) {
+      phase = "failed";
       installError = String(err);
     }
   }
@@ -223,6 +217,7 @@
     in:fly={{ y: 16, duration: 320 }}
   >
     <header class="up-head">
+      <span class="up-title">New Update Available</span>
       <span class="up-badge">{severity === "major" ? "Major" : severity === "minor" ? "Feature" : "Patch"} update</span>
       {#if releaseAge}
         <span class="up-age">{releaseAge}</span>
@@ -301,39 +296,32 @@
     {/if}
 
     <div class="up-actions">
-      {#if phase === "ready"}
-        <button type="button" class="up-btn up-ghost" onclick={later}>Later</button>
-        <button type="button" class="up-btn up-primary" onclick={restartNow}>
-          Restart to finish
-        </button>
-      {:else}
-        <button type="button" class="up-btn up-ghost" onclick={later} disabled={busy} aria-label="Dismiss this update for now">
-          Later
-        </button>
-        <button
-          type="button"
-          class="up-btn up-ghost"
-          onclick={skipVersion}
-          disabled={busy}
-          aria-label={`Skip version ${info.latest_version}`}
-        >
-          Skip
-        </button>
-        {#if installError}
-          <button type="button" class="up-btn up-ghost" onclick={openRelease} disabled={opening}>
-            {opening ? "Opening…" : "Open release"}
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="up-btn up-primary"
-          onclick={installUpdate}
-          disabled={busy}
-          aria-label="Download and install the update"
-        >
-          {installError ? "Retry install" : "Get update"}
+      <button type="button" class="up-btn up-ghost" onclick={later} disabled={busy} aria-label="Dismiss this update for now">
+        Later
+      </button>
+      <button
+        type="button"
+        class="up-btn up-ghost"
+        onclick={skipVersion}
+        disabled={busy}
+        aria-label={`Skip version ${info.latest_version}`}
+      >
+        Skip
+      </button>
+      {#if installError}
+        <button type="button" class="up-btn up-ghost" onclick={openRelease} disabled={opening}>
+          {opening ? "Opening…" : "Open release"}
         </button>
       {/if}
+      <button
+        type="button"
+        class="up-btn up-primary"
+        onclick={installUpdate}
+        disabled={busy}
+        aria-label="Download, install, and restart with the update"
+      >
+        {installError ? "Retry update" : busy ? "Updating…" : "Update"}
+      </button>
     </div>
   </aside>
 {/if}
@@ -341,8 +329,8 @@
 <style>
   .update-pop {
     position: fixed;
-    bottom: 20px;
-    left: calc(var(--sidebar-width) + 16px);
+    top: calc(var(--topbar-height) + 12px);
+    right: 16px;
     z-index: 9998;
     display: flex;
     flex-direction: column;
@@ -372,7 +360,9 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
   }
+  .up-title { width: 100%; color: var(--text-primary); font-size: var(--fs-md); font-weight: 700; letter-spacing: var(--letter-tight); }
   .up-badge {
     font-size: var(--fs-xs);
     font-weight: 700;

@@ -17,40 +17,27 @@
 <style>
   .stat-card {
     position: relative;
-    background: var(--panel-sheen), var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: 18px 20px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 16px 18px;
     display: flex;
     flex-direction: column;
     gap: 6px;
     transition: all 0.2s var(--ease);
-    overflow: hidden;
-  }
-
-  /* Lit top edge that fades out at both ends — the shared panel signature. */
-  .stat-card::before {
-    content: "";
-    position: absolute;
-    inset: 0 0 auto;
-    height: 1px;
-    background: var(--panel-edge);
-    pointer-events: none;
+    min-width: 0;
   }
 
   .stat-card:hover {
-    border-color: var(--border-hover);
-    background: var(--panel-sheen), var(--bg-card-hover);
-    box-shadow: var(--shadow-sm);
-    transform: var(--lift);
+    background: var(--accent-dim);
   }
 
   .stat-label {
-    font-size: 11px;
+    font-size: var(--fs-xs);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--text-muted);
+    color: var(--text-secondary);
   }
 
   .stat-row {
@@ -61,7 +48,7 @@
   }
 
   .stat-value {
-    font-size: 26px;
+    font-size: clamp(22px, 2.3vw, 30px);
     font-weight: 700;
     letter-spacing: -0.03em;
     color: var(--text-primary);

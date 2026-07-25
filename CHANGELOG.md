@@ -2,6 +2,35 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.6.5] - 2026-07-25
+
+Pulse 1.6.5 makes the redesigned UI obey the same rule as the backend: one current owner per fact, with freshness and provider provenance visible at the point of use.
+
+### Added
+
+- Authenticated Codex account-quota reads through `account/rateLimits/read`, cached for 30 seconds and exposed through the existing provider-neutral usage snapshot.
+- A responsive multi-instance selector that keeps every active session available while the Dashboard detail and Context Window fraction follow one selection.
+- Exact Context Window fractions, remaining-token copy, live token composition, local-time hourly aggregation, and AM/PM heatmap labels.
+- Regression coverage for Codex account-response parsing, stale quota rejection, coordinated release versions, active-only Context, multi-instance selection, Discord field wrapping, and heatmap summaries.
+
+### Changed
+
+- Dark surfaces are matte neutral black. View-local navy/gray sheens and duplicate kicker/description headers were removed; semantic and provider-scoped colors remain intact.
+- Dashboard quota copy leads with available percentage, reset time, observed source, and freshness. Cost, token, model, project, and recent-session sections use a shared data-section hierarchy.
+- Discord field controls stack at the content width where two columns would clip, while autosave and backend-generated preview behavior remain unchanged.
+- The product, Tauri, frontend, lockfile, and release-contract versions move together to 1.6.5 without changing persisted configuration or database schemas.
+
+### Fixed
+
+- Pulse no longer combines a day-old global Codex percentage with newer model-scoped credits and presents the result as live. JSONL quota events older than 15 minutes are rejected as fallback data.
+- Context no longer calls or renders the historical per-session utilization feed beside active windows, eliminating inactive and duplicated rows.
+- Hourly analytics no longer group UTC timestamp substrings as local time, and the UI no longer abbreviates 5 PM as `5p`.
+- The Dashboard's empty spend placeholder no longer occupies a live-session panel; provider-reported token categories render instead.
+
+### Validated
+
+- See `design-qa.md` and `tests/index.md` for the final automated and live-browser proof matrix.
+
 ## [1.6.2] - 2026-07-24
 
 Pulse 1.6.2 reports what it actually observed: the reasoning effort Claude Code recorded, the Rich Presence switches you last saved, and the handshake that produced your quota numbers.

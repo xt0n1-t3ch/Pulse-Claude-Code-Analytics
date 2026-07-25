@@ -7,6 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use cc_discord_presence::codex::account_usage::{
+    AccountUsageManager, effective_limits_from_envelopes, fresh_envelopes,
+};
 use cc_discord_presence::codex::config::{
     DesktopPresenceDesign, PresenceConfig as CodexPresenceConfig, PresenceSurface,
 };
@@ -119,6 +122,7 @@ struct CachedData {
     claude_usage_error: Option<String>,
     codex_usage: Option<UsageSnapshot>,
     codex_limits: Option<codex_session::EffectiveLimitSelection>,
+    codex_usage_error: Option<String>,
     discord_status: String,
     discord_publisher: String,
     discord_enabled: bool,
@@ -245,6 +249,7 @@ pub fn start_background_poller(app: tauri::AppHandle) {
         let mut claude_discord = ClaudeDiscordPresence::new(claude_config.effective_client_id());
         let mut codex_discord = CodexDiscordPresence::new(codex_config.effective_client_id());
         let mut codex_plan_detector = PlanDetector::new();
+        let mut codex_usage_mgr = AccountUsageManager::default();
         let mut claude_publisher = PublisherLease::new(cc_discord_presence::config::lock_path());
         let mut codex_publisher =
             PublisherLease::new(cc_discord_presence::codex::config::lock_path());
@@ -411,15 +416,36 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         &codex_config.pricing,
                     )
                     .unwrap_or_default();
-                    let usage_envelopes = codex_parse.rate_limit_envelopes();
-                    let codex_usage = (!usage_envelopes.is_empty()).then(|| {
-                        usage_snapshot_from_envelopes(
-                            Provider::Codex.as_str(),
-                            "Codex JSONL rate_limits",
-                            &usage_envelopes,
-                        )
-                    });
-                    let effective_limits = codex_parse.latest_limits_source();
+                    let jsonl_envelopes = fresh_envelopes(
+                        codex_parse.rate_limit_envelopes(),
+                        chrono::Utc::now(),
+                        chrono::Duration::minutes(15),
+                    );
+                    let account_usage = codex_usage_mgr.get_usage(force_refresh);
+                    let (usage_envelopes, codex_usage, codex_usage_error) = match account_usage {
+                        Ok(reading) => {
+                            let snapshot = reading.usage_snapshot();
+                            (reading.envelopes, Some(snapshot), None)
+                        }
+                        Err(error) if !jsonl_envelopes.is_empty() => {
+                            let snapshot = usage_snapshot_from_envelopes(
+                                Provider::Codex.as_str(),
+                                "Codex JSONL rate_limits · fallback",
+                                &jsonl_envelopes,
+                            );
+                            (
+                                jsonl_envelopes,
+                                Some(snapshot),
+                                Some(format!("Codex account API unavailable: {error}")),
+                            )
+                        }
+                        Err(error) => (
+                            Vec::new(),
+                            None,
+                            Some(format!("Codex account API unavailable: {error}")),
+                        ),
+                    };
+                    let effective_limits = effective_limits_from_envelopes(&usage_envelopes);
 
                     let resolved_plan = codex_plan_detector
                         .resolve_from_envelopes(&usage_envelopes, &codex_config.openai_plan);
@@ -465,6 +491,7 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         d.claude_usage_error = None;
                         d.codex_usage = codex_usage;
                         d.codex_limits = effective_limits;
+                        d.codex_usage_error = codex_usage_error;
                     }
                     (
                         status,
@@ -1842,7 +1869,10 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
                 extra_limit: None,
                 extra_used: None,
                 extra_pct: None,
-                source: "codex telemetry unavailable".into(),
+                source: data
+                    .codex_usage_error
+                    .clone()
+                    .unwrap_or_else(|| "Codex account quota unavailable".into()),
             })
         }
     }

@@ -574,7 +574,7 @@ fn query_sessions(
 
     if let Some(start_hour) = start_hour {
         sql.push_str(&format!(
-            " AND CAST(substr(COALESCE({history_ts}, ''), 12, 2) AS INTEGER) >= ?{param_idx}"
+            " AND CAST(strftime('%H', COALESCE({history_ts}, ''), 'localtime') AS INTEGER) >= ?{param_idx}"
         ));
         params_vec.push(Box::new(start_hour));
         param_idx += 1;
@@ -582,7 +582,7 @@ fn query_sessions(
 
     if let Some(end_hour) = end_hour {
         sql.push_str(&format!(
-            " AND CAST(substr(COALESCE({history_ts}, ''), 12, 2) AS INTEGER) <= ?{param_idx}"
+            " AND CAST(strftime('%H', COALESCE({history_ts}, ''), 'localtime') AS INTEGER) <= ?{param_idx}"
         ));
         params_vec.push(Box::new(end_hour));
         param_idx += 1;
@@ -1244,7 +1244,7 @@ pub fn get_hourly_activity(days: Option<i64>) -> Vec<HourlyActivity> {
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
     let sql = format!(
-        "SELECT CAST(substr(COALESCE({}, ''), 12, 2) AS INTEGER) as hour,
+        "SELECT CAST(strftime('%H', COALESCE({}, ''), 'localtime') AS INTEGER) as hour,
             COUNT(*), COALESCE(SUM(total_cost), 0)
         FROM sessions
         WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2
@@ -1876,6 +1876,13 @@ mod tests {
     fn hour_range_filter_uses_fallback_timestamp() {
         let conn = test_conn();
         let provider = active_provider_slug().to_string();
+        let local_early_hour: i64 = conn
+            .query_row(
+                "SELECT CAST(strftime('%H', ?1, 'localtime') AS INTEGER)",
+                ["2026-04-18T03:15:00+00:00"],
+                |row| row.get(0),
+            )
+            .expect("local hour");
         conn.execute(
             "INSERT INTO sessions (id, provider, project, model, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -1913,8 +1920,8 @@ mod tests {
             None,
             None,
             None,
-            Some(0),
-            Some(6),
+            Some(local_early_hour),
+            Some(local_early_hour),
             Some(10),
         );
 
