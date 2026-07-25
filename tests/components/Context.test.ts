@@ -172,19 +172,33 @@ describe("Context.svelte", () => {
     });
   });
 
-  it("refreshes active context rows when a live snapshot advances", async () => {
+  it("refreshes the active row and selected detail from the same live snapshot", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([{ ...makeSession("live", "pulse"), context_used_tokens: 10_000, context_window_tokens: 200_000 }]);
 
     const Context = (await import("@/views/Context.svelte")).default;
-    render(Context);
+    const { container } = render(Context);
     await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalled());
     getContextBreakdowns.mockClear();
+    const advanced = {
+      ...breakdown,
+      used_tokens: 80_000,
+      free_space: 110_000,
+    };
+    getContextBreakdowns.mockResolvedValueOnce([{
+      session_id: "live",
+      project: "pulse",
+      model_id: "claude-opus-4-8",
+      is_idle: false,
+      activity: "Thinking",
+      breakdown: advanced,
+    }]);
 
     sessions.set([{ ...makeSession("live", "pulse"), context_used_tokens: 20_000, context_window_tokens: 200_000 }]);
     await tick();
 
     await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.querySelector(".hero-used")?.textContent?.trim()).toBe("80.0K"));
   });
 
   it("clears the detail instead of falling back to an idle snapshot", async () => {

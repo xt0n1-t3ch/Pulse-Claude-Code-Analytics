@@ -209,19 +209,20 @@
       ?? null,
   );
   let focusHistory = $derived(histSessions[0] ?? null);
+  let focusHistoryFallback = $derived(focusSession ? null : focusHistory);
   let focusName = $derived(
     focusSession?.session_name
       ?? focusSession?.project
-      ?? focusHistory?.session_name
-      ?? focusHistory?.project
+      ?? focusHistoryFallback?.session_name
+      ?? focusHistoryFallback?.project
       ?? "No active session",
   );
-  let focusProject = $derived(focusSession?.project ?? focusHistory?.project ?? "Waiting for telemetry");
-  let focusModel = $derived(focusSession?.model ?? focusHistory?.model ?? $providerProfile.productName);
-  let focusBranch = $derived(focusSession?.branch ?? focusHistory?.branch ?? "—");
-  let focusDuration = $derived(focusSession?.duration_secs ?? focusHistory?.duration_secs ?? 0);
-  let focusCost = $derived(focusSession?.cost ?? focusHistory?.total_cost ?? totalCost);
-  let focusTokens = $derived(focusSession?.tokens ?? focusHistory?.total_tokens ?? totalTokens);
+  let focusProject = $derived(focusSession?.project ?? focusHistoryFallback?.project ?? "Waiting for telemetry");
+  let focusModel = $derived(focusSession?.model ?? focusHistoryFallback?.model ?? $providerProfile.productName);
+  let focusBranch = $derived(focusSession?.branch ?? focusHistoryFallback?.branch ?? "—");
+  let focusDuration = $derived(focusSession?.duration_secs ?? focusHistoryFallback?.duration_secs ?? 0);
+  let focusCost = $derived(focusSession?.cost ?? focusHistoryFallback?.total_cost ?? totalCost);
+  let focusTokens = $derived(focusSession?.tokens ?? focusHistoryFallback?.total_tokens ?? totalTokens);
   let focusContextPct = $derived.by(() => {
     const used = focusSession?.context_used_tokens ?? 0;
     const window = focusSession?.context_window_tokens ?? 0;

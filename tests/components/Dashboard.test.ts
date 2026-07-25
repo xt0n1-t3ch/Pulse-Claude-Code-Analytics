@@ -276,6 +276,22 @@ describe("Dashboard.svelte", () => {
     expect(container.querySelector("[data-session-focus]")?.textContent).not.toContain("Live session");
   });
 
+  it("does not mix an older history branch into a live session header", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const current = { ...liveSession("live-no-branch", "Current work", 10_000, 353_400, "Thinking"), branch: null };
+    const older = { ...hist("old", "Older work", 4), branch: "legacy/history-branch" };
+    getSessionHistory.mockResolvedValueOnce([older]);
+    sessions.set([current]);
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container } = render(Dashboard);
+    await waitFor(() => expect(getSessionHistory).toHaveBeenCalled());
+
+    const focus = container.querySelector("[data-session-focus]")?.textContent ?? "";
+    expect(focus).toContain("Current work");
+    expect(focus).not.toContain("legacy/history-branch");
+  });
+
   it("renders the cost breakdown that reconciles to the estimated total", async () => {
     const Dashboard = (await import("@/views/Dashboard.svelte")).default;
     const { container, getByText } = render(Dashboard);

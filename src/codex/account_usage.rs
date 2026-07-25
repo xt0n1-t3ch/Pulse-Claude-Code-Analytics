@@ -233,7 +233,16 @@ fn select_existing_codex_path(output: &str) -> Option<PathBuf> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .find(|path| is_codex_executable(path))
+        .find(|path| is_bundled_codex_cli(path))
+}
+
+#[cfg(windows)]
+fn is_bundled_codex_cli(path: &Path) -> bool {
+    is_codex_executable(path)
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name.eq_ignore_ascii_case("resources"))
 }
 
 #[cfg(windows)]
@@ -477,11 +486,15 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn bundled_cli_resolution_uses_an_existing_codex_executable() {
+    fn bundled_cli_resolution_rejects_the_desktop_gui_executable() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let expected = dir.path().join("codex.exe");
+        let gui = dir.path().join("Codex.exe");
+        let resources = dir.path().join("app").join("resources");
+        std::fs::create_dir_all(&resources).expect("resources directory");
+        let expected = resources.join("codex.exe");
+        std::fs::write(&gui, b"gui fixture").expect("write gui fixture");
         std::fs::write(&expected, b"fixture").expect("write fixture");
-        let output = format!("C:\\missing\\codex.exe\n{}\n", expected.display());
+        let output = format!("{}\n{}\n", gui.display(), expected.display());
 
         assert_eq!(select_existing_codex_path(&output), Some(expected));
     }

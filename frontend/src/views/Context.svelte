@@ -60,7 +60,18 @@
     const active = new Set(activeIds);
     const next = await getContextBreakdowns();
     if (request === breakdownListRequest) {
-      breakdowns = next.filter((entry) => active.has(entry.session_id) && !entry.is_idle);
+      const current = next.filter((entry) => active.has(entry.session_id) && !entry.is_idle);
+      breakdowns = current;
+
+      // The list and hero must represent the same backend observation. Reuse
+      // the selected list payload instead of leaving its detail snapshot stale.
+      const selected = current.find((entry) => entry.session_id === selectedSessionId);
+      if (selected) {
+        breakdownRequest++;
+        ctx = selected.breakdown;
+        loaded = true;
+        refreshing = false;
+      }
     }
   }
 
