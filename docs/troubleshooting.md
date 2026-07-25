@@ -189,13 +189,34 @@ statusline-only session always shows Standard until JSONL merges in.
 
 ### Reasoning effort shows the wrong level
 
-Claude Desktop's in-composer effort selector lives in Electron memory and is
-**never** written to disk. Pulse reports effort from, in order: an explicit
-`<reasoning_effort>` / "reasoning effort level: X" injection in the JSONL, then
-the `effortLevel` default in `~/.claude/settings.json`. It does **not** infer
-effort from the presence of thinking blocks (that produced confidently-wrong
-"High"). So a level you picked only in the composer cannot be shown — set it in
-`settings.json` if you want it reflected.
+Current Claude Code builds record the composer's effort selector in the
+transcript: every `type: "assistant"` line carries a **top-level** `effort`
+field (`low` | `medium` | `high` | `xhigh` | `max`), a sibling of `type` and
+`message`. That is Pulse's authoritative source, and the latest main-chain value
+wins, so changing the selector mid-session is reflected on the next turn.
+
+Two deliberate exclusions:
+
+- **Sidechain lines are ignored.** A subagent can run at its own effort and its
+  turns are interleaved into the parent transcript, so honouring them would let
+  a subagent define the tier you see for the whole session.
+- **Legacy reminders never override the field.** The older
+  `<reasoning_effort>` / "reasoning effort level: X" system-reminder scrape is
+  kept only for transcripts written before the field existed, and is skipped
+  once a real value has been observed.
+
+Pulse still does **not** infer effort from the presence of thinking blocks —
+that produced a confidently-wrong "High".
+
+If a session reports the default `Medium`, check that its transcript actually
+contains the field:
+
+```bash
+grep -o '"effort":"[a-z]*"' ~/.claude/projects/<encoded-project>/<session>.jsonl | sort | uniq -c
+```
+
+No matches means the build writing that transcript predates the field; Pulse
+then falls back to `effortLevel` in `~/.claude/settings.json`, if present.
 
 ### SQLite database locked
 

@@ -126,18 +126,6 @@
     }
   }
 
-  let activePreset = $derived.by<Preset | null>(() => {
-    const cur = $discordPreview;
-    for (const name of presetOrder) {
-      const p = presets[name];
-      let match = true;
-      for (const k of Object.keys(p) as (keyof typeof p)[]) {
-        if (cur[k] !== p[k]) { match = false; break; }
-      }
-      if (match) return name;
-    }
-    return null;
-  });
 
   let previewSession = $derived($activeSessions[0] ?? $sessions[0]);
   let activeSessionCount = $derived($activeSessions.length);
@@ -251,6 +239,30 @@
     { id: "systems", key: "showSystems",  label: "Systems",       hint: "Safe workflow and agent signals." },
   ] as const;
   type FieldId = (typeof fieldRows)[number]["id"];
+
+  /** Preview keys the active provider cannot broadcast, so preset matching can
+   *  skip them. Standard and Full both want `showCredits: true`; on Claude the
+   *  backend pins it false, which made every preset read as "Custom" the moment
+   *  it was applied. */
+  let unsupportedKeys = $derived(
+    new Set<keyof typeof $discordPreview>(
+      fieldRows.filter((r) => unsupportedFields.has(r.id)).map((r) => r.key),
+    ),
+  );
+
+  let activePreset = $derived.by<Preset | null>(() => {
+    const cur = $discordPreview;
+    for (const name of presetOrder) {
+      const p = presets[name];
+      let match = true;
+      for (const k of Object.keys(p) as (keyof typeof p)[]) {
+        if (unsupportedKeys.has(k)) continue;
+        if (cur[k] !== p[k]) { match = false; break; }
+      }
+      if (match) return name;
+    }
+    return null;
+  });
 
   let orderedFieldRows = $derived.by(() => {
     const rank = new Map(($discordSettings?.field_order ?? []).map((id, index) => [id, index]));
