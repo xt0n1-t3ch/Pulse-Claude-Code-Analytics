@@ -135,6 +135,30 @@
     0 4px 12px rgba(0, 0, 0, 0.4);
   --dc-art-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.35);
 
+  /* --- Panel signature -------------------------------------------------- *
+   * Shared surface treatment so every panel across the app reads as one
+   * system instead of each view inventing its own card. Defined here (not
+   * per-view) because these are the mutable contract; views reference them.  */
+
+  /* Hairline that fades in from the panel edges — gives a card a lit top
+     edge without a hard 1px line running the full width. */
+  --panel-edge: linear-gradient(
+    90deg,
+    transparent,
+    var(--border-hover) 18%,
+    var(--border-hover) 82%,
+    transparent
+  );
+  /* Top-down light falloff layered over a panel background. */
+  --panel-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.030), transparent 42%);
+  /* Same idea at higher intensity, for the one hero panel per view. */
+  --panel-sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 55%);
+  /* Fill for meters and progress tracks. */
+  --meter-fill: linear-gradient(90deg, var(--chart-2), var(--text-primary));
+  --meter-track: rgba(255, 255, 255, 0.055);
+  /* Lift applied on hover to interactive rows and cards. */
+  --lift: translateY(-1px);
+
   font-family: var(--font-sans);
   font-kerning: normal;
   font-optical-sizing: auto;
@@ -237,6 +261,12 @@
     0 20px 56px rgba(0, 0, 0, 0.10),
     0 4px 12px rgba(0, 0, 0, 0.06);
   --dc-art-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.10);
+
+  /* Light theme inverts the sheen: a white overlay on white is invisible, so
+     the falloff has to come from a soft shadow tint instead. */
+  --panel-sheen: linear-gradient(180deg, rgba(10, 10, 10, 0.030), transparent 42%);
+  --panel-sheen-strong: linear-gradient(180deg, rgba(10, 10, 10, 0.050), transparent 55%);
+  --meter-track: rgba(10, 10, 10, 0.075);
 }
 
 *, *::before, *::after {

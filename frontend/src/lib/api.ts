@@ -286,6 +286,9 @@ export interface DiscordSettings {
     desktop_design: "codex_app" | "chatgpt_app" | null;
     supports_desktop_design: boolean;
     supports_field_order: boolean;
+    /** False for Claude — "Credits available" reads a Codex account balance that
+     *  has no Claude equivalent, so the backend pins the flag off. */
+    supports_credits: boolean;
     field_order: string[];
 }
 

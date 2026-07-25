@@ -78,8 +78,21 @@
   }
 
   function toggleSetting(key: keyof typeof $discordPreview): void {
+    if (settingsPending) {
+      // The click already flipped the DOM checkbox. Dropping the change without
+      // re-publishing the store would leave the switch showing a value the
+      // backend never received, which reads as "the toggle didn't save".
+      discordPreview.set({ ...$discordPreview });
+      return;
+    }
     void persistPreview({ ...$discordPreview, [key]: !$discordPreview[key] });
   }
+
+  /** Fields the active provider cannot actually persist, so they are shown as
+   *  unavailable instead of as a switch that silently snaps back. */
+  let unsupportedFields = $derived(
+    new Set<FieldId>($discordSettings?.supports_credits === false ? ["credits"] : []),
+  );
 
   type Preset = "minimal" | "standard" | "full";
   const presets: Record<Preset, typeof $discordPreview> = {
@@ -267,8 +280,15 @@
 
   let activeCount = $derived.by(() => {
     const s = $discordPreview;
-    return fieldRows.filter((r) => s[r.key]).length;
+    return fieldRows.filter((r) => s[r.key] && !unsupportedFields.has(r.id)).length;
   });
+
+  /** Denominator for the "N/M fields shown" readout. Counting a field the
+   *  provider cannot broadcast would make a fully configured setup look
+   *  permanently incomplete. */
+  let availableFieldCount = $derived(
+    fieldRows.filter((r) => !unsupportedFields.has(r.id)).length,
+  );
 
   let discordStatus = $derived(($health?.discord_status ?? "—").toLowerCase());
   let ipcConnected = $derived(discordStatus.includes("connect") && !discordStatus.includes("dis"));
@@ -299,7 +319,7 @@
       <span class="view-sub">
         Broadcasting as <strong style="color: {$providerProfile.accent}">{presenceAppName}</strong>
         <span class="sub-dot">·</span>
-        {activeCount} of {fieldRows.length} fields shown
+        {activeCount} of {availableFieldCount} fields shown
         {#if activeSessionCount > 1}
           <span class="sub-dot">·</span>
           {activeSessionCount} active sessions
@@ -418,15 +438,23 @@
             <p class="cc-section-desc">Toggle visibility and reorder fields. The backend generates the exact preview.</p>
           </div>
           <span class="field-count">
-            <span class="fc-num">{activeCount}</span><span class="fc-den">/{fieldRows.length}</span>
+            <span class="fc-num">{activeCount}</span><span class="fc-den">/{availableFieldCount}</span>
           </span>
         </div>
         <div class="field-grid">
           {#each orderedFieldRows as row, index (row.id)}
-            <div class="field-cell" class:active={$discordPreview[row.key]}>
+            <div
+              class="field-cell"
+              class:active={$discordPreview[row.key] && !unsupportedFields.has(row.id)}
+              class:unavailable={unsupportedFields.has(row.id)}
+            >
               <div class="field-text">
                 <span class="field-label">{row.label}</span>
-                <span class="field-hint">{row.hint}</span>
+                <span class="field-hint">
+                  {unsupportedFields.has(row.id)
+                    ? `Not available for ${$providerProfile.productName}.`
+                    : row.hint}
+                </span>
               </div>
               {#if $discordSettings?.supports_field_order}
                 <div class="field-order" role="group" aria-label={`Reorder ${row.label}`}>
@@ -437,8 +465,8 @@
               <label class="toggle" aria-label={`Show ${row.label}`}>
                 <input
                   type="checkbox"
-                  checked={$discordPreview[row.key]}
-                  disabled={settingsPending}
+                  checked={$discordPreview[row.key] && !unsupportedFields.has(row.id)}
+                  disabled={settingsPending || unsupportedFields.has(row.id)}
                   onchange={() => toggleSetting(row.key)}
                 />
                 <span class="toggle-slider"></span>
@@ -456,7 +484,7 @@
         <span class="sl-meta">
           <span class="sl-preset">{activePreset ? activePreset.charAt(0).toUpperCase() + activePreset.slice(1) : "Custom"}</span>
           <span class="sl-div">·</span>
-          <span class="sl-count">{activeCount}/{fieldRows.length}</span>
+          <span class="sl-count">{activeCount}/{availableFieldCount}</span>
           <span class="sl-dot" class:on={discordEnabled}></span>
         </span>
       </div>
@@ -819,6 +847,10 @@
     transition: background 0.15s var(--ease);
   }
   .field-cell:hover { background: var(--bg-card-hover); }
+  /* Provider cannot broadcast this field, so it reads as unavailable rather than
+     as an switch that would silently revert. */
+  .field-cell.unavailable { opacity: 0.45; }
+  .field-cell.unavailable:hover { background: transparent; }
   .field-cell:nth-child(-n+2) { border-top: none; }
   .field-cell:nth-child(2n+1) { border-left: none; }
   @media (max-width: 620px) {

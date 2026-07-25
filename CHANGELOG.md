@@ -2,6 +2,31 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.6.2] - 2026-07-24
+
+Pulse 1.6.2 reports what it actually observed: the reasoning effort Claude Code recorded, the Rich Presence switches you last saved, and the handshake that produced your quota numbers.
+
+### Added
+
+- `PresenceConfig.presence_enabled` (schema v6) persists the master Rich Presence switch for Claude, so pausing presence survives a restart.
+- `UsageManager::last_usage_origin()` records the auth scheme, endpoint host, and subscription tier observed on a successful usage read.
+- `DiscordSettings.supports_credits` marks provider-unsupported fields so the UI can disable them instead of offering a switch that reverts.
+
+### Changed
+
+- Sessions, Context, and the shared stat tiles adopt one panel signature — a lit top edge, a directional sheen, and hover lift — driven by new `--panel-*`, `--meter-*`, and `--lift` tokens in `global.css` rather than per-view copies.
+- Switching provider re-seeds the Discord switches from that provider's config instead of leaving the previous provider's cache on screen.
+- The Claude presence config is written atomically (temp file, fsync, rename), matching the Codex writer; a truncating write let the 5s poller read torn JSON and fall back to defaults.
+
+### Fixed
+
+- Reasoning effort no longer reads `Medium` for every Claude session. Current Claude Code builds record the composer's selector as a top-level `effort` field on each `assistant` transcript line; Pulse now parses it, prefers the latest value, and ignores subagent overrides on the parent session.
+- The usage footer no longer claims `api`. Pulse authenticates to the usage endpoint with an OAuth bearer token from `~/.claude/.credentials.json` and never with an API key, so the footer names the observed handshake and plan, or says the reading came from cache.
+- `set_discord_enabled` persists for Claude, and startup seeds the cached flag from disk instead of hard-coding presence back on.
+- A failed mirror write to the inactive provider's config no longer fails the whole save, which previously rolled the toggle back in the UI after it had already landed on disk.
+- Toggling a field while a save is in flight re-publishes the store, so the checkbox cannot show a value the backend never received.
+- `Context.svelte` no longer hardcodes a `JetBrains Mono` stack that was never loaded, and its meter tracks resolve through tokens.
+
 ## [1.6.1] - 2026-07-24
 
 Pulse 1.6.1 corrects Claude Opus 5 pricing, reports true window totals instead of a capped page, and installs updates from inside the app.

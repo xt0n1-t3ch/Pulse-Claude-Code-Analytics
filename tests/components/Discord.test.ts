@@ -132,6 +132,7 @@ describe("Discord.svelte", () => {
       desktop_design: null,
       supports_desktop_design: false,
       supports_field_order: false,
+      supports_credits: false,
       field_order: ["project", "branch", "model", "activity", "tokens", "cost", "quotas", "credits", "context", "systems"],
     };
     getDiscordPreview.mockClear();
@@ -285,6 +286,24 @@ describe("Discord.svelte", () => {
     expect(container.querySelectorAll(".preset-opt").length).toBe(3);
   });
 
+  it("marks provider-unsupported fields unavailable instead of offering a switch that reverts", async () => {
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container, getByText } = render(Discord);
+    await waitFor(() => expect(getDiscordSettings).toHaveBeenCalledTimes(1));
+
+    const creditsRow = getByText("Credits available").closest(".field-cell");
+    const creditsToggle = creditsRow?.querySelector("input") as HTMLInputElement;
+    expect(creditsRow?.classList.contains("unavailable")).toBe(true);
+    expect(creditsToggle.disabled).toBe(true);
+    expect(creditsToggle.checked).toBe(false);
+
+    // The readout must not count a field the provider can never broadcast.
+    expect(container.querySelector(".fc-den")?.textContent).toBe("/9");
+
+    await fireEvent.click(creditsToggle);
+    expect(setDiscordDisplayPrefs).not.toHaveBeenCalled();
+  });
+
   it("hydrates privacy from Rust without writing local defaults back", async () => {
     discordSettings = {
       ...discordSettings,
@@ -376,6 +395,7 @@ describe("Discord.svelte", () => {
       ...discordSettings,
       provider: "codex",
       supports_field_order: true,
+      supports_credits: true,
     };
     const Discord = (await import("@/views/Discord.svelte")).default;
     const { getByRole } = render(Discord);

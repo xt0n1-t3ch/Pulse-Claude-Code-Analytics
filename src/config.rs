@@ -13,7 +13,7 @@ const DEFAULT_STALE_SECONDS: u64 = 90;
 const DEFAULT_POLL_SECONDS: u64 = 2;
 const DEFAULT_ACTIVE_STICKY_SECONDS: u64 = 300;
 const MIN_ACTIVE_STICKY_SECONDS: u64 = 30;
-const CONFIG_SCHEMA_VERSION: u32 = 5;
+const CONFIG_SCHEMA_VERSION: u32 = 6;
 pub const DEFAULT_DISCORD_CLIENT_ID: &str = "1466664856261230716";
 
 /// Default large_image asset key — must be uploaded to the Developer Portal at
@@ -44,6 +44,10 @@ pub struct PresenceConfig {
     pub discord_client_id: Option<String>,
     pub plan: Option<String>,
     pub initialized: bool,
+    /// Master Rich Presence switch. Persisted since schema v6 — before that the
+    /// Pulse GUI kept it in process memory only, so turning presence off was
+    /// silently forgotten on the next launch. Mirrors Codex's `presence_enabled`.
+    pub presence_enabled: bool,
     pub privacy: PrivacyConfig,
     pub display: DisplayConfig,
 }
@@ -130,6 +134,7 @@ impl Default for PresenceConfig {
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
             plan: None,
             initialized: false,
+            presence_enabled: true,
             privacy: PrivacyConfig::default(),
             display: DisplayConfig::default(),
         }
@@ -220,8 +225,13 @@ impl PresenceConfig {
             })?;
         }
 
-        let data = serde_json::to_string_pretty(self)?;
-        fs::write(&path, data).with_context(|| format!("failed to write {}", path.display()))?;
+        // Atomic (temp file + fsync + rename), matching the Codex config writer.
+        // Pulse's poller re-reads this file every few seconds while the GUI
+        // rewrites it on every toggle; a truncating `fs::write` lets a reader
+        // land on invalid JSON, and callers swallow that as `unwrap_or_default()`
+        // — i.e. every privacy switch silently snaps back to its default.
+        crate::codex::util::write_json_pretty_atomic(&path, self)
+            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
 
@@ -831,6 +841,7 @@ mod tests {
             discord_client_id: None,
             plan: None,
             initialized: false,
+            presence_enabled: true,
             privacy: PrivacyConfig::default(),
             display: DisplayConfig::default(),
         };
@@ -862,6 +873,7 @@ mod tests {
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
             plan: None,
             initialized: true,
+            presence_enabled: true,
             privacy: PrivacyConfig::default(),
             display: DisplayConfig {
                 large_image_key: DEFAULT_MASCOT_ASSET_URL.to_string(),
@@ -881,6 +893,7 @@ mod tests {
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
             plan: None,
             initialized: true,
+            presence_enabled: true,
             privacy: PrivacyConfig::default(),
             display: DisplayConfig {
                 large_image_key: PREVIOUS_DEFAULT_LARGE_IMAGE_KEY.to_string(),
@@ -900,6 +913,7 @@ mod tests {
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
             plan: None,
             initialized: true,
+            presence_enabled: true,
             privacy: PrivacyConfig::default(),
             display: DisplayConfig {
                 large_image_key: "my-custom-key".to_string(),
@@ -917,6 +931,7 @@ mod tests {
             discord_client_id: Some(DEFAULT_DISCORD_CLIENT_ID.to_string()),
             plan: None,
             initialized: true,
+            presence_enabled: true,
             privacy: PrivacyConfig::default(),
             display: DisplayConfig {
                 activity_small_image_keys: ActivitySmallImageKeys::default(),

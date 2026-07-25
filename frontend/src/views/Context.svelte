@@ -546,27 +546,31 @@
     gap: 10px;
   }
   .active-ctx-card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 9px;
     padding: 14px 16px;
-    background: var(--bg-card);
+    background: var(--panel-sheen), var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     cursor: pointer;
     text-align: left;
     font: inherit;
-    transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+    overflow: hidden;
+    transition: border-color 0.15s var(--ease), background 0.15s var(--ease),
+      transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
   }
-  .active-ctx-card:hover { border-color: var(--border-hover); }
-  .active-ctx-card.selected { border-color: var(--accent); background: var(--accent-dim); }
+  .active-ctx-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: var(--panel-edge); pointer-events: none; }
+  .active-ctx-card:hover { border-color: var(--border-hover); transform: var(--lift); }
+  .active-ctx-card.selected { border-color: var(--accent); background: var(--panel-sheen), var(--accent-dim); box-shadow: var(--shadow-ring); }
   .active-ctx-card.idle { opacity: 0.6; }
   .act-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .act-project { font-size: 13px; font-weight: 700; color: var(--text-primary); }
   .act-pct { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .act-track {
     height: 6px;
-    background: var(--bg-elevated);
+    background: var(--meter-track);
     border-radius: 99px;
     overflow: hidden;
   }
@@ -607,7 +611,7 @@
   .usage-model {
     font-size: 11px;
     color: var(--text-muted);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
   }
   .usage-pct {
     margin-left: auto;
@@ -634,12 +638,17 @@
   .usage-rec { color: var(--text-secondary); line-height: 1.4; }
 
   /* Hero card */
+  /* The one hero panel per view carries the stronger sheen so it reads as the
+     primary object rather than another card in the stack. */
   .hero-card {
-    background: var(--bg-card);
+    position: relative;
+    background: var(--panel-sheen-strong), var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 22px 24px;
+    overflow: hidden;
   }
+  .hero-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: var(--panel-edge); pointer-events: none; }
   .hero-card.loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 60px; color: var(--text-muted); font-size: 13px; }
 
   .hero-top {
@@ -693,7 +702,7 @@
   .progress-track {
     position: relative;
     height: 18px;
-    background: var(--bg-elevated);
+    background: var(--meter-track);
     border-radius: 99px;
     overflow: hidden;
     margin-bottom: 10px;
@@ -785,7 +794,7 @@
   .sub-list { padding: 0 18px 14px; display: flex; flex-direction: column; gap: 1px; }
   .sub-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; border-radius: var(--radius-sm); transition: background 0.1s ease; }
   .sub-item:hover { background: var(--bg-elevated); }
-  .item-name { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-secondary); }
+  .item-name { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
   .item-tokens { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
   /* Spinner */

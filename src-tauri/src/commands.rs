@@ -96,6 +96,10 @@ pub struct DiscordSettings {
     pub desktop_design: Option<String>,
     pub supports_desktop_design: bool,
     pub supports_field_order: bool,
+    /// False for Claude: "Credits available" is a Codex account-balance field
+    /// with no Claude equivalent, so the backend pins it off. The UI disables the
+    /// row instead of offering a switch that silently snaps back.
+    pub supports_credits: bool,
     pub field_order: Vec<String>,
 }
 
@@ -139,6 +143,10 @@ struct CachedUsage {
     extra_limit: Option<f64>,
     extra_used: Option<f64>,
     extra_pct: Option<f64>,
+    /// Provenance observed by `UsageManager` when these numbers were produced —
+    /// the OAuth handshake or the on-disk cache. Carried through so the UI can
+    /// state how it knows, instead of the old hard-coded `api` label.
+    source: String,
 }
 
 static SHARED: std::sync::OnceLock<Arc<Mutex<CachedData>>> = std::sync::OnceLock::new();
@@ -182,28 +190,39 @@ fn codex_plan_key_from_tier(tier: DetectedPlanTier) -> &'static str {
     }
 }
 
+/// Loads the master Rich Presence switch and the field visibility flags from the
+/// active provider's on-disk config into the shared cache.
+///
+/// This is the only thing standing between a saved preference and a fresh
+/// process: the Claude arm used to hard-code `discord_enabled = true`, so
+/// pausing Rich Presence never survived a restart.
+pub(crate) fn seed_discord_state_from_disk() {
+    let Ok(mut data) = shared().lock() else {
+        return;
+    };
+    data.active_provider = cc_discord_presence::provider::load_active_provider();
+    match data.active_provider {
+        Provider::Claude => {
+            if let Ok(config) = PresenceConfig::load_or_init() {
+                data.discord_enabled = config.presence_enabled;
+                data.discord_prefs = claude_display_prefs(&config);
+            }
+        }
+        Provider::Codex => {
+            if let Ok(config) = CodexPresenceConfig::load_or_init() {
+                data.discord_enabled = config.presence_enabled;
+                data.discord_prefs = codex_display_prefs(&config);
+            }
+        }
+    }
+}
+
 pub fn start_background_poller(app: tauri::AppHandle) {
     INITIAL_SNAPSHOT_READY.store(false, Ordering::Release);
     SNAPSHOT_POLLER_STARTED.store(true, Ordering::Release);
     let data = Arc::clone(shared());
 
-    if let Ok(mut d) = data.lock() {
-        d.active_provider = cc_discord_presence::provider::load_active_provider();
-        match d.active_provider {
-            Provider::Claude => {
-                d.discord_enabled = true;
-                if let Ok(config) = PresenceConfig::load_or_init() {
-                    d.discord_prefs = claude_display_prefs(&config);
-                }
-            }
-            Provider::Codex => {
-                if let Ok(config) = CodexPresenceConfig::load_or_init() {
-                    d.discord_enabled = config.presence_enabled;
-                    d.discord_prefs = codex_display_prefs(&config);
-                }
-            }
-        }
-    }
+    seed_discord_state_from_disk();
 
     thread::spawn(move || {
         let mut claude_git = GitBranchCache::new(Duration::from_secs(30));
@@ -287,6 +306,10 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                     }
 
                     let usage = usage_mgr.get_usage();
+                    let usage_source = usage_mgr
+                        .last_usage_origin()
+                        .map(|origin| origin.label())
+                        .unwrap_or_else(|| "unknown source".to_string());
                     let detected_plan_key = usage_mgr.detected_plan_key();
                     let cached_usage = usage.as_ref().map(|u| {
                         let fmt_reset = |dt: Option<chrono::DateTime<chrono::Utc>>| -> String {
@@ -304,6 +327,7 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                             extra_limit: u.extra_usage.as_ref().and_then(|e| e.monthly_limit),
                             extra_used: u.extra_usage.as_ref().and_then(|e| e.used_credits),
                             extra_pct: u.extra_usage.as_ref().and_then(|e| e.utilization),
+                            source: usage_source.clone(),
                         }
                     });
                     let usage_error = usage_mgr.error_hint_with_countdown();
@@ -1099,10 +1123,21 @@ pub fn get_health() -> HealthResponse {
 
 #[tauri::command]
 pub fn set_discord_enabled(enabled: bool) -> Result<DiscordSettings, String> {
-    if current_provider() == Provider::Codex {
-        let mut config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
-        config.presence_enabled = enabled;
-        config.save().map_err(|error| error.to_string())?;
+    // Persist for whichever provider is active. Claude used to skip this branch
+    // entirely, so the master switch lived only in `shared()` and every restart
+    // silently turned Rich Presence back on.
+    match current_provider() {
+        Provider::Codex => {
+            let mut config =
+                CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            config.presence_enabled = enabled;
+            config.save().map_err(|error| error.to_string())?;
+        }
+        Provider::Claude => {
+            let mut config = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            config.presence_enabled = enabled;
+            config.save().map_err(|error| error.to_string())?;
+        }
     }
 
     let mut data = shared()
@@ -1139,20 +1174,51 @@ pub fn set_discord_display_prefs(
         show_context,
         show_systems,
     };
-    let mut claude_config = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
-    apply_claude_display_prefs(&mut claude_config, &prefs);
-    claude_config.save().map_err(|error| error.to_string())?;
+    // Both provider configs are kept in sync so the field switches mean the same
+    // thing after a provider swap. Only the ACTIVE provider's write is fatal:
+    // failing the whole command on a broken mirror made the UI roll the toggle
+    // back even though the user's own config had already been updated on disk.
+    let active = current_provider();
+    let claude_result = (|| -> Result<(), String> {
+        let mut config = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+        apply_claude_display_prefs(&mut config, &prefs);
+        config.save().map_err(|error| error.to_string())
+    })();
+    let codex_result = (|| -> Result<(), String> {
+        let mut config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+        apply_codex_display_prefs(&mut config, &prefs);
+        config.save().map_err(|error| error.to_string())
+    })();
 
-    let mut codex_config =
-        CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
-    apply_codex_display_prefs(&mut codex_config, &prefs);
-    codex_config.save().map_err(|error| error.to_string())?;
+    match active {
+        Provider::Claude => {
+            claude_result?;
+            log_mirror_error(Provider::Codex, codex_result);
+        }
+        Provider::Codex => {
+            codex_result?;
+            log_mirror_error(Provider::Claude, claude_result);
+        }
+    }
 
     shared()
         .lock()
         .map_err(|_| "Discord settings state is unavailable".to_string())?
         .discord_prefs = prefs;
     get_discord_settings()
+}
+
+/// Reports a failed write to the *inactive* provider's config without failing the
+/// user's action. The active provider is the one on screen; losing the mirror is
+/// a degraded sync, not a lost setting.
+fn log_mirror_error(provider: Provider, result: Result<(), String>) {
+    if let Err(error) = result {
+        tracing::warn!(
+            provider = provider.as_str(),
+            error = %error,
+            "failed to mirror Discord display preferences to the inactive provider"
+        );
+    }
 }
 
 #[tauri::command]
@@ -1355,7 +1421,9 @@ fn build_discord_settings(
     let (enabled, display_prefs, desktop_design, supports_desktop_design, field_order) =
         match provider {
             Provider::Claude => (
-                cached.discord_enabled,
+                claude_config
+                    .map(|config| config.presence_enabled)
+                    .unwrap_or(cached.discord_enabled),
                 claude_config
                     .map(claude_display_prefs)
                     .unwrap_or_else(|| cached.discord_prefs.clone()),
@@ -1397,6 +1465,7 @@ fn build_discord_settings(
         desktop_design,
         supports_desktop_design,
         supports_field_order: provider == Provider::Codex,
+        supports_credits: provider == Provider::Codex,
         field_order,
     }
 }
@@ -1586,7 +1655,7 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
                         }],
                         credits: None,
                         observed_at: None,
-                        source: "api".to_string(),
+                        source: u.source.clone(),
                     }),
                     five_hour_pct: u.five_hour_pct,
                     five_hour_resets: u.five_hour_resets.clone(),
@@ -1602,7 +1671,7 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
                     extra_limit: u.extra_limit,
                     extra_used: u.extra_used,
                     extra_pct: u.extra_pct,
-                    source: "api".into(),
+                    source: u.source.clone(),
                 });
             }
 
@@ -2121,6 +2190,10 @@ pub fn set_active_provider(provider: String) {
         if let Ok(mut d) = shared().lock() {
             d.active_provider = provider;
         }
+        // The switch flags and field visibility belong to the provider, not to
+        // the session — re-read them so the Discord view reflects the config
+        // that is now in charge instead of the previous provider's cache.
+        seed_discord_state_from_disk();
     }
 }
 
@@ -3535,10 +3608,16 @@ mod tests {
         assert_eq!(infos[0].intro_pricing, expected);
     }
 
-    #[test]
-    fn discord_controls_are_saved_for_claude_and_codex_together() {
-        let temp =
-            std::env::temp_dir().join(format!("pulse-display-prefs-test-{}", std::process::id()));
+    /// `CLAUDE_HOME` / `CODEX_HOME` are process-global, so every test that
+    /// redirects them must hold this lock or they clobber each other under
+    /// libtest's default multi-threaded runner.
+    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Redirects both provider homes at a fresh temp tree and returns the guard
+    /// that keeps other home-mutating tests out until the caller is done.
+    fn isolated_homes(tag: &str) -> (std::sync::MutexGuard<'static, ()>, PathBuf, PathBuf) {
+        let guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp = std::env::temp_dir().join(format!("pulse-{tag}-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp);
         let claude_home = temp.join("claude");
         let codex_home = temp.join("codex");
@@ -3548,6 +3627,77 @@ mod tests {
             std::env::set_var("CLAUDE_HOME", &claude_home);
             std::env::set_var("CODEX_HOME", &codex_home);
         }
+        (guard, claude_home, codex_home)
+    }
+
+    #[test]
+    fn claude_rich_presence_toggle_survives_a_restart() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("claude-rp-toggle");
+        super::set_active_provider("claude".to_string());
+
+        let settings = super::set_discord_enabled(false).expect("disable Claude presence");
+        assert!(!settings.enabled, "the command must report the new state");
+
+        // Restart equivalent: nothing but the on-disk config survives, and the
+        // startup path is what seeds the in-memory cache.
+        let claude = TestClaudePresenceConfig::load_or_init().expect("claude config");
+        assert!(
+            !claude.presence_enabled,
+            "turning Rich Presence off must be written to the Claude config"
+        );
+
+        if let Ok(mut data) = super::shared().lock() {
+            data.discord_enabled = true; // pretend a fresh process default
+        }
+        super::seed_discord_state_from_disk();
+
+        // The poller decides whether to publish to Discord from this cached flag,
+        // so seeding it wrong is what makes a paused presence come back to life.
+        let cached_enabled = super::shared()
+            .lock()
+            .expect("shared state")
+            .discord_enabled;
+        assert!(
+            !cached_enabled,
+            "startup must seed the cached presence flag from disk, not force it on"
+        );
+
+        let after_restart = super::get_discord_settings().expect("settings after restart");
+        assert!(
+            !after_restart.enabled,
+            "startup must honour the persisted Claude presence flag instead of forcing it on"
+        );
+    }
+
+    #[test]
+    fn claude_display_prefs_persist_even_when_the_codex_mirror_write_fails() {
+        let (_guard, _claude_home, codex_home) = isolated_homes("mirror-failure");
+        super::set_active_provider("claude".to_string());
+
+        // Make the Codex home unusable: a regular file where a directory is
+        // expected, so `CodexPresenceConfig::load_or_init` cannot succeed.
+        std::fs::remove_dir_all(&codex_home).expect("clear codex home");
+        std::fs::write(&codex_home, b"not a directory").expect("occupy codex home");
+
+        let settings = super::set_discord_display_prefs(
+            true, false, true, true, true, true, true, false, true, true,
+        )
+        .expect("a broken Codex mirror must not fail the active provider's save");
+
+        assert!(
+            !settings.display_prefs.show_branch,
+            "the returned canonical payload must reflect the change the user made"
+        );
+        let claude = TestClaudePresenceConfig::load_or_init().expect("claude config");
+        assert!(
+            !claude.privacy.show_git_branch,
+            "the Claude config must keep the change even though the mirror write failed"
+        );
+    }
+
+    #[test]
+    fn discord_controls_are_saved_for_claude_and_codex_together() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("display-prefs");
 
         super::set_discord_display_prefs(
             true, false, true, true, true, true, false, true, false, true,
