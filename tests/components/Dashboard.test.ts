@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor } from "@testing-library/svelte";
+import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
 import type {
   MetricsResponse,
@@ -9,6 +9,7 @@ import type {
   HourlyActivity,
   DailyStat,
   ProjectStat,
+  SessionInfo,
 } from "@/lib/api";
 
 const metricsFixture: MetricsResponse = {
@@ -72,6 +73,54 @@ function hist(id: string, project: string, cost: number): HistoricalSession {
     workflow_label: null,
     subagent_count: 0,
     is_active: false,
+  };
+}
+
+function liveSession(
+  id: string,
+  project: string,
+  used: number,
+  window: number,
+  activity: string,
+): SessionInfo {
+  return {
+    session_id: id,
+    session_name: project,
+    project,
+    model: "GPT-5.6 Sol",
+    model_id: "gpt-5.6-sol",
+    provider: "codex",
+    context_window: "353.4K",
+    cost: id === "live-1" ? 4.25 : 2.5,
+    tokens: 320_000,
+    input_tokens: 80_000,
+    output_tokens: 20_000,
+    cache_write_tokens: 20_000,
+    cache_read_tokens: 200_000,
+    context_used_tokens: used,
+    context_window_tokens: window,
+    branch: "main",
+    activity,
+    activity_target: null,
+    effort: "High",
+    effort_explicit: true,
+    is_idle: false,
+    started_at: "2026-07-25T13:00:00Z",
+    duration_secs: 900,
+    has_thinking: true,
+    workflow_label: null,
+    subagent_count: 0,
+    subagents: [],
+    tokens_per_sec: 48,
+    input_cost: 1,
+    output_cost: 1,
+    cache_write_cost: 1,
+    cache_read_cost: 1.25,
+    speed: "standard",
+    fast: false,
+    service_tier: null,
+    intro_pricing: null,
+    has_inflated_tokenizer: false,
   };
 }
 
@@ -174,6 +223,75 @@ describe("Dashboard.svelte", () => {
     expect(values[2]).toBe("4");
   });
 
+  it("composes backend truth as a live-session focus, telemetry ledger, and flat metric strip", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([liveSession("live-1", "Planner regression", 120_000, 200_000, "Running tests")]);
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container } = render(Dashboard);
+    await tick();
+
+    expect(container.querySelector("[data-dashboard-layout='signal-ledger']")).not.toBeNull();
+    expect(container.querySelector("[data-session-focus]")).not.toBeNull();
+    expect(container.querySelector("[data-telemetry-ledger]")).not.toBeNull();
+    expect(container.querySelector(".metric-strip")).not.toBeNull();
+    expect(container.querySelector("[data-telemetry-ledger]")?.textContent).not.toContain("Plan limits");
+    expect(container.querySelector("[data-session-focus]")?.textContent).toContain("Planner regression");
+    expect(container.querySelector(".focus-chart-head")?.textContent).toContain("240.0K observed");
+    const mixValues = [...container.querySelectorAll(".mix-legend strong")].map((node) => node.textContent?.trim());
+    expect(mixValues).toEqual(["0", "20.0K", "20.0K", "200.0K"]);
+  });
+
+  it("shows every live instance and lets the exact context-window fraction follow selection", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([
+      liveSession("live-1", "Marcos Reyes Website", 100_000, 353_400, "Thinking"),
+      liveSession("live-2", "cc-discord-presence", 212_100, 353_400, "Running command"),
+    ]);
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container, getByRole, getByText } = render(Dashboard);
+    await tick();
+
+    expect(getByText("2 live instances")).toBeTruthy();
+    expect(container.querySelectorAll("[data-session-instance]")).toHaveLength(2);
+    expect(getByText("Context Window")).toBeTruthy();
+    expect(container.querySelector("[data-telemetry-ledger]")?.textContent).toContain("100.0K / 353.4K");
+
+    await fireEvent.click(getByRole("tab", { name: /cc-discord-presence/ }));
+    expect(container.querySelector("[data-telemetry-ledger]")?.textContent).toContain("212.1K / 353.4K");
+    expect(container.querySelector("[data-session-focus]")?.textContent).toContain("cc-discord-presence");
+  });
+
+  it("labels retained idle snapshots as recent rather than live", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([{ ...liveSession("idle-1", "Retained session", 10_000, 353_400, "Waiting"), is_idle: true }]);
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container } = render(Dashboard);
+    await tick();
+
+    expect(container.querySelector("[data-session-focus]")?.textContent).toContain("Recent session");
+    expect(container.querySelector("[data-session-focus]")?.textContent).toContain("Idle");
+    expect(container.querySelector("[data-session-focus]")?.textContent).not.toContain("Live session");
+  });
+
+  it("does not mix an older history branch into a live session header", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const current = { ...liveSession("live-no-branch", "Current work", 10_000, 353_400, "Thinking"), branch: null };
+    const older = { ...hist("old", "Older work", 4), branch: "legacy/history-branch" };
+    getSessionHistory.mockResolvedValueOnce([older]);
+    sessions.set([current]);
+
+    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
+    const { container } = render(Dashboard);
+    await waitFor(() => expect(getSessionHistory).toHaveBeenCalled());
+
+    const focus = container.querySelector("[data-session-focus]")?.textContent ?? "";
+    expect(focus).toContain("Current work");
+    expect(focus).not.toContain("legacy/history-branch");
+  });
+
   it("renders the cost breakdown that reconciles to the estimated total", async () => {
     const Dashboard = (await import("@/views/Dashboard.svelte")).default;
     const { container, getByText } = render(Dashboard);
@@ -191,12 +309,12 @@ describe("Dashboard.svelte", () => {
     const { container, getByText } = render(Dashboard);
     await tick();
 
-    await waitFor(() => expect(getByText(/Plan Usage Limits/)).toBeTruthy());
+    await waitFor(() => expect(getByText("Account quota")).toBeTruthy());
     expect(getByText("Model Distribution")).toBeTruthy();
     const modelNames = [...container.querySelectorAll(".model-list .model-name")].map((e) => e.textContent?.trim());
     expect(modelNames).toContain("Claude Opus 4.8");
     expect(modelNames).toContain("Claude Sonnet 4.6");
-    expect(getByText(formatResetDateTime("2026-05-28T18:00:00Z"))).toBeTruthy();
+    expect(container.textContent).toContain(formatResetDateTime("2026-05-28T18:00:00Z"));
   });
 
   it("renders weekly-only Codex quota and credits without inventing a five-hour window", async () => {

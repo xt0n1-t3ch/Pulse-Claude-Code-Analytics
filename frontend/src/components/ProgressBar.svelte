@@ -4,11 +4,13 @@
   let {
     label,
     pct,
+    remainingPct = null,
     meta = "",
     sublabel = "",
   }: {
     label: string;
     pct: number;
+    remainingPct?: number | null;
     meta?: string;
     sublabel?: string;
   } = $props();
@@ -28,8 +30,9 @@
         <span class="bar-meta">{meta}</span>
       {/if}
     </div>
-    <span class="bar-pct" class:warning={color === "warning"} class:danger={color === "danger"}>
-      {Math.round(pct)}% used
+    <span class="bar-values" class:warning={color === "warning"} class:danger={color === "danger"}>
+      {#if remainingPct != null}<strong>{Math.round(remainingPct)}% available</strong>{/if}
+      <span>{Math.round(pct)}% used</span>
     </span>
   </div>
   <div class="bar-track">
@@ -78,16 +81,21 @@
     color: var(--text-muted);
   }
 
-  .bar-pct {
+  .bar-values {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
     font-weight: 600;
     font-size: 12px;
     font-variant-numeric: tabular-nums;
     color: var(--text-secondary);
     white-space: nowrap;
   }
-
-  .bar-pct.warning { color: var(--warning); }
-  .bar-pct.danger { color: var(--danger); }
+  .bar-values strong { color: var(--text-primary); font-size: 14px; }
+  .bar-values span { color: var(--text-muted); }
+  .bar-values.warning strong { color: var(--warning); }
+  .bar-values.danger strong { color: var(--danger); }
 
   .bar-track {
     height: 8px;

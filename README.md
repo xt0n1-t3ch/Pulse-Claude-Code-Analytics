@@ -24,13 +24,23 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.2</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.5</h2>
 
-- **Real reasoning effort** — Pulse reads the effort field Claude Code records on every assistant turn instead of falling back to a default, so a High or Extra High session stops reporting `Medium`.
-- **Honest usage provenance** — the quota footer names the OAuth handshake and plan it actually used, or says the reading came from cache, instead of labelling everything `api`.
-- **Rich Presence that sticks** — the master switch and field toggles persist for Claude, survive a restart, and are written atomically so a background read can no longer reset them to defaults.
-- **Fields that tell the truth** — provider-unsupported fields render as unavailable rather than offering a switch that silently reverts.
-- **One panel signature** — Sessions, Context, and the shared stat tiles share a lit edge, sheen, and hover lift driven by tokens rather than per-view copies.
+- **Live Codex quota, not yesterday's JSONL** — Pulse reads the authenticated `account/rateLimits/read` backend, so a provider-reported 83% used renders as 17% available. JSONL is a short-lived fallback and stale quota events stay unavailable.
+- **Multi-instance Dashboard** — every active session is selectable from one responsive live-work owner; the detail panel follows that selection and renders exact `used / available window` values.
+- **Current context only** — Context no longer mixes active windows with a stale historical utilization list. One selector owns the active sessions and one matte detail surface owns the selected window.
+- **Richer factual telemetry** — live token composition replaces the misleading empty spend timeline, and Activity by Hour groups timestamps in the user's local timezone with proper AM/PM labels.
+- **Matte Geist surfaces** — the dark theme uses neutral black panels rather than navy/gray sheens; color remains scoped to provider identity and semantic values.
+- **Responsive controls and persistence** — Discord fields stack before they clip, expose automatic save state, and the signed in-app updater remains a single approve/update/relaunch flow.
+
+<details>
+<summary>Previous v1.6.2 highlights</summary>
+
+- **Real reasoning effort** — Pulse reads the effort field Claude Code records on every assistant turn instead of falling back to a default.
+- **Honest Claude usage provenance** — the quota footer names the observed OAuth/cache path.
+- **Rich Presence that sticks** — the master switch and field toggles persist for Claude and survive a restart.
+
+</details>
 
 <details>
 <summary>Previous v1.6.1 highlights</summary>
@@ -54,7 +64,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 </details>
 
-**[Download v1.6.2](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.6.5](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
@@ -68,7 +78,7 @@ You may pay for Claude Code every month, ChatGPT every month, or both: **Claude 
 - **Inflection alerts** — any session that blows past 2 × your rolling baseline gets flagged with context and a suggested fix.
 - **Provider-aware fix prompts** — every recommendation has a **Copy Fix Prompt** action labeled for the active provider: **Fix with Claude Code** or **Fix with Codex**.
 - **Plan usage limits** — live tracking of the windows each provider actually exposes, including Claude's Sonnet/Extra Usage telemetry and Codex's primary/secondary quota windows.
-- **Release awareness** — startup and 6-hour update checks surface new stable GitHub Releases inside the app without pretending a signed auto-installer exists before release metadata is published.
+- **In-app updates** — startup and 6-hour checks surface stable signed releases; after approval Pulse downloads, installs, and relaunches from inside the app.
 - **Discord Rich Presence** — five-tier reasoning effort, live project / model / branch. Your flow state, on your profile.
 
 **One product, two factual lanes.** Claude sessions keep Anthropic-specific model routing, cache TTL, Extra Usage, and statusline authority. Codex sessions use the canonical GPT catalog and current local App metadata, including **GPT-5.6 Sol / Terra / Luna**, independent reasoning and Standard/Fast modes, and **372K raw / 353.4K usable** context. Unpublished Fast economics or missing cache-write telemetry stay partial or unavailable instead of becoming an invented multiplier.

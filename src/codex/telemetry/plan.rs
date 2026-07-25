@@ -255,12 +255,14 @@ pub fn parse_plan_type(raw: Option<&str>) -> DetectedPlanTier {
         "free" => DetectedPlanTier::Free,
         "go" => DetectedPlanTier::Go,
         "plus" => DetectedPlanTier::Plus,
-        "business" => DetectedPlanTier::Business,
-        "enterprise" => DetectedPlanTier::Enterprise,
+        "business" | "team" | "self_serve_business_usage_based" => DetectedPlanTier::Business,
+        "enterprise" | "enterprise_cbp_usage_based" => DetectedPlanTier::Enterprise,
         "pro" | "pro20x" | "pro_20x" | "pro-20x" | "pro200" | "pro_200" | "pro-200" => {
             DetectedPlanTier::Pro20x
         }
-        "pro5x" | "pro_5x" | "pro-5x" | "pro100" | "pro_100" | "pro-100" => DetectedPlanTier::Pro5x,
+        "prolite" | "pro5x" | "pro_5x" | "pro-5x" | "pro100" | "pro_100" | "pro-100" => {
+            DetectedPlanTier::Pro5x
+        }
         _ => DetectedPlanTier::Unknown,
     }
 }
@@ -488,6 +490,16 @@ mod tests {
         assert_eq!(parse_plan_type(Some("pro-20x")), DetectedPlanTier::Pro20x);
         assert_eq!(parse_plan_type(Some("pro_100")), DetectedPlanTier::Pro5x);
         assert_eq!(parse_plan_type(Some("pro_200")), DetectedPlanTier::Pro20x);
+        assert_eq!(parse_plan_type(Some("prolite")), DetectedPlanTier::Pro5x);
+        assert_eq!(parse_plan_type(Some("team")), DetectedPlanTier::Business);
+        assert_eq!(
+            parse_plan_type(Some("self_serve_business_usage_based")),
+            DetectedPlanTier::Business
+        );
+        assert_eq!(
+            parse_plan_type(Some("enterprise_cbp_usage_based")),
+            DetectedPlanTier::Enterprise
+        );
         assert_eq!(
             parse_plan_type(Some("unexpected")),
             DetectedPlanTier::Unknown

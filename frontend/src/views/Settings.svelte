@@ -145,10 +145,9 @@
 
 <div class="settings-view">
   <div class="view-header">
-    <div class="view-title-group">
-      <span class="view-kicker">Pulse · Configuration</span>
+    <div class="settings-title">
       <h2 class="view-title">Settings</h2>
-      <span class="view-sub">Tune the telemetry source, broadcast identity, and local analytics store.</span>
+      <span class="version-chip">v{$health?.version ?? "1.6.5"}</span>
     </div>
     <button type="button" class="btn check-updates-btn" onclick={checkForUpdates} aria-label="Check for application updates">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
@@ -311,10 +310,6 @@
 
   <div class="meta-strip">
     <div class="meta-cell">
-      <span class="meta-key">Version</span>
-      <span class="meta-val mono">{$health ? "v" + $health.version : "—"}</span>
-    </div>
-    <div class="meta-cell">
       <span class="meta-key">Engine</span>
       <span class="meta-val">cc-discord-presence</span>
     </div>
@@ -348,25 +343,13 @@
     flex-wrap: wrap;
   }
   .view-title-group { display: flex; flex-direction: column; gap: 4px; }
-  .view-kicker {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: var(--letter-wider);
-    color: var(--text-muted);
-  }
+  .settings-title { display: flex; align-items: center; gap: 10px; }
+  .version-chip { padding: 3px 8px; color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--radius-full); font: 600 10px var(--font-mono); }
   .view-title {
     font-size: var(--fs-2xl);
     font-weight: 700;
     letter-spacing: var(--letter-tighter);
     color: var(--text-primary);
-  }
-  .view-sub {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    line-height: var(--lh-snug);
-    max-width: 560px;
   }
   .check-updates-btn {
     flex-shrink: 0;
@@ -713,14 +696,14 @@
   /* ── meta footer strip ── */
   .meta-strip {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 0;
     padding: 2px 0 0;
     border-top: 1px dashed var(--border);
     margin-top: 4px;
   }
   @media (max-width: 720px) {
-    .meta-strip { grid-template-columns: repeat(2, 1fr); }
+    .meta-strip { grid-template-columns: 1fr; }
   }
   .meta-cell {
     display: flex;
@@ -731,7 +714,7 @@
   }
   .meta-cell:last-child { border-right: none; }
   @media (max-width: 720px) {
-    .meta-cell:nth-child(2) { border-right: none; }
+    .meta-cell { border-right: none; }
   }
   .meta-key {
     font-family: var(--font-mono);

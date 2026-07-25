@@ -1,15 +1,19 @@
-/* Pulse design system — ultra-black monochrome (space.com · xai.com · grok.com · Duolingo)
-   Orange is GONE. Semantic colors (success/warning/danger) for numeric values only. */
+/* Signal Ledger is the canonical mutable visual contract. Views compose these
+   tokens instead of carrying their own dark-mode palettes. */
 :root {
   color-scheme: dark;
-  /* ── DARK (default) — ultra-black #000 */
-  --bg-primary: #000000;
-  --bg-secondary: #050505;
-  --bg-card: #0b0b0b;
-  --bg-card-hover: #121212;
-  --bg-elevated: #141414;
-  --bg-input: #0a0a0a;
+  --bg-primary: #050505;
+  --bg-secondary: #070707;
+  --bg-card: #070707;
+  --bg-card-hover: #0b0b0b;
+  --bg-elevated: #0c0c0c;
+  --bg-input: #060606;
   --bg-overlay: rgba(0, 0, 0, 0.85);
+
+  --surface-panel: #070707;
+  --surface-panel-soft: #060606;
+  --surface-raised: #0b0b0b;
+  --divider: #1b1b1b;
 
   --text-primary: #f5f5f5;
   --text-secondary: #b8b8b8;
@@ -62,10 +66,10 @@
      it; needs to lighten rather than darken on a light preview surface. */
   --preview-scrim: rgba(0, 0, 0, 0.18);
 
-  --border: #1f1f1f;
-  --border-strong: #2a2a2a;
-  --border-hover: #3a3a3a;
-  --border-focus: #f5f5f5;
+  --border: #202022;
+  --border-strong: #2b2b2e;
+  --border-hover: #444449;
+  --border-focus: var(--accent);
 
   --radius-xs: 4px;
   --radius-sm: 6px;
@@ -106,9 +110,10 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  --sidebar-width: 56px;
-  --topbar-height: 48px;
-  --content-max: 1280px;
+  --sidebar-width: 152px;
+  --topbar-height: 56px;
+  --content-max: 1440px;
+  --control-height: 36px;
 
   /* Discord Rich Presence preview surface.
      The preview mirrors a real Discord card, whose palette is fixed and dark.
@@ -150,9 +155,9 @@
     transparent
   );
   /* Top-down light falloff layered over a panel background. */
-  --panel-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.030), transparent 42%);
+  --panel-sheen: linear-gradient(transparent, transparent);
   /* Same idea at higher intensity, for the one hero panel per view. */
-  --panel-sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 55%);
+  --panel-sheen-strong: linear-gradient(transparent, transparent);
   /* Fill for meters and progress tracks. */
   --meter-fill: linear-gradient(90deg, var(--chart-2), var(--text-primary));
   --meter-track: rgba(255, 255, 255, 0.055);
@@ -179,6 +184,11 @@
   --bg-elevated: #f1f1f1;
   --bg-input: #ffffff;
   --bg-overlay: rgba(255, 255, 255, 0.85);
+
+  --surface-panel: #ffffff;
+  --surface-panel-soft: #fafafa;
+  --surface-raised: #f3f3f3;
+  --divider: #e5e5e5;
 
   --text-primary: #0a0a0a;
   --text-secondary: #444444;
@@ -424,6 +434,70 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
   transform: translateY(-1px);
 }
 .card.card-flat { background: transparent; border-color: var(--border); }
+
+/* Shared page grammar. These classes own layout rhythm rather than view data,
+   so new surfaces can expand without cloning mutable design decisions. */
+.view-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  background: var(--surface-panel-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.metric-strip .stat-card { border-right: 1px solid var(--divider); }
+.metric-strip .stat-card:last-child { border-right: 0; }
+
+.state-panel {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  padding: 28px;
+  color: var(--text-muted);
+  background: var(--surface-panel-soft);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.surface-panel {
+  background: var(--surface-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+/* Matte is the only app-panel fill. Views own information, never a second
+   sheen, tint, or elevated-card palette that can drift back to gray/navy. */
+.surface-matte {
+  background: var(--surface-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+@media (max-width: 900px) {
+  :root { --sidebar-width: 64px; }
+  .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-strip .stat-card:nth-child(2) { border-right: 0; }
+  .metric-strip .stat-card:nth-child(-n + 2) { border-bottom: 1px solid var(--divider); }
+}
+
+@media (max-width: 620px) {
+  .metric-strip { grid-template-columns: 1fr; }
+  .metric-strip .stat-card { border-right: 0; border-bottom: 1px solid var(--divider); }
+  .metric-strip .stat-card:last-child { border-bottom: 0; }
+}
 
 .section-title {
   font-size: var(--fs-xs);

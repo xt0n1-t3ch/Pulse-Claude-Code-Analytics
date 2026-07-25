@@ -29,6 +29,16 @@
 
   let discordEnabled = $state(true);
   let settingsPending = $state(false);
+  let saveState = $state<"loading" | "saving" | "saved" | "error">("loading");
+  let saveStatus = $derived(
+    saveState === "loading"
+      ? "Loading settings…"
+      : saveState === "saving"
+        ? "Saving changes…"
+        : saveState === "error"
+          ? "Save failed"
+          : "Saved automatically",
+  );
 
   $effect(() => {
     if ($discordSettings) discordEnabled = $discordSettings.enabled;
@@ -40,7 +50,9 @@
       const settings = await loadDiscordSettings();
       discordEnabled = settings.enabled;
       await refreshDiscordPresencePreview();
+      if (!settingsPending) saveState = "saved";
     } catch (error) {
+      if (!settingsPending) saveState = "error";
       addToast(`Discord settings failed to load: ${String(error)}`, "danger", 5000);
     }
   });
@@ -50,11 +62,14 @@
     const previous = discordEnabled;
     discordEnabled = !previous;
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setDiscordEnabled(discordEnabled));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       discordEnabled = previous;
+      saveState = "error";
       addToast(`Rich Presence update failed: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -66,11 +81,14 @@
     const previous = $discordPreview;
     discordPreview.set(next);
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setDiscordDisplayPrefs(previewToDisplayPrefs(next)));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       discordPreview.set(previous);
+      saveState = "error";
       addToast(`Discord privacy update failed: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -115,11 +133,14 @@
       applyDiscordSettings({ ...previous, desktop_design: design });
     }
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setCodexDesktopDesign(design));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       if (previous) applyDiscordSettings(previous);
+      saveState = "error";
       addToast(`Desktop identity update failed: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -208,6 +229,7 @@
   }
 
   function windowLabel(minutes: number): string {
+    if (minutes <= 0) return "Current";
     if (minutes === 300) return "5h";
     if (minutes === 1440) return "24h";
     if (minutes === 10080) return "7d";
@@ -279,11 +301,14 @@
     const previous = $discordSettings;
     applyDiscordSettings({ ...previous, field_order: order });
     settingsPending = true;
+    saveState = "saving";
     try {
       applyDiscordSettings(await setDiscordFieldOrder(order));
       await refreshDiscordPresencePreview();
+      saveState = "saved";
     } catch (error) {
       applyDiscordSettings(previous);
+      saveState = "error";
       addToast(`Field order failed to save: ${String(error)}`, "danger", 5000);
     } finally {
       settingsPending = false;
@@ -326,19 +351,19 @@
 <div class="discord-view" style="--provider-accent: {$providerProfile.accent}">
   <div class="view-header">
     <div class="view-title-group">
-      <span class="view-kicker">Pulse · Rich Presence</span>
-      <h2 class="view-title">Discord</h2>
+      <h2 class="view-title">Broadcast</h2>
       <span class="view-sub">
-        Broadcasting as <strong style="color: {$providerProfile.accent}">{presenceAppName}</strong>
-        <span class="sub-dot">·</span>
-        {activeCount} of {availableFieldCount} fields shown
-        {#if activeSessionCount > 1}
-          <span class="sub-dot">·</span>
-          {activeSessionCount} active sessions
-        {/if}
+        {activeCount}/{availableFieldCount} fields · {$providerProfile.productName}
       </span>
     </div>
     <div class="header-meta">
+      <span
+        class="save-state"
+        class:saving={saveState === "saving" || saveState === "loading"}
+        class:failed={saveState === "error"}
+        role="status"
+        aria-label="Discord settings save status"
+      >{saveStatus}</span>
       <!-- Broadcast state is the headline: it answers "is Discord showing me
            right now?". IPC and the asset key are supporting diagnostics and
            stay quiet rather than competing as three identical pills. -->
@@ -356,15 +381,6 @@
           class:waiting={broadcastState === "waiting"}
         ></span>
         {broadcastLabel}
-      </span>
-      <span class="hm-divider" aria-hidden="true"></span>
-      <span class="hm-diag" class:warn={!ipcConnected} title="Discord IPC connection">
-        <span class="hm-diag-key">IPC</span>
-        <span class="hm-diag-val">{ipcConnected ? "Connected" : ($health?.discord_status || "Disconnected")}</span>
-      </span>
-      <span class="hm-diag" title="Rich Presence asset key">
-        <span class="hm-diag-key">Asset</span>
-        <span class="hm-diag-val hm-mono">{previewAssetKey}</span>
       </span>
     </div>
   </div>
@@ -567,14 +583,6 @@
     flex-wrap: wrap;
   }
   .view-title-group { display: flex; flex-direction: column; gap: 4px; }
-  .view-kicker {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: var(--letter-wider);
-    color: var(--text-muted);
-  }
   .view-title {
     font-size: var(--fs-2xl);
     font-weight: 700;
@@ -586,8 +594,6 @@
     color: var(--text-muted);
     line-height: var(--lh-snug);
   }
-  .view-sub strong { font-weight: 700; }
-  .sub-dot { margin: 0 5px; color: var(--border-strong); }
 
   .header-meta {
     display: inline-flex;
@@ -596,6 +602,34 @@
     flex-wrap: wrap;
     flex-shrink: 0;
   }
+
+  .save-state {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 9px;
+    color: var(--text-muted);
+    background: var(--surface-panel-soft);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .save-state::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    background: var(--success);
+    border-radius: 50%;
+  }
+
+  .save-state.saving { color: var(--warning); }
+  .save-state.saving::before { background: var(--warning); animation: pulse 1s var(--ease) infinite; }
+  .save-state.failed { color: var(--danger); }
+  .save-state.failed::before { background: var(--danger); }
 
   /* Primary: is presence actually broadcasting right now. */
   .hm-state {
@@ -651,37 +685,6 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .hm-beacon.live::after { animation: none; opacity: 0.35; }
-  }
-
-  .hm-divider {
-    width: 1px;
-    height: 16px;
-    background: var(--border);
-  }
-
-  /* Secondary diagnostics: labelled key/value pairs, no chrome. */
-  .hm-diag {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 6px;
-    font-size: var(--fs-xs);
-    white-space: nowrap;
-  }
-  .hm-diag-key {
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: var(--letter-wider);
-    color: var(--text-muted);
-  }
-  .hm-diag-val {
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-  .hm-diag.warn .hm-diag-val { color: var(--warning); }
-  .hm-mono {
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0;
   }
 
   /* ── LAYOUT ── */
@@ -843,6 +846,11 @@
     grid-template-columns: 1fr 1fr;
     gap: 0;
     border-top: 1px solid var(--border);
+  }
+  @media (max-width: 1180px) {
+    .field-grid { grid-template-columns: 1fr; }
+    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; }
+    .field-cell:first-child { border-top: none !important; }
   }
   @media (max-width: 620px) {
     .field-grid { grid-template-columns: 1fr; }

@@ -109,7 +109,7 @@
 
   .main-content {
     flex: 1;
-    padding: 20px;
+    padding: 20px 24px 28px;
     overflow-y: auto;
     overflow-x: hidden;
     max-height: calc(100vh - var(--topbar-height));
@@ -119,7 +119,7 @@
   .view-loading { color: var(--text-muted); padding: 24px 4px; font-size: var(--fs-sm); }
 
   @media (max-width: 800px) {
-    .main-content { padding: 14px; }
+    .main-content { padding: 16px; }
   }
 
   @media (max-width: 740px) {

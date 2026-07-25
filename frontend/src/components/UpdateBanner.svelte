@@ -15,7 +15,7 @@
   let opening = $state(false);
 
   /** In-app install lifecycle. `idle` also covers "not attempted yet". */
-  type InstallPhase = "idle" | "downloading" | "installing" | "ready" | "failed";
+  type InstallPhase = "idle" | "downloading" | "installing" | "relaunching" | "failed" | "relaunch-failed";
   let phase = $state<InstallPhase>("idle");
   let downloaded = $state(0);
   let downloadTotal = $state(0);
@@ -24,7 +24,7 @@
   let progressPct = $derived(
     downloadTotal > 0 ? Math.min(100, (downloaded / downloadTotal) * 100) : 0,
   );
-  let busy = $derived(phase === "downloading" || phase === "installing");
+  let busy = $derived(phase === "downloading" || phase === "installing" || phase === "relaunching");
 
   /** Human label for the release age, e.g. "today", "3d ago". */
   function publishedLabel(iso: string | null): string | null {
@@ -183,19 +183,31 @@
           phase = "installing";
         }
       });
-
-      phase = "ready";
+      phase = "relaunching";
+      // The Update click is the explicit effect checkpoint. Relaunch only
+      // after the signed updater reports a successful install.
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      try {
+        await relaunch();
+      } catch (err) {
+        phase = "relaunch-failed";
+        installError = String(err);
+      }
     } catch (err) {
       phase = "failed";
       installError = String(err);
     }
   }
 
-  async function restartNow(): Promise<void> {
+  async function retryRelaunch(): Promise<void> {
+    if (busy) return;
+    installError = null;
+    phase = "relaunching";
     try {
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (err) {
+      phase = "relaunch-failed";
       installError = String(err);
     }
   }
@@ -223,6 +235,7 @@
     in:fly={{ y: 16, duration: 320 }}
   >
     <header class="up-head">
+      <span class="up-title">New Update Available</span>
       <span class="up-badge">{severity === "major" ? "Major" : severity === "minor" ? "Feature" : "Patch"} update</span>
       {#if releaseAge}
         <span class="up-age">{releaseAge}</span>
@@ -276,7 +289,7 @@
       <div class="up-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progressPct)}>
         <div class="up-progress-head">
           <span class="up-progress-label">
-            {phase === "installing" ? "Installing…" : "Downloading…"}
+            {phase === "installing" ? "Installing…" : phase === "relaunching" ? "Restarting…" : "Downloading…"}
           </span>
           {#if downloadTotal > 0}
             <span class="up-progress-size mono">
@@ -296,44 +309,39 @@
 
     {#if installError}
       <p class="up-error" role="alert">
-        In-app install failed. You can open the release page instead.
+        {phase === "relaunch-failed"
+          ? "Update installed, but Pulse could not restart. Retry the restart."
+          : "In-app install failed. You can open the release page instead."}
       </p>
     {/if}
 
     <div class="up-actions">
-      {#if phase === "ready"}
-        <button type="button" class="up-btn up-ghost" onclick={later}>Later</button>
-        <button type="button" class="up-btn up-primary" onclick={restartNow}>
-          Restart to finish
-        </button>
-      {:else}
-        <button type="button" class="up-btn up-ghost" onclick={later} disabled={busy} aria-label="Dismiss this update for now">
-          Later
-        </button>
-        <button
-          type="button"
-          class="up-btn up-ghost"
-          onclick={skipVersion}
-          disabled={busy}
-          aria-label={`Skip version ${info.latest_version}`}
-        >
-          Skip
-        </button>
-        {#if installError}
-          <button type="button" class="up-btn up-ghost" onclick={openRelease} disabled={opening}>
-            {opening ? "Opening…" : "Open release"}
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="up-btn up-primary"
-          onclick={installUpdate}
-          disabled={busy}
-          aria-label="Download and install the update"
-        >
-          {installError ? "Retry install" : "Get update"}
+      <button type="button" class="up-btn up-ghost" onclick={later} disabled={busy} aria-label="Dismiss this update for now">
+        Later
+      </button>
+      <button
+        type="button"
+        class="up-btn up-ghost"
+        onclick={skipVersion}
+        disabled={busy}
+        aria-label={`Skip version ${info.latest_version}`}
+      >
+        Skip
+      </button>
+      {#if installError && phase !== "relaunch-failed"}
+        <button type="button" class="up-btn up-ghost" onclick={openRelease} disabled={opening}>
+          {opening ? "Opening…" : "Open release"}
         </button>
       {/if}
+      <button
+        type="button"
+        class="up-btn up-primary"
+        onclick={phase === "relaunch-failed" ? retryRelaunch : installUpdate}
+        disabled={busy}
+        aria-label={phase === "relaunch-failed" ? "Restart Pulse after the installed update" : "Download, install, and restart with the update"}
+      >
+        {phase === "relaunch-failed" ? "Retry restart" : installError ? "Retry update" : busy ? "Updating…" : "Update"}
+      </button>
     </div>
   </aside>
 {/if}
@@ -341,8 +349,8 @@
 <style>
   .update-pop {
     position: fixed;
-    bottom: 20px;
-    left: calc(var(--sidebar-width) + 16px);
+    top: calc(var(--topbar-height) + 12px);
+    right: 16px;
     z-index: 9998;
     display: flex;
     flex-direction: column;
@@ -372,7 +380,9 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
   }
+  .up-title { width: 100%; color: var(--text-primary); font-size: var(--fs-md); font-weight: 700; letter-spacing: var(--letter-tight); }
   .up-badge {
     font-size: var(--fs-xs);
     font-weight: 700;

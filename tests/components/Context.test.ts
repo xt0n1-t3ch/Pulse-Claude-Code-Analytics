@@ -103,7 +103,7 @@ describe("Context.svelte", () => {
     getSessionsContextUsage.mockClear();
   });
 
-  it("renders the session pill strip for seeded sessions and a per-session list", async () => {
+  it("renders one active-session selector without a second stale history list", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
 
@@ -111,15 +111,13 @@ describe("Context.svelte", () => {
     const { container } = render(Context);
     await tick();
 
-    await waitFor(() => {
-      expect(container.querySelectorAll(".session-pill").length).toBe(2);
-    });
-    const projects = [...container.querySelectorAll(".pill-project")].map((el) => el.textContent?.trim());
+    await waitFor(() => expect(container.querySelectorAll(".active-ctx-card").length).toBe(2));
+    const projects = [...container.querySelectorAll(".act-project")].map((el) => el.textContent?.trim());
     expect(projects).toContain("pulse");
     expect(projects).toContain("other");
-    await waitFor(() => {
-      expect(container.querySelector(".usage-row")).not.toBeNull();
-    });
+    expect(container.querySelector(".session-pill")).toBeNull();
+    expect(container.querySelector(".usage-row")).toBeNull();
+    expect(getSessionsContextUsage).not.toHaveBeenCalled();
   });
 
   it("renders a context card for every active session simultaneously", async () => {
@@ -172,6 +170,51 @@ describe("Context.svelte", () => {
     await waitFor(() => {
       expect(getContextBreakdown).toHaveBeenCalled();
     });
+  });
+
+  it("refreshes the active row and selected detail from the same live snapshot", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([{ ...makeSession("live", "pulse"), context_used_tokens: 10_000, context_window_tokens: 200_000 }]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    const { container } = render(Context);
+    await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalled());
+    getContextBreakdowns.mockClear();
+    const advanced = {
+      ...breakdown,
+      used_tokens: 80_000,
+      free_space: 110_000,
+    };
+    getContextBreakdowns.mockResolvedValueOnce([{
+      session_id: "live",
+      project: "pulse",
+      model_id: "claude-opus-4-8",
+      is_idle: false,
+      activity: "Thinking",
+      breakdown: advanced,
+    }]);
+
+    sessions.set([{ ...makeSession("live", "pulse"), context_used_tokens: 20_000, context_window_tokens: 200_000 }]);
+    await tick();
+
+    await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.querySelector(".hero-used")?.textContent?.trim()).toBe("80.0K"));
+  });
+
+  it("clears the detail instead of falling back to an idle snapshot", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([makeSession("live", "pulse")]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    const { container } = render(Context);
+    await waitFor(() => expect(container.querySelector(".hero-card")).not.toBeNull());
+    getContextBreakdown.mockClear();
+
+    sessions.set([{ ...makeSession("live", "pulse"), is_idle: true }]);
+    await tick();
+
+    await waitFor(() => expect(container.querySelector(".hero-card")).toBeNull());
+    expect(getContextBreakdown).not.toHaveBeenCalled();
   });
 
   it("labels installed skills as estimated inventory instead of loaded context", async () => {

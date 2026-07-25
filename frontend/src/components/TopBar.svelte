@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { health, planInfo } from "../lib/stores";
+  import { health, planInfo, sessions } from "../lib/stores";
+  import { providerProfile } from "../lib/provider";
   import ProviderToggle from "./ProviderToggle.svelte";
 
   let { onToggleTheme }: { onToggleTheme: () => void } = $props();
+
+  let focusSession = $derived($sessions.find((session) => !session.is_idle) ?? null);
 
   function minimize(): void {
     window.__TAURI__?.window.getCurrentWindow().minimize();
@@ -24,6 +27,11 @@
   <div class="topbar-left">
     <div class="topbar-provider">
       <ProviderToggle />
+    </div>
+    <div class="session-context" aria-live="polite">
+      <span class="session-beacon" class:live={Boolean(focusSession)}></span>
+      <span class="session-model">{focusSession?.model ?? $providerProfile.productName}</span>
+      <span class="session-state">{focusSession?.activity ?? "Waiting for a session"}</span>
     </div>
   </div>
 
@@ -63,7 +71,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 0 12px 0 16px;
-    background: var(--bg-primary);
+    background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
     border-bottom: 1px solid var(--border);
     gap: 12px;
     user-select: none;
@@ -81,6 +89,31 @@
     display: flex;
     -webkit-app-region: no-drag;
   }
+
+  .session-context {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+  }
+
+  .session-beacon {
+    width: 7px;
+    height: 7px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--text-placeholder);
+  }
+
+  .session-beacon.live {
+    background: var(--success);
+    box-shadow: 0 0 0 3px var(--success-dim);
+  }
+
+  .session-model { color: var(--text-secondary); font-weight: 600; white-space: nowrap; }
+  .session-state { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .topbar-right {
     margin-left: auto;
@@ -171,9 +204,11 @@
     .action-cluster { gap: 3px; padding-right: 3px; }
     .badge.version { display: none; }
     .badge.plan { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-state { display: none; }
   }
 
   @media (max-width: 680px) {
     .badge.plan { display: none; }
+    .session-context { display: none; }
   }
 </style>

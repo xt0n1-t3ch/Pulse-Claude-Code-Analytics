@@ -19,10 +19,19 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [codex-model-catalog.md](codex-model-catalog.md) | GPT-5.6 labels, aliases, reasoning, context, pricing, cache policy, provenance, and completeness rules |
 | [codex-rich-presence-upstream.md](codex-rich-presence-upstream.md) | Codex Rich Presence source-of-truth repo, sync scripts, CI freshness gate, compatibility overlay |
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
+| [ui-design-system.md](ui-design-system.md) | Monochrome Geist shell, semantic colors, one-fact/one-owner hierarchy, responsive states, autosave and updater affordances |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
+
+## v1.6.5 docs refresh
+
+- Added the authenticated Codex account-quota path and its freshness contract: 30-second API cache, 15-minute JSONL fallback ceiling, and unavailable instead of stale.
+- Documented the active-only Context owner, responsive multi-instance Dashboard, exact Context Window fractions, local-time heatmap, and matte surface contract.
+- Preserved provider backend semantics, Discord autosave, update approval/install/relaunch, configuration schema 13, and database schema 5.
 
 ## v1.6.2 docs refresh
 
+- Documented the Pulse UI contract: monochrome application chrome, provider-scoped identity color (Codex blue), semantic-only status color, and one visible owner per fact.
+- Recorded the new session-focus Dashboard hierarchy, flat metric strips, coherent loading/empty states, Discord autosave feedback, and one-action signed update/relaunch flow.
 - Recorded that the reasoning-effort tier is read from the top-level `effort` field Claude Code writes on each `assistant` transcript line, replacing the legacy system-reminder scrape that made every session read `Medium`.
 - Documented usage provenance: Pulse authenticates to the usage endpoint with an OAuth bearer token from `~/.claude/.credentials.json`, never an API key, and the footer now names the observed handshake and plan or reports a cache hit.
 - Noted Claude presence config schema **v6**, which persists the master Rich Presence switch, and the move to atomic config writes shared with the Codex writer.
@@ -112,7 +121,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.6.2**
+- App release: **v1.6.5**
 - Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v5**
-- Last docs refresh: 2026-07-16 (event-driven snapshots, semantic Codex usage and Credits, responsive UI, and immutable canonical-core promotion)
+- Last docs refresh: 2026-07-25 (monochrome Pulse UI contract, single-owner Dashboard telemetry, visible Discord autosave, and one-action signed updates)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

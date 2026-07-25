@@ -7,8 +7,9 @@ Pulse checks GitHub Releases from the Tauri backend and shows a small in-app pop
 1. `check_app_update()` calls the GitHub latest-release API for `xt0n1-t3ch/Pulse-Claude-Code-Analytics`.
 2. The backend compares the release tag against `env!("CARGO_PKG_VERSION")`.
 3. Drafts and prereleases are ignored.
-4. `UpdateBanner.svelte` renders the available update with current version, latest version, release title, release notes, and actions.
-5. `open_app_release_page()` opens only allowlisted Pulse GitHub release URLs.
+4. `UpdateBanner.svelte` renders `New Update Available` with current version, latest version, release title, release notes, and actions.
+5. The explicit **Update** action hands the release to Tauri's signed updater. After `downloadAndInstall()` resolves, the process plugin relaunches Pulse automatically.
+6. `open_app_release_page()` remains an allowlisted fallback for inspecting the GitHub release.
 
 The popup checks at startup and then every 6 hours. Settings exposes a manual **Check for updates** action by dispatching `pulse:check-updates`.
 
@@ -16,18 +17,12 @@ The popup checks at startup and then every 6 hours. Settings exposes a manual **
 
 - **Later** hides the current popup until the next check.
 - **Skip version** stores the latest version in `localStorage` and suppresses that release during automatic checks.
-- **Open release** opens the GitHub release page so the user can download the installer or portable asset.
+- **Update** is the single approval checkpoint for signed download, install, and relaunch.
+- **Open release** opens the allowlisted GitHub release page as a fallback.
 
-## Signed updater note
+## Signed updater boundary
 
-DLSSync uses Tauri's signed updater lane with `latest.json` and a public signing key. Pulse does not publish signed updater metadata yet, so v1.2.0 intentionally uses a backend release checker plus release-page handoff instead of inventing updater keys or pretending auto-install is available.
-
-To move to signed in-app installs later:
-
-1. Add a Tauri updater signing key to the release secret store.
-2. Generate and upload `latest.json` during `.github/workflows/release.yml`.
-3. Add `tauri-plugin-updater` and process relaunch wiring.
-4. Keep the current popup as the user-facing shell around the signed install action.
+Release discovery is informational; the Tauri updater configuration and signature verification remain authoritative for installation. The UI never treats a GitHub release response as install proof. Relaunch occurs only after the user clicks **Update** and the signed updater reports a successful install. Download, install, or relaunch failures stay in the popup as retryable errors.
 
 ## Validators
 
