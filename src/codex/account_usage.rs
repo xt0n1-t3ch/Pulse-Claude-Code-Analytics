@@ -300,6 +300,7 @@ struct WireRateLimitSnapshot {
     primary: Option<WireUsageWindow>,
     secondary: Option<WireUsageWindow>,
     credits: Option<WireCredits>,
+    individual_limit: Option<WireSpendControlLimit>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -318,6 +319,15 @@ struct WireCredits {
     unlimited: bool,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireSpendControlLimit {
+    limit: String,
+    used: String,
+    remaining_percent: f64,
+    resets_at: i64,
+}
+
 pub fn parse_rate_limits_response(
     response: &str,
     observed_at: DateTime<Utc>,
@@ -331,13 +341,19 @@ pub fn parse_rate_limits_response(
         .result
         .context("Codex account quota response has no result")?;
     let snapshots: Vec<WireRateLimitSnapshot> = match result.rate_limits_by_limit_id {
-        Some(by_id) if !by_id.is_empty() => by_id.into_values().collect(),
+        Some(by_id) if !by_id.is_empty() => by_id
+            .into_iter()
+            .map(|(limit_id, mut snapshot)| {
+                snapshot.limit_id.get_or_insert(limit_id);
+                snapshot
+            })
+            .collect(),
         _ => vec![result.rate_limits],
     };
 
     let envelopes: Vec<RateLimitEnvelope> = snapshots
         .into_iter()
-        .filter_map(|snapshot| wire_envelope(snapshot, observed_at))
+        .flat_map(|snapshot| wire_envelopes(snapshot, observed_at))
         .collect();
     if !envelopes.iter().any(|item| {
         item.limits.primary.is_some() || item.limits.secondary.is_some() || item.credits.is_some()
@@ -351,10 +367,12 @@ pub fn parse_rate_limits_response(
     })
 }
 
-fn wire_envelope(
+fn wire_envelopes(
     snapshot: WireRateLimitSnapshot,
     observed_at: DateTime<Utc>,
-) -> Option<RateLimitEnvelope> {
+) -> Vec<RateLimitEnvelope> {
+    let scope = classify_limit_scope(snapshot.limit_id.as_deref());
+    let base_limit_id = snapshot.limit_id.clone();
     let primary = snapshot.primary.and_then(wire_window);
     let secondary = snapshot.secondary.and_then(wire_window);
     let credits = snapshot.credits.map(|item| CreditBalance {
@@ -362,18 +380,49 @@ fn wire_envelope(
         has_credits: item.has_credits,
         unlimited: item.unlimited,
     });
-    if primary.is_none() && secondary.is_none() && credits.is_none() {
-        return None;
+    let mut envelopes = Vec::new();
+    if primary.is_some() || secondary.is_some() || credits.is_some() {
+        envelopes.push(RateLimitEnvelope {
+            scope,
+            limit_id: base_limit_id.clone(),
+            limit_name: snapshot.limit_name.clone(),
+            plan_type: snapshot.plan_type.clone(),
+            observed_at: Some(observed_at),
+            limits: RateLimits { primary, secondary },
+            credits,
+        });
     }
-    Some(RateLimitEnvelope {
-        scope: classify_limit_scope(snapshot.limit_id.as_deref()),
-        limit_id: snapshot.limit_id,
-        limit_name: snapshot.limit_name,
-        plan_type: snapshot.plan_type,
-        observed_at: Some(observed_at),
-        limits: RateLimits { primary, secondary },
-        credits,
-    })
+
+    if let Some(individual) = snapshot.individual_limit
+        && individual.remaining_percent.is_finite()
+    {
+        let remaining = individual.remaining_percent.clamp(0.0, 100.0);
+        envelopes.push(RateLimitEnvelope {
+            scope,
+            limit_id: Some(format!(
+                "{}:individual",
+                base_limit_id.as_deref().unwrap_or("account")
+            )),
+            limit_name: Some(format!(
+                "Individual spend limit ({} of {})",
+                individual.used, individual.limit
+            )),
+            plan_type: snapshot.plan_type,
+            observed_at: Some(observed_at),
+            limits: RateLimits {
+                primary: Some(UsageWindow {
+                    used_percent: 100.0 - remaining,
+                    remaining_percent: remaining,
+                    window_minutes: 0,
+                    resets_at: Utc.timestamp_opt(individual.resets_at, 0).single(),
+                }),
+                secondary: None,
+            },
+            credits: None,
+        });
+    }
+
+    envelopes
 }
 
 fn wire_window(window: WireUsageWindow) -> Option<UsageWindow> {

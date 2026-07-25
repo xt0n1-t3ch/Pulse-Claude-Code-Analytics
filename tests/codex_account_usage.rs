@@ -105,3 +105,42 @@ fn quota_percentage_survives_an_unknown_window_duration() {
     assert_eq!(window.remaining_percent, 15.0);
     assert_eq!(window.window_minutes, 0);
 }
+
+#[test]
+fn map_key_supplies_a_missing_limit_id() {
+    let observed_at = Utc.timestamp_opt(1_785_000_000, 0).single().unwrap();
+    let reading = parse_rate_limits_response(
+        r#"{"id":2,"result":{"rateLimits":{"primary":null},"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":10,"windowDurationMins":10080,"resetsAt":null}}}}}"#,
+        observed_at,
+    )
+    .expect("map key is the canonical limit ID");
+
+    assert_eq!(reading.envelopes[0].limit_id.as_deref(), Some("codex"));
+    assert_eq!(reading.envelopes[0].scope, RateLimitScope::GlobalCodex);
+}
+
+#[test]
+fn individual_spend_limit_is_exposed_as_an_account_window() {
+    let observed_at = Utc.timestamp_opt(1_785_000_000, 0).single().unwrap();
+    let reading = parse_rate_limits_response(
+        r#"{"id":2,"result":{"rateLimits":{"limitId":"workspace","primary":null,"secondary":null,"credits":null,"individualLimit":{"limit":"100.00","used":"25.00","remainingPercent":75,"resetsAt":1785000100}},"rateLimitsByLimitId":null}}"#,
+        observed_at,
+    )
+    .expect("individual spend control is current account usage");
+
+    let envelope = &reading.envelopes[0];
+    assert_eq!(envelope.limit_id.as_deref(), Some("workspace:individual"));
+    assert!(
+        envelope
+            .limit_name
+            .as_deref()
+            .is_some_and(|name| name.contains("25.00 of 100.00"))
+    );
+    let window = envelope
+        .limits
+        .primary
+        .as_ref()
+        .expect("spend limit window");
+    assert_eq!(window.used_percent, 25.0);
+    assert_eq!(window.remaining_percent, 75.0);
+}

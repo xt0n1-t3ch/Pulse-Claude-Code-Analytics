@@ -56,7 +56,7 @@ describe("UpdateBanner.svelte", () => {
     openAppReleasePage.mockReset();
     openAppReleasePage.mockResolvedValue(undefined);
     updaterCheck.mockReset();
-    relaunch.mockClear();
+    relaunch.mockReset().mockResolvedValue(undefined);
     localStorage.clear();
     setSearch("");
   });
@@ -187,6 +187,24 @@ describe("UpdateBanner.svelte", () => {
     await fireEvent.click(await findByText("Update"));
 
     await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(1));
+  });
+
+  it("retries only the restart after the signed update is already installed", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate());
+    const downloadAndInstall = vi.fn(async () => undefined);
+    updaterCheck.mockResolvedValue({ downloadAndInstall });
+    relaunch.mockRejectedValueOnce(new Error("restart blocked")).mockResolvedValueOnce(undefined);
+
+    const UpdateBanner = await loadBanner();
+    const { findByText } = render(UpdateBanner);
+
+    await findByText("Feature update");
+    await fireEvent.click(await findByText("Update"));
+    expect(await findByText("Retry restart")).toBeTruthy();
+    await fireEvent.click(await findByText("Retry restart"));
+
+    await waitFor(() => expect(relaunch).toHaveBeenCalledTimes(2));
+    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the release page when the updater channel has nothing", async () => {

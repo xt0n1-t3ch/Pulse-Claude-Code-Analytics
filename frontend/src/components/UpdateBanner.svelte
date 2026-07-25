@@ -15,7 +15,7 @@
   let opening = $state(false);
 
   /** In-app install lifecycle. `idle` also covers "not attempted yet". */
-  type InstallPhase = "idle" | "downloading" | "installing" | "failed";
+  type InstallPhase = "idle" | "downloading" | "installing" | "relaunching" | "failed" | "relaunch-failed";
   let phase = $state<InstallPhase>("idle");
   let downloaded = $state(0);
   let downloadTotal = $state(0);
@@ -24,7 +24,7 @@
   let progressPct = $derived(
     downloadTotal > 0 ? Math.min(100, (downloaded / downloadTotal) * 100) : 0,
   );
-  let busy = $derived(phase === "downloading" || phase === "installing");
+  let busy = $derived(phase === "downloading" || phase === "installing" || phase === "relaunching");
 
   /** Human label for the release age, e.g. "today", "3d ago". */
   function publishedLabel(iso: string | null): string | null {
@@ -183,13 +183,31 @@
           phase = "installing";
         }
       });
-      phase = "installing";
+      phase = "relaunching";
       // The Update click is the explicit effect checkpoint. Relaunch only
       // after the signed updater reports a successful install.
       const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
+      try {
+        await relaunch();
+      } catch (err) {
+        phase = "relaunch-failed";
+        installError = String(err);
+      }
     } catch (err) {
       phase = "failed";
+      installError = String(err);
+    }
+  }
+
+  async function retryRelaunch(): Promise<void> {
+    if (busy) return;
+    installError = null;
+    phase = "relaunching";
+    try {
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (err) {
+      phase = "relaunch-failed";
       installError = String(err);
     }
   }
@@ -271,7 +289,7 @@
       <div class="up-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progressPct)}>
         <div class="up-progress-head">
           <span class="up-progress-label">
-            {phase === "installing" ? "Installing…" : "Downloading…"}
+            {phase === "installing" ? "Installing…" : phase === "relaunching" ? "Restarting…" : "Downloading…"}
           </span>
           {#if downloadTotal > 0}
             <span class="up-progress-size mono">
@@ -291,7 +309,9 @@
 
     {#if installError}
       <p class="up-error" role="alert">
-        In-app install failed. You can open the release page instead.
+        {phase === "relaunch-failed"
+          ? "Update installed, but Pulse could not restart. Retry the restart."
+          : "In-app install failed. You can open the release page instead."}
       </p>
     {/if}
 
@@ -308,7 +328,7 @@
       >
         Skip
       </button>
-      {#if installError}
+      {#if installError && phase !== "relaunch-failed"}
         <button type="button" class="up-btn up-ghost" onclick={openRelease} disabled={opening}>
           {opening ? "Opening…" : "Open release"}
         </button>
@@ -316,11 +336,11 @@
       <button
         type="button"
         class="up-btn up-primary"
-        onclick={installUpdate}
+        onclick={phase === "relaunch-failed" ? retryRelaunch : installUpdate}
         disabled={busy}
-        aria-label="Download, install, and restart with the update"
+        aria-label={phase === "relaunch-failed" ? "Restart Pulse after the installed update" : "Download, install, and restart with the update"}
       >
-        {installError ? "Retry update" : busy ? "Updating…" : "Update"}
+        {phase === "relaunch-failed" ? "Retry restart" : installError ? "Retry update" : busy ? "Updating…" : "Update"}
       </button>
     </div>
   </aside>

@@ -484,7 +484,7 @@
       {#if $rateLimits?.usage && ($rateLimits.usage.scopes.length > 0 || $rateLimits.usage.credits)}
         <div class="quota-list">
           {#each $rateLimits.usage.scopes as scope (`${scope.kind}:${scope.id ?? scope.name ?? "default"}`)}
-            {#each scope.windows as window (`${window.window_minutes}:${window.resets_at ?? "none"}`)}
+            {#each scope.windows as window, windowIndex (`${windowIndex}:${window.window_minutes}:${window.resets_at ?? "none"}`)}
               <section class="quota-row">
                 <ProgressBar
                   label={limitLabel(window.window_minutes)}

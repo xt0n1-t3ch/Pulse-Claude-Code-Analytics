@@ -172,6 +172,37 @@ describe("Context.svelte", () => {
     });
   });
 
+  it("refreshes active context rows when a live snapshot advances", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([{ ...makeSession("live", "pulse"), context_used_tokens: 10_000, context_window_tokens: 200_000 }]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    render(Context);
+    await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalled());
+    getContextBreakdowns.mockClear();
+
+    sessions.set([{ ...makeSession("live", "pulse"), context_used_tokens: 20_000, context_window_tokens: 200_000 }]);
+    await tick();
+
+    await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalledTimes(1));
+  });
+
+  it("clears the detail instead of falling back to an idle snapshot", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([makeSession("live", "pulse")]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    const { container } = render(Context);
+    await waitFor(() => expect(container.querySelector(".hero-card")).not.toBeNull());
+    getContextBreakdown.mockClear();
+
+    sessions.set([{ ...makeSession("live", "pulse"), is_idle: true }]);
+    await tick();
+
+    await waitFor(() => expect(container.querySelector(".hero-card")).toBeNull());
+    expect(getContextBreakdown).not.toHaveBeenCalled();
+  });
+
   it("labels installed skills as estimated inventory instead of loaded context", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([makeSession("inventory", "pulse")]);

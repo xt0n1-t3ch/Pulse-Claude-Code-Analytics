@@ -28,6 +28,10 @@
     const list = $sessions.filter((session) => !session.is_idle);
     if (list.length === 0) {
       selectedSessionId = null;
+      breakdownRequest++;
+      ctx = null;
+      refreshing = false;
+      loaded = true;
       return;
     }
     const current = list.find((s) => s.session_id === selectedSessionId);
@@ -37,10 +41,11 @@
   });
 
   async function loadBreakdown(): Promise<void> {
+    if (!selectedSessionId) return;
     const request = ++breakdownRequest;
     refreshing = true;
     try {
-      const next = await getContextBreakdown(selectedSessionId ?? undefined);
+      const next = await getContextBreakdown(selectedSessionId);
       if (request === breakdownRequest) {
         ctx = next;
         loaded = true;
@@ -65,11 +70,16 @@
   });
 
   $effect(() => {
-    const activeIds = $sessions
+    const activeSessions = $sessions
       .filter((session) => !session.is_idle)
-      .map((session) => session.session_id)
-      .sort();
-    const key = `${$providerProfile.id}:${activeIds.join(",")}`;
+      .sort((a, b) => a.session_id.localeCompare(b.session_id));
+    const activeIds = activeSessions.map((session) => session.session_id);
+    const key = `${$providerProfile.id}:${activeSessions.map((session) => [
+      session.session_id,
+      session.context_used_tokens ?? 0,
+      session.context_window_tokens ?? 0,
+      session.tokens,
+    ].join(":")).join(",")}`;
     if (key === lastBreakdownKey) return;
     lastBreakdownKey = key;
     if (activeIds.length === 0) {
