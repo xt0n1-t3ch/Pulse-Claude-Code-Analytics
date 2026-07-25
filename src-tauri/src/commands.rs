@@ -197,10 +197,20 @@ fn codex_plan_key_from_tier(tier: DetectedPlanTier) -> &'static str {
 /// process: the Claude arm used to hard-code `discord_enabled = true`, so
 /// pausing Rich Presence never survived a restart.
 pub(crate) fn seed_discord_state_from_disk() {
+    seed_discord_state_for(cc_discord_presence::provider::load_active_provider());
+}
+
+/// Seeds the cache for an explicitly named provider.
+///
+/// A provider switch must seed for the provider the user just chose. Re-reading
+/// `pulse-provider.json` here would silently revert to the previous provider
+/// whenever that file could not be written, leaving the UI branded for one
+/// provider while presence and snapshots served another.
+pub(crate) fn seed_discord_state_for(provider: Provider) {
     let Ok(mut data) = shared().lock() else {
         return;
     };
-    data.active_provider = cc_discord_presence::provider::load_active_provider();
+    data.active_provider = provider;
     match data.active_provider {
         Provider::Claude => {
             if let Ok(config) = PresenceConfig::load_or_init() {
@@ -1175,29 +1185,30 @@ pub fn set_discord_display_prefs(
         show_systems,
     };
     // Both provider configs are kept in sync so the field switches mean the same
-    // thing after a provider swap. Only the ACTIVE provider's write is fatal:
-    // failing the whole command on a broken mirror made the UI roll the toggle
-    // back even though the user's own config had already been updated on disk.
-    let active = current_provider();
-    let claude_result = (|| -> Result<(), String> {
+    // thing after a provider swap, but the order matters. The ACTIVE provider is
+    // written first and its failure is fatal; the mirror is only attempted once
+    // the user's own config has landed. Writing both up front meant a failed
+    // active write still persisted the mirror, so the change reappeared after a
+    // provider swap even though the UI had reported it as failed and rolled back.
+    let save_claude = || -> Result<(), String> {
         let mut config = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
         apply_claude_display_prefs(&mut config, &prefs);
         config.save().map_err(|error| error.to_string())
-    })();
-    let codex_result = (|| -> Result<(), String> {
+    };
+    let save_codex = || -> Result<(), String> {
         let mut config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
         apply_codex_display_prefs(&mut config, &prefs);
         config.save().map_err(|error| error.to_string())
-    })();
+    };
 
-    match active {
+    match current_provider() {
         Provider::Claude => {
-            claude_result?;
-            log_mirror_error(Provider::Codex, codex_result);
+            save_claude()?;
+            log_mirror_error(Provider::Codex, save_codex());
         }
         Provider::Codex => {
-            codex_result?;
-            log_mirror_error(Provider::Claude, claude_result);
+            save_codex()?;
+            log_mirror_error(Provider::Claude, save_claude());
         }
     }
 
@@ -2187,13 +2198,12 @@ pub fn set_active_provider(provider: String) {
         if let Err(err) = cc_discord_presence::provider::save_active_provider(provider) {
             tracing::warn!(provider = provider.as_str(), error = %err, "failed to save active provider");
         }
-        if let Ok(mut d) = shared().lock() {
-            d.active_provider = provider;
-        }
         // The switch flags and field visibility belong to the provider, not to
         // the session — re-read them so the Discord view reflects the config
-        // that is now in charge instead of the previous provider's cache.
-        seed_discord_state_from_disk();
+        // that is now in charge instead of the previous provider's cache. Seed
+        // for the requested provider, not for whatever is on disk: if the write
+        // above failed, the user's choice still governs this process.
+        seed_discord_state_for(provider);
     }
 }
 

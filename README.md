@@ -24,13 +24,24 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.1</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.2</h2>
+
+- **Real reasoning effort** — Pulse reads the effort field Claude Code records on every assistant turn instead of falling back to a default, so a High or Extra High session stops reporting `Medium`.
+- **Honest usage provenance** — the quota footer names the OAuth handshake and plan it actually used, or says the reading came from cache, instead of labelling everything `api`.
+- **Rich Presence that sticks** — the master switch and field toggles persist for Claude, survive a restart, and are written atomically so a background read can no longer reset them to defaults.
+- **Fields that tell the truth** — provider-unsupported fields render as unavailable rather than offering a switch that silently reverts.
+- **One panel signature** — Sessions, Context, and the shared stat tiles share a lit edge, sheen, and hover lift driven by tokens rather than per-view copies.
+
+<details>
+<summary>Previous v1.6.1 highlights</summary>
 
 - **Claude Opus 5 priced correctly** — the dateless `claude-opus-5` id now resolves to the official $5/$25 rates with 1M GA context and no long-context surcharge, instead of falling through to legacy Opus pricing.
 - **True window totals** — Cost Analysis and Reports aggregate the entire selected window in SQL rather than the newest page of sessions, so 7d/30d/90d/1y agree across views.
 - **In-app updates** — signed Tauri updater artifacts install a new release from inside Pulse instead of sending you to the Releases page.
 - **Distinct analytical views** — Reports leads with a daily cost timeline and marked inflections; Cost Analysis is a budget cockpit with its own shape.
 - **Theme-true Discord preview** — the live Rich Presence card and its header state resolve through semantic tokens in both Dark and Light.
+
+</details>
 
 <details>
 <summary>Previous v1.6.0 highlights</summary>
@@ -43,7 +54,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 </details>
 
-**[Download v1.6.1](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.6.2](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 

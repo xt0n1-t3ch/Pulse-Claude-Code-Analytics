@@ -341,6 +341,10 @@ impl UsageManager {
         }
 
         if let Some(cached) = Self::try_read_file_cache() {
+            // Load credentials first: on a fresh launch with a warm cache this is
+            // the first thing that runs, and without them the label degrades to a
+            // bare "Cached" that never recovers until a network fetch happens.
+            self.ensure_credentials();
             // No request was made this cycle; say so instead of implying a live read.
             self.last_usage_origin = Some(UsageOrigin {
                 auth: UsageAuth::Cache,
@@ -348,7 +352,8 @@ impl UsageManager {
                 subscription: self
                     .credentials
                     .as_ref()
-                    .and_then(|creds| creds.claude_ai_oauth.subscription_type.clone()),
+                    .and_then(|creds| creds.claude_ai_oauth.subscription_type.clone())
+                    .filter(|plan| !plan.trim().is_empty()),
             });
             self.cached_usage = Some(cached.clone());
             self.last_fetch = Some(Instant::now());

@@ -1521,11 +1521,19 @@ fn infer_effort(acc: &SessionAccumulator) -> ReasoningEffort {
 
 /// Apply the top-level `effort` field Claude Code writes on transcript lines.
 ///
-/// Latest value wins, so switching the selector mid-session is reflected on the
-/// next turn. Sidechain (subagent) lines are only honoured while no main-chain
-/// line has supplied a value, because a subagent's `effort` override describes
-/// that subagent, not the session the operator is looking at.
+/// Latest main-chain value wins, so switching the selector mid-session is
+/// reflected on the next turn.
+///
+/// Sidechain lines are ignored outright. A subagent may run at its own effort
+/// override, and those lines are interleaved into the parent transcript — a
+/// subagent that answers before the parent's first turn would otherwise define
+/// the parent's tier for the whole session. Nothing displays a subagent's own
+/// effort today (`SubagentInfo` carries model, activity, tokens and cost), so
+/// dropping it costs no information and removes an ordering-dependent lie.
 fn apply_effort_field(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
+    if msg.is_sidechain {
+        return;
+    }
     let Some(raw) = msg.effort.as_deref() else {
         return;
     };
@@ -1533,14 +1541,7 @@ fn apply_effort_field(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
         return;
     };
 
-    if msg.is_sidechain {
-        if acc.effort_from_main_chain {
-            return;
-        }
-    } else {
-        acc.effort_from_main_chain = true;
-    }
-
+    acc.effort_from_main_chain = true;
     acc.reasoning_effort = effort;
     acc.reasoning_effort_explicitly_set = true;
 }
@@ -2380,11 +2381,18 @@ mod tests {
     }
 
     #[test]
-    fn sidechain_effort_is_used_when_no_main_chain_line_exists() {
+    fn an_early_sidechain_does_not_define_the_parent_effort() {
+        // A subagent can answer before the parent's first turn. Honouring its
+        // override here would report the subagent's tier as the session's for
+        // the whole period before the parent responds.
         let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
-        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("xhigh"), true));
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("low"), true));
 
-        assert_eq!(acc.reasoning_effort, ReasoningEffort::ExtraHigh);
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::Medium);
+        assert!(!acc.reasoning_effort_explicitly_set);
+
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
     }
 
     #[test]
