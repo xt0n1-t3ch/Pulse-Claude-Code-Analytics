@@ -84,6 +84,15 @@ pub struct ExtraUsage {
 struct UsageCacheFile {
     fetched_at_unix: u64,
     data: UsageData,
+    /// Subscription tier of the account these figures were fetched for.
+    ///
+    /// Stored with the numbers rather than read from the current credentials:
+    /// a cache written under Pro and later read after signing in as Max would
+    /// otherwise be labelled `Cached · Max` while the figures still describe
+    /// Pro. Absent in caches written before this field existed, in which case
+    /// the tier is simply not claimed.
+    #[serde(default)]
+    subscription: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,19 +302,23 @@ impl UsageManager {
         }
     }
 
-    fn try_read_file_cache() -> Option<UsageData> {
+    /// Returns the cached figures together with the subscription they were
+    /// fetched for, so the caller can report provenance without borrowing the
+    /// tier from whatever credentials happen to be loaded now.
+    fn try_read_file_cache() -> Option<(UsageData, Option<String>)> {
         let path = crate::config::usage_cache_path();
         let raw = std::fs::read_to_string(path).ok()?;
         let cache: UsageCacheFile = serde_json::from_str(&raw).ok()?;
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
         if now_unix.saturating_sub(cache.fetched_at_unix) < USAGE_CACHE_TTL.as_secs() {
-            Some(cache.data.normalize_cached_units())
+            let subscription = cache.subscription.filter(|plan| !plan.trim().is_empty());
+            Some((cache.data.normalize_cached_units(), subscription))
         } else {
             None
         }
     }
 
-    fn write_file_cache(data: &UsageData) {
+    fn write_file_cache(data: &UsageData, subscription: Option<String>) {
         let path = crate::config::usage_cache_path();
         let fetched_at_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -314,6 +327,7 @@ impl UsageManager {
         let Ok(json) = serde_json::to_string(&UsageCacheFile {
             fetched_at_unix,
             data: data.clone(),
+            subscription,
         }) else {
             return;
         };
@@ -340,20 +354,13 @@ impl UsageManager {
             return Some(usage.clone());
         }
 
-        if let Some(cached) = Self::try_read_file_cache() {
-            // Load credentials first: on a fresh launch with a warm cache this is
-            // the first thing that runs, and without them the label degrades to a
-            // bare "Cached" that never recovers until a network fetch happens.
-            self.ensure_credentials();
-            // No request was made this cycle; say so instead of implying a live read.
+        if let Some((cached, cached_subscription)) = Self::try_read_file_cache() {
+            // No request was made this cycle; say so instead of implying a live
+            // read, and name only the tier stored alongside these very figures.
             self.last_usage_origin = Some(UsageOrigin {
                 auth: UsageAuth::Cache,
                 endpoint: crate::config::usage_cache_path().display().to_string(),
-                subscription: self
-                    .credentials
-                    .as_ref()
-                    .and_then(|creds| creds.claude_ai_oauth.subscription_type.clone())
-                    .filter(|plan| !plan.trim().is_empty()),
+                subscription: cached_subscription,
             });
             self.cached_usage = Some(cached.clone());
             self.last_fetch = Some(Instant::now());
@@ -498,7 +505,12 @@ impl UsageManager {
                         self.last_fetch = Some(Instant::now());
                         self.last_error_hint = None;
                         self.rate_limit_until = None;
-                        Self::write_file_cache(&usage);
+                        Self::write_file_cache(
+                            &usage,
+                            self.last_usage_origin
+                                .as_ref()
+                                .and_then(|origin| origin.subscription.clone()),
+                        );
                         Some(usage)
                     }
                     Err(e) => {

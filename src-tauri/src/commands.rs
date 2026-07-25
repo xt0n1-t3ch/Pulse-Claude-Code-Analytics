@@ -399,7 +399,7 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                     }
                     let discord_enabled = codex_config.presence_enabled;
 
-                    apply_codex_display_prefs(&mut codex_config, &prefs);
+                    apply_codex_display_prefs(&mut codex_config, &prefs, CreditsMirror::Apply);
 
                     let sessions_roots = cc_discord_presence::codex::config::sessions_paths();
                     let active = codex_session::collect_active_sessions_multi(
@@ -1195,9 +1195,14 @@ pub fn set_discord_display_prefs(
         apply_claude_display_prefs(&mut config, &prefs);
         config.save().map_err(|error| error.to_string())
     };
+    let credits = if current_provider() == Provider::Codex {
+        CreditsMirror::Apply
+    } else {
+        CreditsMirror::Preserve
+    };
     let save_codex = || -> Result<(), String> {
         let mut config = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
-        apply_codex_display_prefs(&mut config, &prefs);
+        apply_codex_display_prefs(&mut config, &prefs, credits);
         config.save().map_err(|error| error.to_string())
     };
 
@@ -1351,7 +1356,7 @@ fn build_discord_presence_preview(data: &CachedData) -> DiscordPresencePreview {
         }
         Provider::Codex => {
             let mut config = CodexPresenceConfig::load_or_init().unwrap_or_default();
-            apply_codex_display_prefs(&mut config, &data.discord_prefs);
+            apply_codex_display_prefs(&mut config, &data.discord_prefs, CreditsMirror::Apply);
             let sessions = match &data.sessions {
                 ActiveSessions::Codex(sessions) => sessions.as_slice(),
                 _ => &[],
@@ -1373,7 +1378,17 @@ fn apply_claude_display_prefs(config: &mut PresenceConfig, prefs: &DiscordDispla
     config.privacy.show_systems = prefs.show_systems;
 }
 
-fn apply_codex_display_prefs(config: &mut CodexPresenceConfig, prefs: &DiscordDisplayPrefs) {
+/// Applies the shared field switches to the Codex config.
+///
+/// `credits` is passed separately because it is Codex-only. A payload composed
+/// while Claude is active always carries `show_credits = false` — Claude has no
+/// such field — so copying it here silently disabled Credits on the Codex side
+/// every time an unrelated Claude toggle was saved.
+fn apply_codex_display_prefs(
+    config: &mut CodexPresenceConfig,
+    prefs: &DiscordDisplayPrefs,
+    credits: CreditsMirror,
+) {
     config.privacy.show_project_name = prefs.show_project;
     config.privacy.show_git_branch = prefs.show_branch;
     config.privacy.show_model = prefs.show_model;
@@ -1381,9 +1396,20 @@ fn apply_codex_display_prefs(config: &mut CodexPresenceConfig, prefs: &DiscordDi
     config.privacy.show_tokens = prefs.show_tokens;
     config.privacy.show_cost = prefs.show_cost;
     config.privacy.show_limits = prefs.show_limits;
-    config.privacy.show_credits = prefs.show_credits;
+    if credits == CreditsMirror::Apply {
+        config.privacy.show_credits = prefs.show_credits;
+    }
     config.privacy.show_context = prefs.show_context;
     config.privacy.show_systems = prefs.show_systems;
+}
+
+/// Whether the incoming payload actually carries a meaningful `show_credits`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreditsMirror {
+    /// Composed while Codex was active — the value is the user's choice.
+    Apply,
+    /// Composed while a provider without Credits was active — keep what Codex has.
+    Preserve,
 }
 
 fn claude_display_prefs(config: &PresenceConfig) -> DiscordDisplayPrefs {
@@ -3702,6 +3728,42 @@ mod tests {
         assert!(
             !claude.privacy.show_git_branch,
             "the Claude config must keep the change even though the mirror write failed"
+        );
+    }
+
+    #[test]
+    fn saving_claude_toggles_preserves_the_codex_credits_preference() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("credits-mirror");
+
+        // Codex owns Credits and has it on.
+        super::set_active_provider("codex".to_string());
+        super::set_discord_display_prefs(
+            true, true, true, true, true, true, true, true, true, true,
+        )
+        .expect("save under codex");
+        assert!(
+            TestCodexPresenceConfig::load_or_init()
+                .expect("codex config")
+                .privacy
+                .show_credits
+        );
+
+        // Claude has no Credits field, so its payload always carries `false`.
+        // Saving an unrelated Claude toggle must not disable Codex Credits.
+        super::set_active_provider("claude".to_string());
+        super::set_discord_display_prefs(
+            true, false, true, true, true, true, true, false, true, true,
+        )
+        .expect("save under claude");
+
+        let codex = TestCodexPresenceConfig::load_or_init().expect("codex config");
+        assert!(
+            codex.privacy.show_credits,
+            "a Claude-side save must not clobber a Codex-only preference"
+        );
+        assert!(
+            !codex.privacy.show_git_branch,
+            "shared fields still mirror across providers"
         );
     }
 
