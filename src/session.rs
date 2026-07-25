@@ -470,6 +470,9 @@ struct SessionAccumulator {
     activity_tracker: ActivityTracker,
     reasoning_effort: ReasoningEffort,
     reasoning_effort_explicitly_set: bool,
+    /// True once a main-chain (non-sidechain) line supplied an effort value.
+    /// Locks out subagent effort overrides from rewriting the session's tier.
+    effort_from_main_chain: bool,
     has_thinking_blocks: bool,
     /// Speed of the most recent assistant turn (for display).
     speed: Speed,
@@ -915,6 +918,19 @@ struct JsonlMessage {
     message: Option<JsonlMessageContent>,
     #[serde(default)]
     is_api_error_message: bool,
+    /// Reasoning-effort tier the turn actually ran at, written by Claude Code as a
+    /// **top-level** field on every `assistant` line (`"effort": "high"`), sibling to
+    /// `type`/`message`. Values match `ReasoningEffort::from_api`
+    /// (`low|medium|high|xhigh|max`). This is the only filesystem signal for the
+    /// composer's effort selector — `~/.claude/settings.json` has no `effortLevel`
+    /// key in current builds, so without this field every session reads as Medium.
+    #[serde(default)]
+    effort: Option<String>,
+    /// `true` on subagent turns. Subagents can run at their own effort override, so
+    /// their `effort` must not overwrite the parent session's selector.
+    #[serde(rename = "isSidechain")]
+    #[serde(default)]
+    is_sidechain: bool,
     #[serde(rename = "compactMetadata")]
     #[serde(default)]
     compact_metadata: Option<CompactMetadata>,
@@ -1309,6 +1325,10 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
         acc.session_id = Some(session_id.to_string());
     }
 
+    // Read before any early return: `effort` is a top-level field and the line
+    // carrying it (compact boundaries, lines without `message`) may bail below.
+    apply_effort_field(acc, msg);
+
     let msg_type = msg.msg_type.as_deref().unwrap_or("");
 
     if msg_type == "system" && msg.subtype.as_deref() == Some("compact_boundary") {
@@ -1388,7 +1408,14 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
         }
         "user" => {
             acc.has_thinking_blocks = false;
-            extract_reasoning_effort(acc, message);
+            // The legacy system-reminder scrape is a fallback for transcripts
+            // that predate the top-level `effort` field. Once a main-chain
+            // assistant line has supplied the authoritative value, a later
+            // reminder — often carried by an interleaved sidechain user event
+            // describing a subagent — must not overwrite it.
+            if !acc.effort_from_main_chain {
+                extract_reasoning_effort(acc, message);
+            }
             if let Some(ref content_val) = message.content {
                 process_content_for_activity(acc, content_val, observed_at);
             } else {
@@ -1486,20 +1513,44 @@ fn process_content_for_activity(
 
 /// Return the effort we are actually confident about.
 ///
-/// Claude Desktop's in-composer effort selector (Low/Medium/High/Extra High/Max)
-/// is kept in the Electron app's memory. It is NOT written to the JSONL
-/// transcript, to `~/.claude/settings.json`, nor to the Local Storage LevelDB —
-/// so if the user picks "Extra High" in the composer we have no filesystem
-/// signal to read it from.
+/// Current Claude Code builds DO record the composer's effort selector: every
+/// `assistant` transcript line carries a top-level `"effort"` field
+/// (`low|medium|high|xhigh|max`), which `apply_effort_field` reads. That is the
+/// authoritative source. The older `<reasoning_effort>` / "reasoning effort
+/// level: X" system-reminder scraping is kept as a fallback for legacy
+/// transcripts, and `settings.json`'s `effortLevel` seeds the initial default.
 ///
-/// Previously this function silently upgraded `Medium → High` whenever thinking
-/// blocks appeared, which meant Pulse would display "High" seconds into a
-/// session even if the user had actually chosen "Extra High". Confidently
-/// wrong is worse than honest uncertainty, so we now return the accumulator's
-/// explicit value (from a `<reasoning_effort>` tag in the JSONL) or the
-/// `effortLevel` default loaded from `settings.json`. No more inference.
+/// No inference: this function never upgrades `Medium → High` just because
+/// thinking blocks appeared. Confidently wrong is worse than honest uncertainty.
 fn infer_effort(acc: &SessionAccumulator) -> ReasoningEffort {
     acc.reasoning_effort
+}
+
+/// Apply the top-level `effort` field Claude Code writes on transcript lines.
+///
+/// Latest main-chain value wins, so switching the selector mid-session is
+/// reflected on the next turn.
+///
+/// Sidechain lines are ignored outright. A subagent may run at its own effort
+/// override, and those lines are interleaved into the parent transcript — a
+/// subagent that answers before the parent's first turn would otherwise define
+/// the parent's tier for the whole session. Nothing displays a subagent's own
+/// effort today (`SubagentInfo` carries model, activity, tokens and cost), so
+/// dropping it costs no information and removes an ordering-dependent lie.
+fn apply_effort_field(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
+    if msg.is_sidechain {
+        return;
+    }
+    let Some(raw) = msg.effort.as_deref() else {
+        return;
+    };
+    let Some(effort) = ReasoningEffort::from_api(raw) else {
+        return;
+    };
+
+    acc.effort_from_main_chain = true;
+    acc.reasoning_effort = effort;
+    acc.reasoning_effort_explicitly_set = true;
 }
 
 /// Extract reasoning effort level from system-reminder text injected into user messages.
@@ -2259,6 +2310,141 @@ mod tests {
         assert_eq!(json, "\"extra_high\"");
         let parsed: ReasoningEffort = serde_json::from_str("\"extra_high\"").unwrap();
         assert_eq!(parsed, ReasoningEffort::ExtraHigh);
+    }
+
+    /// Builds an `assistant` transcript line in the exact shape Claude Code writes
+    /// today: the effort selector value lives in a **top-level** `effort` field,
+    /// sibling to `type`/`message`, not inside a system-reminder text block.
+    fn assistant_line_with_effort(effort: Option<&str>, sidechain: bool) -> JsonlMessage {
+        let mut line = serde_json::json!({
+            "type": "assistant",
+            "isSidechain": sidechain,
+            "message": {
+                "model": "claude-opus-5",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}]
+            }
+        });
+        if let Some(effort) = effort {
+            line["effort"] = serde_json::json!(effort);
+        }
+        serde_json::from_value(line).unwrap()
+    }
+
+    #[test]
+    fn assistant_effort_field_drives_reasoning_effort() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
+        assert!(acc.reasoning_effort_explicitly_set);
+        assert_eq!(infer_effort(&acc), ReasoningEffort::High);
+    }
+
+    #[test]
+    fn assistant_effort_field_maps_every_api_tier() {
+        for (raw, expected) in [
+            ("low", ReasoningEffort::Low),
+            ("medium", ReasoningEffort::Medium),
+            ("high", ReasoningEffort::High),
+            ("xhigh", ReasoningEffort::ExtraHigh),
+            ("max", ReasoningEffort::Max),
+        ] {
+            let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Low);
+            process_jsonl_message(&mut acc, &assistant_line_with_effort(Some(raw), false));
+            assert_eq!(acc.reasoning_effort, expected, "raw effort {raw}");
+        }
+    }
+
+    #[test]
+    fn latest_assistant_effort_wins_when_user_switches_mid_session() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("xhigh"), false));
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::ExtraHigh);
+    }
+
+    #[test]
+    fn assistant_line_without_effort_preserves_last_known_effort() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(None, false));
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
+        assert!(acc.reasoning_effort_explicitly_set);
+    }
+
+    #[test]
+    fn sidechain_effort_never_shadows_the_main_chain_selector() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+        // A subagent spawned with an explicit `effort: low` override must not
+        // rewrite what the operator picked for the parent session.
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("low"), true));
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn an_early_sidechain_does_not_define_the_parent_effort() {
+        // A subagent can answer before the parent's first turn. Honouring its
+        // override here would report the subagent's tier as the session's for
+        // the whole period before the parent responds.
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("low"), true));
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::Medium);
+        assert!(!acc.reasoning_effort_explicitly_set);
+
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn a_legacy_reminder_cannot_override_an_observed_effort_field() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+
+        // A later user event carrying the old system-reminder text — typically
+        // describing a subagent — must not rewrite the authoritative value.
+        let reminder: JsonlMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "<system-reminder>reasoning effort level: low</system-reminder>"}]
+            }
+        }))
+        .unwrap();
+        process_jsonl_message(&mut acc, &reminder);
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn a_legacy_reminder_still_applies_to_transcripts_without_the_effort_field() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        let reminder: JsonlMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "<system-reminder>reasoning effort level: max</system-reminder>"}]
+            }
+        }))
+        .unwrap();
+        process_jsonl_message(&mut acc, &reminder);
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::Max);
+    }
+
+    #[test]
+    fn unknown_effort_string_leaves_effort_untouched() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("turbo"), false));
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::Medium);
+        assert!(!acc.reasoning_effort_explicitly_set);
     }
 
     #[test]

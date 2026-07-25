@@ -97,6 +97,27 @@ impl DiscordPresence {
         api_usage: Option<&UsageData>,
         config: &PresenceConfig,
     ) -> Result<()> {
+        // The persisted master switch is enforced here, in the one place that
+        // publishes, so every publisher honours it: the Pulse GUI, the headless
+        // daemon, and the `claude` wrapper. Checking it only in the GUI let an
+        // external publisher keep broadcasting while the GUI reported "paused".
+        if !config.presence_enabled {
+            self.last_status = "Rich Presence disabled".to_string();
+            if self.client.is_some() {
+                let _ = self.clear_activity();
+            }
+            // Drop the dedup and heartbeat state along with the activity.
+            // Keeping them would make the first update after re-enabling look
+            // like an already-published payload, so `should_skip_publish` would
+            // suppress it and Discord would stay blank until the 30s heartbeat
+            // expired.
+            self.last_sent = None;
+            self.last_publish_at = None;
+            self.last_heartbeat_at = None;
+            self.idle_start_epoch = None;
+            return Ok(());
+        }
+
         if self.client_id.is_none() {
             self.last_status = "Missing CC_DISCORD_CLIENT_ID".to_string();
             return Ok(());

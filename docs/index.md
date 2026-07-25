@@ -21,6 +21,13 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
+## v1.6.2 docs refresh
+
+- Recorded that the reasoning-effort tier is read from the top-level `effort` field Claude Code writes on each `assistant` transcript line, replacing the legacy system-reminder scrape that made every session read `Medium`.
+- Documented usage provenance: Pulse authenticates to the usage endpoint with an OAuth bearer token from `~/.claude/.credentials.json`, never an API key, and the footer now names the observed handshake and plan or reports a cache hit.
+- Noted Claude presence config schema **v6**, which persists the master Rich Presence switch, and the move to atomic config writes shared with the Codex writer.
+- Kept the release as a SemVer patch because v1.6.2 corrects detection, persistence, and presentation without changing Tauri command signatures or the analytics database schema.
+
 ## v1.6.1 docs refresh
 
 - Recorded the Claude Opus 5 pricing correction: a single-segment family version now parses, so `claude-opus-5` bills at the official $5/$25/$6.25/$0.50 rates with 1M GA context and no long-context surcharge.
@@ -105,7 +112,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.6.1**
-- Schema: **Claude config v5 / Codex config v13 / Pulse analytics DB v5**
+- App release: **v1.6.2**
+- Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v5**
 - Last docs refresh: 2026-07-16 (event-driven snapshots, semantic Codex usage and Credits, responsive UI, and immutable canonical-core promotion)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

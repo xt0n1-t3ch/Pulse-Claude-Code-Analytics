@@ -46,8 +46,22 @@
     return "Account usage";
   }
 
+  /**
+   * Humanises the provenance string the backend observed. The backend already
+   * emits a real label for the network path ("OAuth · Max"); these are the
+   * remaining raw keys for the local fallbacks, which previously leaked as
+   * bare lowercase tokens.
+   */
+  const SOURCE_LABELS: Record<string, string> = {
+    jsonl: "Local transcripts",
+    statusline: "Statusline",
+    session: "Live session telemetry",
+    cached: "Cached reading",
+  };
+
   function sourceLabel(source: string): string {
-    return source.startsWith("Codex JSONL") ? "Codex local telemetry" : source;
+    if (source.startsWith("Codex JSONL")) return "Codex local telemetry";
+    return SOURCE_LABELS[source.trim().toLowerCase()] ?? source;
   }
 
   function creditsDisplay(balance: string | null, unlimited: boolean): string {

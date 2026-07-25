@@ -191,7 +191,7 @@ pub fn doctor(config: &PresenceConfig) -> Result<u8> {
 ///
 /// This is the GUI-era replacement for the old `run_foreground_tui` — all
 /// visual analytics live in the Pulse GUI now; the CLI only pumps Discord.
-fn run_daemon(config: PresenceConfig, runtime: RuntimeSettings) -> Result<()> {
+fn run_daemon(mut config: PresenceConfig, runtime: RuntimeSettings) -> Result<()> {
     let stop = install_stop_signal()?;
     let mut git_cache = GitBranchCache::new(Duration::from_secs(30));
     let mut parse_cache = SessionParseCache::default();
@@ -208,7 +208,7 @@ fn run_daemon(config: PresenceConfig, runtime: RuntimeSettings) -> Result<()> {
         let (_, cached_usage) = tick_session_cycle(
             &projects_roots,
             &runtime,
-            &config,
+            &mut config,
             &mut git_cache,
             &mut parse_cache,
             &mut metrics_tracker,
@@ -247,13 +247,21 @@ fn run_daemon(config: PresenceConfig, runtime: RuntimeSettings) -> Result<()> {
 fn tick_session_cycle(
     projects_roots: &[PathBuf],
     runtime: &RuntimeSettings,
-    config: &PresenceConfig,
+    config: &mut PresenceConfig,
     git_cache: &mut GitBranchCache,
     parse_cache: &mut SessionParseCache,
     metrics_tracker: &mut MetricsTracker,
     usage_mgr: &mut UsageManager,
     discord: &mut DiscordPresence,
 ) -> Result<(Vec<ClaudeSessionSnapshot>, Option<crate::usage::UsageData>)> {
+    // Re-read the config every cycle. The Pulse GUI writes presence toggles to
+    // this same file, and a long-lived publisher that kept its startup copy
+    // would keep broadcasting after the operator paused Rich Presence.
+    if let Ok(fresh) = PresenceConfig::load_or_init() {
+        *config = fresh;
+    }
+    let config = &*config;
+
     let ide_workspaces = config::read_ide_workspace_folders();
     let mut sessions = collect_active_sessions_multi(
         projects_roots,
@@ -282,7 +290,7 @@ fn tick_session_cycle(
 }
 
 fn run_claude_wrapper(
-    config: PresenceConfig,
+    mut config: PresenceConfig,
     runtime: RuntimeSettings,
     args: Vec<String>,
 ) -> Result<()> {
@@ -306,7 +314,7 @@ fn run_claude_wrapper(
         tick_session_cycle(
             &projects_roots,
             &runtime,
-            &config,
+            &mut config,
             &mut git_cache,
             &mut parse_cache,
             &mut metrics_tracker,

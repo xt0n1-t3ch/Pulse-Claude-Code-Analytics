@@ -312,12 +312,13 @@ fn remove_instance_metadata_if_owned(expected_pid: u32, path: &PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
+    /// Shared with every other module that redirects `CLAUDE_HOME`; see
+    /// `config::home_env_lock`.
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::config::home_env_lock()
     }
 
     #[test]

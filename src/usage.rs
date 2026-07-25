@@ -84,6 +84,15 @@ pub struct ExtraUsage {
 struct UsageCacheFile {
     fetched_at_unix: u64,
     data: UsageData,
+    /// Subscription tier of the account these figures were fetched for.
+    ///
+    /// Stored with the numbers rather than read from the current credentials:
+    /// a cache written under Pro and later read after signing in as Max would
+    /// otherwise be labelled `Cached · Max` while the figures still describe
+    /// Pro. Absent in caches written before this field existed, in which case
+    /// the tier is simply not claimed.
+    #[serde(default)]
+    subscription: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,9 +203,73 @@ pub fn detect_plan_key(
     None
 }
 
+/// How the usage figures on screen were actually obtained.
+///
+/// Recorded at the moment a request succeeds, never inferred from configuration
+/// or defaults. Pulse used to label every quota reading `api`, which was wrong on
+/// two counts: it is not an API-key call, and the numbers may not have come from
+/// the network at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageOrigin {
+    /// Auth scheme actually presented on the wire.
+    pub auth: UsageAuth,
+    /// Host actually queried.
+    pub endpoint: String,
+    /// Subscription tier reported by the credentials Pulse authenticated with.
+    pub subscription: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageAuth {
+    /// `Authorization: Bearer <access_token>` from `~/.claude/.credentials.json`,
+    /// with the `anthropic-beta: oauth-2025-04-20` header. The only scheme the
+    /// Claude usage endpoint accepts today.
+    OAuth,
+    /// Served from Pulse's own on-disk cache, so no request was made this cycle.
+    Cache,
+}
+
+impl UsageOrigin {
+    /// Short label for the UI. Names the scheme, then the plan when known.
+    pub fn label(&self) -> String {
+        let scheme = match self.auth {
+            UsageAuth::OAuth => "OAuth",
+            UsageAuth::Cache => "Cached",
+        };
+        match self.subscription.as_deref().map(pretty_subscription) {
+            Some(plan) => format!("{scheme} · {plan}"),
+            None => scheme.to_string(),
+        }
+    }
+}
+
+/// Host of the usage endpoint, derived from `USAGE_API_URL` so the reported
+/// provenance cannot drift away from the URL actually called.
+fn usage_endpoint_host() -> &'static str {
+    USAGE_API_URL
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(USAGE_API_URL)
+        .split('/')
+        .next()
+        .unwrap_or(USAGE_API_URL)
+}
+
+/// Title-cases the raw `subscriptionType` (`max`, `pro`, `team`) for display.
+fn pretty_subscription(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let mut chars = trimmed.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => trimmed.to_string(),
+    }
+}
+
 pub struct UsageManager {
     cached_usage: Option<UsageData>,
     last_fetch: Option<Instant>,
+    /// Set only when a request or cache read actually produced the figures.
+    last_usage_origin: Option<UsageOrigin>,
     credentials: Option<CredentialsFile>,
     subscription_type_cache: Option<String>,
     last_refresh_attempt: Option<Instant>,
@@ -217,6 +290,7 @@ impl UsageManager {
         Self {
             cached_usage: None,
             last_fetch: None,
+            last_usage_origin: None,
             credentials: None,
             subscription_type_cache: None,
             last_refresh_attempt: None,
@@ -228,19 +302,23 @@ impl UsageManager {
         }
     }
 
-    fn try_read_file_cache() -> Option<UsageData> {
+    /// Returns the cached figures together with the subscription they were
+    /// fetched for, so the caller can report provenance without borrowing the
+    /// tier from whatever credentials happen to be loaded now.
+    fn try_read_file_cache() -> Option<(UsageData, Option<String>)> {
         let path = crate::config::usage_cache_path();
         let raw = std::fs::read_to_string(path).ok()?;
         let cache: UsageCacheFile = serde_json::from_str(&raw).ok()?;
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
         if now_unix.saturating_sub(cache.fetched_at_unix) < USAGE_CACHE_TTL.as_secs() {
-            Some(cache.data.normalize_cached_units())
+            let subscription = cache.subscription.filter(|plan| !plan.trim().is_empty());
+            Some((cache.data.normalize_cached_units(), subscription))
         } else {
             None
         }
     }
 
-    fn write_file_cache(data: &UsageData) {
+    fn write_file_cache(data: &UsageData, subscription: Option<String>) {
         let path = crate::config::usage_cache_path();
         let fetched_at_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -249,6 +327,7 @@ impl UsageManager {
         let Ok(json) = serde_json::to_string(&UsageCacheFile {
             fetched_at_unix,
             data: data.clone(),
+            subscription,
         }) else {
             return;
         };
@@ -275,7 +354,14 @@ impl UsageManager {
             return Some(usage.clone());
         }
 
-        if let Some(cached) = Self::try_read_file_cache() {
+        if let Some((cached, cached_subscription)) = Self::try_read_file_cache() {
+            // No request was made this cycle; say so instead of implying a live
+            // read, and name only the tier stored alongside these very figures.
+            self.last_usage_origin = Some(UsageOrigin {
+                auth: UsageAuth::Cache,
+                endpoint: crate::config::usage_cache_path().display().to_string(),
+                subscription: cached_subscription,
+            });
             self.cached_usage = Some(cached.clone());
             self.last_fetch = Some(Instant::now());
             self.rate_limit_until = None;
@@ -311,6 +397,30 @@ impl UsageManager {
             return None;
         }
         self.last_error_hint.clone()
+    }
+
+    /// How the figures currently held by this manager were obtained.
+    ///
+    /// `None` until something actually succeeds — a failed or rate-limited
+    /// attempt must never produce a provenance claim.
+    pub fn last_usage_origin(&self) -> Option<&UsageOrigin> {
+        self.last_usage_origin.as_ref()
+    }
+
+    /// Describes the request `call_usage_api` just made. The scheme is not a
+    /// guess: that function has exactly one code path, an OAuth bearer token
+    /// plus the `anthropic-beta: oauth-2025-04-20` header. The subscription is
+    /// read back from the very credentials that signed the request.
+    fn observed_oauth_origin(&self) -> UsageOrigin {
+        UsageOrigin {
+            auth: UsageAuth::OAuth,
+            endpoint: usage_endpoint_host().to_string(),
+            subscription: self
+                .credentials
+                .as_ref()
+                .and_then(|creds| creds.claude_ai_oauth.subscription_type.clone())
+                .filter(|plan| !plan.trim().is_empty()),
+        }
     }
 
     /// Returns a clone of the current OAuth access token, if credentials are loaded.
@@ -388,11 +498,19 @@ impl UsageManager {
                 match serde_json::from_str::<ApiUsageData>(&body) {
                     Ok(parsed) => {
                         let usage: UsageData = parsed.into();
+                        // Recorded here, on an observed 200, so the footer states
+                        // the handshake that actually produced these numbers.
+                        self.last_usage_origin = Some(self.observed_oauth_origin());
                         self.cached_usage = Some(usage.clone());
                         self.last_fetch = Some(Instant::now());
                         self.last_error_hint = None;
                         self.rate_limit_until = None;
-                        Self::write_file_cache(&usage);
+                        Self::write_file_cache(
+                            &usage,
+                            self.last_usage_origin
+                                .as_ref()
+                                .and_then(|origin| origin.subscription.clone()),
+                        );
                         Some(usage)
                     }
                     Err(e) => {
@@ -773,6 +891,120 @@ pub fn spawn_extra_usage_toggle_cycle(access_token: String, session_key: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Redirects `CLAUDE_HOME` at a throwaway directory for the caller's scope.
+    ///
+    /// A successful `handle_usage_response` writes the usage file cache. Without
+    /// this, running the suite on a developer machine would stamp fixture quota
+    /// figures into the real `~/.claude/discord-presence-usage-cache.json`, and
+    /// Pulse would display those invented numbers for the next five minutes.
+    struct IsolatedClaudeHome {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        _dir: tempfile::TempDir,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl IsolatedClaudeHome {
+        fn new() -> Self {
+            let guard = crate::config::home_env_lock()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let dir = tempfile::tempdir().expect("temp claude home");
+            let previous = std::env::var_os("CLAUDE_HOME");
+            unsafe { std::env::set_var("CLAUDE_HOME", dir.path()) };
+            Self {
+                _guard: guard,
+                _dir: dir,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for IsolatedClaudeHome {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var("CLAUDE_HOME", value) },
+                None => unsafe { std::env::remove_var("CLAUDE_HOME") },
+            }
+        }
+    }
+
+    fn credentials_fixture(subscription: &str) -> CredentialsFile {
+        serde_json::from_str(&format!(
+            r#"{{"claudeAiOauth":{{"accessToken":"token","expiresAt":9999999999999,
+                "refreshToken":"refresh","subscriptionType":"{subscription}",
+                "rateLimitTier":"default_claude_max_20x"}}}}"#
+        ))
+        .expect("credentials fixture")
+    }
+
+    fn usage_response_fixture() -> ureq::Response {
+        ureq::Response::new(
+            200,
+            "OK",
+            r#"{"five_hour":{"utilization":10.0,"resets_at":null},
+                "seven_day":{"utilization":14.0,"resets_at":null}}"#,
+        )
+        .expect("usage response fixture")
+    }
+
+    #[test]
+    fn successful_usage_fetch_records_the_handshake_it_actually_used() {
+        let _home = IsolatedClaudeHome::new();
+        let mut manager = UsageManager::new();
+        manager.credentials = Some(credentials_fixture("max"));
+
+        let usage = manager.handle_usage_response(Ok(usage_response_fixture()));
+        assert!(usage.is_some(), "fixture response must parse");
+
+        let origin = manager
+            .last_usage_origin()
+            .expect("a successful fetch must record how it authenticated");
+        assert_eq!(origin.auth, UsageAuth::OAuth);
+        assert_eq!(origin.endpoint, "api.anthropic.com");
+        assert_eq!(origin.subscription.as_deref(), Some("max"));
+        assert_eq!(origin.label(), "OAuth · Max");
+        assert_ne!(
+            origin.label().to_ascii_lowercase(),
+            "api",
+            "the footer must name the real handshake, not a generic api label"
+        );
+    }
+
+    #[test]
+    fn usage_origin_label_degrades_without_a_subscription_field() {
+        let _home = IsolatedClaudeHome::new();
+        let mut manager = UsageManager::new();
+        manager.credentials = Some(
+            serde_json::from_str(
+                r#"{"claudeAiOauth":{"accessToken":"token","expiresAt":9999999999999}}"#,
+            )
+            .expect("credentials without plan fields"),
+        );
+
+        manager.handle_usage_response(Ok(usage_response_fixture()));
+        let origin = manager.last_usage_origin().expect("origin recorded");
+
+        assert_eq!(origin.subscription, None);
+        assert_eq!(origin.label(), "OAuth");
+    }
+
+    #[test]
+    fn a_failed_fetch_does_not_invent_an_origin() {
+        let _home = IsolatedClaudeHome::new();
+        let mut manager = UsageManager::new();
+        manager.credentials = Some(credentials_fixture("max"));
+
+        manager.handle_usage_response(Err(ureq::Error::Status(
+            500,
+            ureq::Response::new(500, "Server Error", "boom").expect("error response"),
+        )));
+
+        assert!(
+            manager.last_usage_origin().is_none(),
+            "an origin must describe an observed successful fetch, never an attempt"
+        );
+    }
 
     #[test]
     fn api_usage_extra_usage_is_normalized_to_usd() {

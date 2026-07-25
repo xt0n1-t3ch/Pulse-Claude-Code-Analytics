@@ -375,7 +375,8 @@
   .filters { margin-left: auto; display: flex; gap: 8px; }
   .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 
-  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; }
+  .card { position: relative; background: var(--panel-sheen), var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; overflow: hidden; }
+  .card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: var(--panel-edge); pointer-events: none; }
   .card-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .card-title-row .card-title { margin-bottom: 0; }
   .card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 14px; }
@@ -391,10 +392,13 @@
 
   .top-table { font-size: 12px; --top-cols: 30px 2fr 1.5fr 90px 80px 80px; }
   .top-header { display: grid; grid-template-columns: var(--top-cols); gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
-  .top-row { display: grid; grid-template-columns: var(--top-cols); gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); transition: background 0.15s var(--ease); }
-  .top-row:hover { background: var(--bg-elevated); }
+  .top-row { display: grid; grid-template-columns: var(--top-cols); gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); transition: background 0.15s var(--ease), box-shadow 0.15s var(--ease); box-shadow: inset 2px 0 0 transparent; }
+  .top-row:hover { background: var(--bg-elevated); box-shadow: inset 2px 0 0 var(--accent); }
+  /* The three most expensive sessions are the reason this table exists, so the
+     ranking itself carries the emphasis rather than every row shouting. */
+  .top-row:nth-child(-n+4) .top-col.rank { color: var(--accent); }
   .top-col { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .top-col.rank { text-align: center; font-weight: 700; color: var(--text-muted); }
+  .top-col.rank { text-align: center; font-weight: 700; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
   .top-col.project { text-align: left; font-weight: 500; color: var(--text-primary); }
   .top-col.model { text-align: left; }
   .top-col.cost { font-weight: 700; color: var(--accent); }

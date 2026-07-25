@@ -16,7 +16,8 @@
 
 <style>
   .stat-card {
-    background: var(--bg-card);
+    position: relative;
+    background: var(--panel-sheen), var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 18px 20px;
@@ -24,12 +25,24 @@
     flex-direction: column;
     gap: 6px;
     transition: all 0.2s var(--ease);
+    overflow: hidden;
+  }
+
+  /* Lit top edge that fades out at both ends — the shared panel signature. */
+  .stat-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    background: var(--panel-edge);
+    pointer-events: none;
   }
 
   .stat-card:hover {
     border-color: var(--border-hover);
-    background: var(--bg-card-hover);
+    background: var(--panel-sheen), var(--bg-card-hover);
     box-shadow: var(--shadow-sm);
+    transform: var(--lift);
   }
 
   .stat-label {
