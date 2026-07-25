@@ -1408,7 +1408,14 @@ fn process_jsonl_message(acc: &mut SessionAccumulator, msg: &JsonlMessage) {
         }
         "user" => {
             acc.has_thinking_blocks = false;
-            extract_reasoning_effort(acc, message);
+            // The legacy system-reminder scrape is a fallback for transcripts
+            // that predate the top-level `effort` field. Once a main-chain
+            // assistant line has supplied the authoritative value, a later
+            // reminder — often carried by an interleaved sidechain user event
+            // describing a subagent — must not overwrite it.
+            if !acc.effort_from_main_chain {
+                extract_reasoning_effort(acc, message);
+            }
             if let Some(ref content_val) = message.content {
                 process_content_for_activity(acc, content_val, observed_at);
             } else {
@@ -2393,6 +2400,42 @@ mod tests {
 
         process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
         assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn a_legacy_reminder_cannot_override_an_observed_effort_field() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        process_jsonl_message(&mut acc, &assistant_line_with_effort(Some("high"), false));
+
+        // A later user event carrying the old system-reminder text — typically
+        // describing a subagent — must not rewrite the authoritative value.
+        let reminder: JsonlMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "<system-reminder>reasoning effort level: low</system-reminder>"}]
+            }
+        }))
+        .unwrap();
+        process_jsonl_message(&mut acc, &reminder);
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::High);
+    }
+
+    #[test]
+    fn a_legacy_reminder_still_applies_to_transcripts_without_the_effort_field() {
+        let mut acc = SessionAccumulator::with_default_effort(ReasoningEffort::Medium);
+        let reminder: JsonlMessage = serde_json::from_value(serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "<system-reminder>reasoning effort level: max</system-reminder>"}]
+            }
+        }))
+        .unwrap();
+        process_jsonl_message(&mut acc, &reminder);
+
+        assert_eq!(acc.reasoning_effort, ReasoningEffort::Max);
     }
 
     #[test]
