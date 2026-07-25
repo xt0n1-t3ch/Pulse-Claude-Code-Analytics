@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -169,8 +171,14 @@ fn query_account_usage(timeout: Duration) -> Result<AccountUsageReading> {
 fn codex_app_server_command() -> Command {
     #[cfg(windows)]
     {
+        if let Some(path) = windows_codex_cli_path() {
+            let mut command = silent_command(path.to_string_lossy().as_ref());
+            command.args(["app-server", "--stdio"]);
+            return command;
+        }
+
         // `codex` is commonly an npm .cmd shim on Windows. CreateProcess does
-        // not execute batch files directly, so use cmd.exe with a fixed command.
+        // not execute batch files directly, so this is the final PATH fallback.
         let mut command = silent_command("cmd.exe");
         command.args(["/d", "/s", "/c", "codex app-server --stdio"]);
         command
@@ -181,6 +189,59 @@ fn codex_app_server_command() -> Command {
         command.args(["app-server", "--stdio"]);
         command
     }
+}
+
+#[cfg(windows)]
+fn windows_codex_cli_path() -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("CODEX_CLI_PATH") {
+        let path = PathBuf::from(configured);
+        if is_codex_executable(&path) {
+            return Some(path);
+        }
+    }
+
+    let script = r#"
+$paths = [System.Collections.Generic.List[string]]::new()
+$package = Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -ne $package) {
+  [void]$paths.Add((Join-Path $package.InstallLocation 'app\resources\codex.exe'))
+}
+Get-CimInstance Win32_Process -Filter "Name = 'codex.exe'" -ErrorAction SilentlyContinue |
+  ForEach-Object { if ($_.ExecutablePath) { [void]$paths.Add($_.ExecutablePath) } }
+$paths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -Unique
+"#;
+    let output = silent_command("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    select_existing_codex_path(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(windows)]
+fn select_existing_codex_path(output: &str) -> Option<PathBuf> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .find(|path| is_codex_executable(path))
+}
+
+#[cfg(windows)]
+fn is_codex_executable(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("codex.exe"))
 }
 
 fn write_json_line(stdin: &mut impl Write, value: &Value) -> Result<()> {
@@ -278,11 +339,10 @@ pub fn parse_rate_limits_response(
         .into_iter()
         .filter_map(|snapshot| wire_envelope(snapshot, observed_at))
         .collect();
-    if !envelopes
-        .iter()
-        .any(|item| item.limits.primary.is_some() || item.limits.secondary.is_some())
-    {
-        bail!("Codex account quota response contains no quota windows");
+    if !envelopes.iter().any(|item| {
+        item.limits.primary.is_some() || item.limits.secondary.is_some() || item.credits.is_some()
+    }) {
+        bail!("Codex account quota response contains no quota windows or credits");
     }
 
     Ok(AccountUsageReading {
@@ -362,5 +422,16 @@ mod tests {
         let debug = format!("{command:?}");
         assert!(debug.contains("app-server"));
         assert!(debug.contains("stdio"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_cli_resolution_uses_an_existing_codex_executable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expected = dir.path().join("codex.exe");
+        std::fs::write(&expected, b"fixture").expect("write fixture");
+        let output = format!("C:\\missing\\codex.exe\n{}\n", expected.display());
+
+        assert_eq!(select_existing_codex_path(&output), Some(expected));
     }
 }

@@ -237,6 +237,9 @@ describe("Dashboard.svelte", () => {
     expect(container.querySelector(".metric-strip")).not.toBeNull();
     expect(container.querySelector("[data-telemetry-ledger]")?.textContent).not.toContain("Plan limits");
     expect(container.querySelector("[data-session-focus]")?.textContent).toContain("Planner regression");
+    expect(container.querySelector(".focus-chart-head")?.textContent).toContain("240.0K observed");
+    const mixValues = [...container.querySelectorAll(".mix-legend strong")].map((node) => node.textContent?.trim());
+    expect(mixValues).toEqual(["0", "20.0K", "20.0K", "200.0K"]);
   });
 
   it("shows every live instance and lets the exact context-window fraction follow selection", async () => {

@@ -66,3 +66,23 @@ fn sparse_or_null_response_is_not_presented_as_live_usage() {
 
     assert!(err.to_string().contains("no quota windows"));
 }
+
+#[test]
+fn credits_only_account_response_remains_renderable() {
+    let observed_at = Utc.timestamp_opt(1_785_000_000, 0).single().unwrap();
+    let reading = parse_rate_limits_response(
+        r#"{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":null,"secondary":null,"credits":{"hasCredits":true,"unlimited":false,"balance":"42.50"}},"rateLimitsByLimitId":null}}"#,
+        observed_at,
+    )
+    .expect("credits-only account snapshot should remain available");
+
+    assert_eq!(reading.envelopes.len(), 1);
+    assert_eq!(
+        reading.envelopes[0]
+            .credits
+            .as_ref()
+            .and_then(|credits| credits.balance.as_deref()),
+        Some("42.50")
+    );
+    assert!(reading.envelopes[0].limits.primary.is_none());
+}

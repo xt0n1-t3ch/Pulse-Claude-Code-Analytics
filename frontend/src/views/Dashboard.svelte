@@ -229,12 +229,16 @@
   let focusContextUsed = $derived(focusSession?.context_used_tokens ?? 0);
   let focusContextWindow = $derived(focusSession?.context_window_tokens ?? 0);
   let focusContextRemaining = $derived(Math.max(0, focusContextWindow - focusContextUsed));
+  let focusPureInput = $derived(focusSession
+    ? Math.max(0, focusSession.input_tokens - focusSession.cache_write_tokens - focusSession.cache_read_tokens)
+    : 0
+  );
   let focusTokenTotal = $derived.by(() => focusSession
-    ? focusSession.input_tokens + focusSession.output_tokens + focusSession.cache_write_tokens + focusSession.cache_read_tokens
+    ? focusPureInput + focusSession.output_tokens + focusSession.cache_write_tokens + focusSession.cache_read_tokens
     : 0
   );
   let focusTokenMix = $derived(focusSession ? [
-    { label: "Input", value: focusSession.input_tokens, color: "var(--info)" },
+    { label: "Input", value: focusPureInput, color: "var(--info)" },
     { label: "Output", value: focusSession.output_tokens, color: "var(--token-output)" },
     { label: "Cache write", value: focusSession.cache_write_tokens, color: "var(--token-cache-write)" },
     { label: "Cache read", value: focusSession.cache_read_tokens, color: "var(--token-cache-read)" },
