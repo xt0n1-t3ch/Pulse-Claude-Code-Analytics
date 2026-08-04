@@ -31,6 +31,7 @@ fn claude_session(id: &str, project: &str, model: &str) -> HistoricalSession {
         context_window: "200K".to_string(),
         branch: Some("main".to_string()),
         effort: "High".to_string(),
+        speed: "standard".to_string(),
         started_at: Some("2026-05-20T14:00:00+00:00".to_string()),
         ended_at: Some("2026-05-20T14:30:00+00:00".to_string()),
         duration_secs: 1_800,

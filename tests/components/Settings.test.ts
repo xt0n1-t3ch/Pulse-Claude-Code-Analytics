@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
+import { get } from "svelte/store";
 import type { AnalyticsSummary, HealthResponse } from "@/lib/api";
 
 const summary: AnalyticsSummary = {
@@ -65,12 +66,27 @@ describe("Settings.svelte", () => {
     getProviderCopy.mockResolvedValue(null);
     clearHistory.mockClear();
     exportAllData.mockClear();
-    const { health, rateLimits, planInfo } = await import("@/lib/stores");
+    const { health, rateLimits, planInfo, accessSnapshot, selectedAccessSourceId } = await import("@/lib/stores");
     const { provider } = await import("@/lib/provider");
     provider.set("claude");
     health.set(healthFixture);
     rateLimits.set(null);
     planInfo.set({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x", detected: true });
+    accessSnapshot.set({ routes: [
+      {
+        source: { id: "claude-subscription", kind: "claude_subscription", provider: "claude", auth_method: "oauth", proof: "quota_response", plan: "max_20x" },
+        availability: "available", freshness: "fresh", provenance: "provider_api",
+        observed_at: null, fetched_at: null, expires_at: null, windows: [], credits: null,
+        extra_usage: null, local_history: { available: true, sessions: 1 }, error: null,
+      },
+      {
+        source: { id: "codex-subscription", kind: "codex_subscription", provider: "codex", auth_method: "app_server", proof: "quota_response", plan: "pro_20x" },
+        availability: "available", freshness: "fresh", provenance: "app_server",
+        observed_at: null, fetched_at: null, expires_at: null, windows: [], credits: null,
+        extra_usage: null, local_history: { available: true, sessions: 1 }, error: null,
+      },
+    ] });
+    selectedAccessSourceId.set("claude-subscription");
   });
 
   it("mounts and shows the identity masthead plus configuration controls", async () => {
@@ -127,6 +143,26 @@ describe("Settings.svelte", () => {
 
     expect(getByText("Detecting plan…")).toBeTruthy();
     expect(container.querySelector(".it-line")?.textContent).not.toContain("Pro 20x");
+  });
+
+  it("keeps analytics scope aligned when Active provider changes", async () => {
+    const { selectedAccessSourceId, selectedAnalyticsProviderScope } = await import("@/lib/stores");
+    getPlanInfo.mockResolvedValueOnce({
+      provider: "codex",
+      plan_key: "pro_20x",
+      plan_name: "Pro 20x",
+      detected: true,
+    });
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { getByRole } = render(Settings, {
+      props: { onToggleTheme: () => {}, currentTheme: "dark" },
+    });
+
+    await fireEvent.click(getByRole("button", { name: "Active provider" }));
+    await fireEvent.click(getByRole("option", { name: "Codex" }));
+
+    await waitFor(() => expect(get(selectedAccessSourceId)).toBe("codex-subscription"));
+    expect(get(selectedAnalyticsProviderScope)).toBe("codex");
   });
 
   it("never renders an invalid same-provider plan claim", async () => {

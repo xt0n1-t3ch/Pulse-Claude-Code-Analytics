@@ -5,6 +5,8 @@
     rateLimits,
     planInfo,
     addToast,
+    accessSnapshot,
+    selectedAccessSourceId,
     selectedAnalyticsProviderScope,
   } from "../lib/stores";
   import { provider, providerProfile, setProvider, PROVIDERS, type Provider } from "../lib/provider";
@@ -55,6 +57,11 @@
     planInfo.set(null);
     try {
       await setProvider(nextProvider);
+      const matchingSource = $accessSnapshot?.routes.find((route) =>
+        route.source.provider === nextProvider
+        && route.source.kind === `${nextProvider}_subscription`
+      );
+      selectedAccessSourceId.set(matchingSource?.source.id ?? "all");
     } catch {
       if (generation !== providerGeneration || providerPlanGeneration !== planGeneration) return;
       settingsError = "Provider selection could not be saved.";

@@ -306,19 +306,17 @@ function Invoke-TauriMode {
         Fail "Tauri mode requires repo-owned target/debug/pulse.exe; build it first. Installed pulse.exe is never inspected or touched."
     }
 
-    # The debug binary is configured with devUrl=http://localhost:1420. Start
-    # the same authenticated bridge/Vite owner used by Browser mode first, so
-    # the WebView never races an unbound dev URL and cleanup can prove every
-    # listener belongs to this bounded run.
+    # The debug binary owns native IPC and its background poller. Tauri mode
+    # therefore starts Vite only; launching the browser bridge here would create
+    # a second producer against the same isolated database.
     $frontendRoot = Assert-RepoOwnedPath (Join-Path $repoRoot "frontend") "frontend root"
     $packageJson = Join-Path $frontendRoot "package.json"
     if (-not (Test-Path -LiteralPath $packageJson -PathType Leaf)) { Fail "Tauri mode requires frontend/package.json" }
     $bun = (Get-Command bun.exe -ErrorAction SilentlyContinue).Source
     if ([string]::IsNullOrWhiteSpace($bun)) { Fail "Tauri mode requires bun.exe on PATH" }
-    $frontend = Start-OwnedProcess $bun @("run", "dev") $frontendRoot "tauri-frontend"
-    Assert-PortOwned $bridgePort $frontend.Identity "tauri-bridge"
+    $frontend = Start-OwnedProcess $bun @("run", "dev:ui") $frontendRoot "tauri-frontend"
     Assert-PortOwned $browserPort $frontend.Identity "tauri-vite"
-    Wait-Http "http://127.0.0.1:$browserPort/" $frontend.Identity "tauri-vite"
+    Wait-Http "http://localhost:$browserPort/" $frontend.Identity "tauri-vite"
 
     $port = New-FreePort
     $oldWebViewArgs = if (Test-Path "Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") { [Environment]::GetEnvironmentVariable("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") } else { $null }

@@ -462,6 +462,8 @@ fn trusted_claude_usage(
 
 fn codex_route_from_probe(
     latest: &Arc<Mutex<Option<Result<AccountUsageReading, String>>>>,
+    plan_detector: &mut PlanDetector,
+    plan_config: &cc_discord_presence::codex::config::OpenAiPlanDisplayConfig,
 ) -> (AccessRouteSnapshot, Option<UsageSnapshot>, Option<String>) {
     let account_usage = latest
         .lock()
@@ -470,10 +472,16 @@ fn codex_route_from_probe(
         .unwrap_or_else(|| Err("Codex account quota read is pending".to_string()));
     match account_usage {
         Ok(reading) => {
+            let resolved_plan =
+                plan_detector.resolve_from_envelopes(&reading.envelopes, plan_config);
+            let plan_key = codex_plan_key_from_tier(resolved_plan.tier);
             let usage = reading.usage_snapshot();
             let reset_credits = reading.rate_limit_reset_credits.clone();
             let individual_limits = reading.individual_limits.clone();
-            let mut source = subscription_source("codex", None);
+            let mut source = subscription_source(
+                "codex",
+                (!plan_key.is_empty()).then(|| plan_key.to_string()),
+            );
             source.proof = AccessProof::QuotaResponse;
             let route = access_route_from_usage_with_account_details(
                 source,
@@ -497,6 +505,7 @@ fn codex_route_from_probe(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn independently_probe_access(
     usage_mgr: &mut UsageManager,
     codex_usage_trigger: &std::sync::mpsc::SyncSender<()>,
@@ -505,6 +514,8 @@ fn independently_probe_access(
     api_probe_cache: &mut ApiProbeCache,
     force_refresh: bool,
     active_provider: Provider,
+    codex_plan_detector: &mut PlanDetector,
+    codex_plan_config: &cc_discord_presence::codex::config::OpenAiPlanDisplayConfig,
 ) -> Vec<AccessRouteSnapshot> {
     if force_refresh {
         codex_usage_force.store(true, Ordering::Release);
@@ -515,7 +526,8 @@ fn independently_probe_access(
 
     let refresh_claude = force_refresh && active_provider != Provider::Claude;
     let (claude_route, _, _, _, _) = claude_route_from_probe(usage_mgr, refresh_claude);
-    let (codex_route, _, _) = codex_route_from_probe(codex_usage_latest);
+    let (codex_route, _, _) =
+        codex_route_from_probe(codex_usage_latest, codex_plan_detector, codex_plan_config);
     let openai_route = api_probe_route(
         "openai",
         std::env::var("OPENAI_API_KEY").ok().as_deref(),
@@ -914,6 +926,9 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                 })
                 .unwrap_or((true, DiscordDisplayPrefs::default(), false));
 
+            if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
+                codex_config = fresh;
+            }
             let independently_probed_routes = independently_probe_access(
                 &mut usage_mgr,
                 &codex_usage_trigger,
@@ -922,6 +937,8 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                 &mut api_probe_cache,
                 force_refresh,
                 provider,
+                &mut codex_plan_detector,
+                &codex_config.openai_plan,
             );
             for route in &independently_probed_routes {
                 let observed_provider = match route.source.provider.as_str() {
@@ -938,9 +955,6 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                     );
                 }
             }
-            if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
-                codex_config = fresh;
-            }
             let codex_sessions_roots = cc_discord_presence::codex::config::sessions_paths();
             let active_codex = codex_session::collect_active_sessions_multi(
                 &codex_sessions_roots,
@@ -955,6 +969,33 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
             // workspace to Claude must not stop current Codex JSONLs advancing.
             persist_live_codex_snapshots(&active_codex, &codex_config, PresenceSurface::Cli);
 
+            if let Ok(fresh) = PresenceConfig::load_or_init() {
+                claude_config = fresh;
+            }
+            let now = SystemTime::now();
+            let cutoff = now
+                .checked_sub(ACTIVE_CUTOFF)
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let mut all_claude = session::collect_active_sessions(
+                &mut claude_git,
+                &mut claude_parse,
+                STALE_THRESHOLD,
+                STICKY_WINDOW,
+            )
+            .unwrap_or_default();
+            if let Some(statusline) = read_statusline_data(&mut claude_git) {
+                merge_statusline_into_sessions(&mut all_claude, statusline);
+            }
+            let cutoff_chrono =
+                chrono::Utc::now() - chrono::Duration::seconds(ACTIVE_CUTOFF.as_secs() as i64);
+            let active_claude: Vec<_> = all_claude
+                .into_iter()
+                .filter(|session| is_claude_presence_candidate(session, cutoff, cutoff_chrono))
+                .collect();
+            // Claude analytics advance independently from the provider that
+            // currently owns the visible workspace and Discord publisher.
+            persist_live_claude_snapshots(&active_claude);
+
             let (discord_status, discord_publisher) = match provider {
                 Provider::Claude => {
                     codex_publisher.release();
@@ -962,33 +1003,7 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                         tracing::warn!(error = %error, "failed to acquire Claude publisher lease");
                         false
                     });
-                    if let Ok(fresh) = PresenceConfig::load_or_init() {
-                        claude_config = fresh;
-                    }
-
-                    let now = SystemTime::now();
-                    let cutoff = now
-                        .checked_sub(ACTIVE_CUTOFF)
-                        .unwrap_or(SystemTime::UNIX_EPOCH);
-
-                    let mut all = session::collect_active_sessions(
-                        &mut claude_git,
-                        &mut claude_parse,
-                        STALE_THRESHOLD,
-                        STICKY_WINDOW,
-                    )
-                    .unwrap_or_default();
-
-                    if let Some(sl) = read_statusline_data(&mut claude_git) {
-                        merge_statusline_into_sessions(&mut all, sl);
-                    }
-
-                    let cutoff_chrono = chrono::Utc::now()
-                        - chrono::Duration::seconds(ACTIVE_CUTOFF.as_secs() as i64);
-                    let active: Vec<_> = all
-                        .into_iter()
-                        .filter(|s| is_claude_presence_candidate(s, cutoff, cutoff_chrono))
-                        .collect();
+                    let active = active_claude;
 
                     if force_refresh {
                         usage_mgr.invalidate_cache();
@@ -1069,7 +1084,6 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                         });
                     claude_config.plan = manual_plan.or_else(|| detected_plan_key.clone());
 
-                    persist_live_claude_snapshots(&active);
                     let status = if discord_enabled && publisher_owned {
                         let active_session = preferred_active_session(&active);
                         let limits = route_limits_for_claude_presence(Some(&access_route));
@@ -1183,6 +1197,11 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                         ),
                     };
                     let effective_limits = effective_limits_from_envelopes(&usage_envelopes);
+                    let resolved_plan = codex_plan_detector
+                        .resolve_from_envelopes(&usage_envelopes, &codex_config.openai_plan);
+                    let resolved_plan_key = codex_plan_key_from_tier(resolved_plan.tier);
+                    let access_plan =
+                        (!resolved_plan_key.is_empty()).then(|| resolved_plan_key.to_string());
                     let access_route =
                         match codex_usage.clone() {
                             Some(usage) => {
@@ -1194,7 +1213,7 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                                     } else {
                                         chrono::Duration::seconds(30)
                                     };
-                                let mut source = subscription_source("codex", None);
+                                let mut source = subscription_source("codex", access_plan.clone());
                                 if usage.source.signals.iter().any(|signal| {
                                     matches!(signal, UsageSignal::CodexSubscriptionUsage)
                                 }) {
@@ -1211,14 +1230,12 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                                 )
                             }
                             None => AccessRouteSnapshot::unavailable(
-                                subscription_source("codex", None),
+                                subscription_source("codex", access_plan),
                                 codex_usage_error.clone().unwrap_or_else(|| {
                                     "Codex account quota unavailable".to_string()
                                 }),
                             ),
                         };
-                    let resolved_plan = codex_plan_detector
-                        .resolve_from_envelopes(&usage_envelopes, &codex_config.openai_plan);
                     let resolved_service_tier = resolve_service_tier();
                     let opencode_running =
                         cc_discord_presence::codex::process::is_opencode_running();

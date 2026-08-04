@@ -593,8 +593,9 @@ fn tauri_e2e_runner_starts_owned_frontend_before_pulse() {
 
     assert!(frontend_start < pulse_start);
     assert!(tauri.contains("Assert-PortOwned $browserPort"));
-    assert!(tauri.contains("Assert-PortOwned $bridgePort"));
-    assert!(tauri.contains("Wait-Http \"http://127.0.0.1:$browserPort/\""));
+    assert!(tauri.contains("@(\"run\", \"dev:ui\")"));
+    assert!(!tauri.contains("Assert-PortOwned $bridgePort"));
+    assert!(tauri.contains("Wait-Http \"http://localhost:$browserPort/\""));
 }
 
 fn manifest_fixture(hash: &str) -> TempDir {

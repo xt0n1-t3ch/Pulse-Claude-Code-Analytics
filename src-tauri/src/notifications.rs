@@ -296,7 +296,12 @@ impl<'conn> NotificationStore<'conn> {
             key: window.to_string(),
             title: format!("{provider} quota reset"),
             body: reset_at
-                .map(|reset| format!("{provider} {window} quota reset at {}", reset.to_rfc3339()))
+                .map(|reset| {
+                    format!(
+                        "{provider} {window} quota reset observed; next reset at {}",
+                        reset.to_rfc3339()
+                    )
+                })
                 .unwrap_or_else(|| format!("{provider} {window} quota reset")),
             action: Some("Open quota details".to_string()),
         };
@@ -1046,19 +1051,18 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(
-            store
-                .observe_quota_reset_transition(
-                    "claude",
-                    "weekly",
-                    0.0,
-                    100.0,
-                    Some(reset),
-                    now + chrono::Duration::seconds(6)
-                )
-                .unwrap()
-                .is_some()
-        );
+        let reset_record = store
+            .observe_quota_reset_transition(
+                "claude",
+                "weekly",
+                0.0,
+                100.0,
+                Some(reset),
+                now + chrono::Duration::seconds(6),
+            )
+            .unwrap()
+            .expect("reset edge");
+        assert!(reset_record.body.contains("next reset at"));
     }
 
     #[test]

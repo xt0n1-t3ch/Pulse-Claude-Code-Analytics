@@ -506,6 +506,7 @@ pub struct HistoricalSession {
     pub context_window: String,
     pub branch: Option<String>,
     pub effort: String,
+    pub speed: String,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub duration_secs: i64,
@@ -562,6 +563,7 @@ fn is_codex_family(provider: &str, model_id: &str) -> bool {
 /// the accumulator contract where `input_tokens` already includes cache write
 /// and cache read, so pure (non-cached) input is `input - cache_write -
 /// cache_read`.
+#[cfg(test)]
 pub(crate) fn estimate_api_equivalent_cost(
     provider: &str,
     model_id: &str,
@@ -569,6 +571,26 @@ pub(crate) fn estimate_api_equivalent_cost(
     output_tokens: i64,
     cache_write_tokens: i64,
     cache_read_tokens: i64,
+) -> Option<EstimatedCost> {
+    estimate_api_equivalent_cost_with_speed(
+        provider,
+        model_id,
+        input_tokens,
+        output_tokens,
+        cache_write_tokens,
+        cache_read_tokens,
+        "standard",
+    )
+}
+
+fn estimate_api_equivalent_cost_with_speed(
+    provider: &str,
+    model_id: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_write_tokens: i64,
+    cache_read_tokens: i64,
+    speed: &str,
 ) -> Option<EstimatedCost> {
     let model_id = model_id.trim();
     if model_id.is_empty() {
@@ -597,10 +619,15 @@ pub(crate) fn estimate_api_equivalent_cost(
             cache_write_tokens: Some(cache_write),
             output_tokens: output,
         };
+        let speed_mode = if speed.trim().eq_ignore_ascii_case("fast") {
+            SpeedMode::Fast
+        } else {
+            SpeedMode::Standard
+        };
         let computed = compute_cost(
             model_id,
             usage,
-            SessionSpeed::explicit(SpeedMode::Standard, SpeedSource::LegacyDefault),
+            SessionSpeed::explicit(speed_mode, SpeedSource::LegacyDefault),
             &PricingConfig::default(),
         );
         let total = computed.known_total_cost_usd?;
@@ -621,7 +648,7 @@ pub(crate) fn estimate_api_equivalent_cost(
             output,
             cache_write,
             cache_read,
-            false,
+            speed.trim().eq_ignore_ascii_case("fast"),
         );
         let total = b.total();
         if !total.is_finite() || total <= 0.0 {
@@ -650,13 +677,14 @@ fn apply_api_equivalent_estimates(sessions: &mut [HistoricalSession]) {
         } else {
             s.model_id.as_str()
         };
-        if let Some(est) = estimate_api_equivalent_cost(
+        if let Some(est) = estimate_api_equivalent_cost_with_speed(
             &s.provider,
             model,
             s.input_tokens,
             s.output_tokens,
             s.cache_write_tokens,
             s.cache_read_tokens,
+            &s.speed,
         ) {
             s.total_cost = est.total;
             s.known_cost = Some(est.total);
@@ -722,7 +750,7 @@ fn query_sessions(
             started_at, ended_at, duration_secs, COALESCE(known_cost, 0), cost_status, cost_source, known_cost,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, total_tokens,
             input_cost, output_cost, cache_write_cost, cache_read_cost,
-            has_thinking, subagent_count, is_active, used_tokens, window_tokens
+            has_thinking, subagent_count, is_active, used_tokens, window_tokens, speed
          FROM sessions
          WHERE (?1 = 'all' OR provider = ?1)",
     );
@@ -819,6 +847,7 @@ fn query_sessions(
                 context_window: row.get(6)?,
                 branch: row.get(7)?,
                 effort: row.get(8)?,
+                speed: row.get(30)?,
                 started_at: row.get(9)?,
                 ended_at: row.get(10)?,
                 duration_secs: row.get(11)?,
@@ -1396,7 +1425,7 @@ fn search_sessions_from_connection(
             s.cost_status, s.cost_source, s.known_cost,
             s.input_tokens, s.output_tokens, s.cache_write_tokens, s.cache_read_tokens, s.total_tokens,
             s.input_cost, s.output_cost, s.cache_write_cost, s.cache_read_cost,
-            s.has_thinking, s.subagent_count, s.is_active, s.used_tokens, s.window_tokens
+             s.has_thinking, s.subagent_count, s.is_active, s.used_tokens, s.window_tokens, s.speed
         FROM sessions_fts fts
         JOIN sessions s ON s.rowid = fts.rowid
         WHERE (?1 = 'all' OR s.provider = ?1) AND sessions_fts MATCH ?2
@@ -1423,6 +1452,7 @@ fn search_sessions_from_connection(
                 context_window: row.get(6)?,
                 branch: row.get(7)?,
                 effort: row.get(8)?,
+                speed: row.get(30)?,
                 started_at: row.get(9)?,
                 ended_at: row.get(10)?,
                 duration_secs: row.get(11)?,
@@ -1606,16 +1636,26 @@ fn analytics_summary_from_connection(conn: &Connection, provider: &str) -> Analy
         0.0
     };
 
-    let top_project: String = conn
-        .query_row(
-            "SELECT project FROM sessions WHERE (?1 = 'all' OR provider = ?1)
-             GROUP BY project
-             ORDER BY COALESCE(SUM(known_cost), 0) DESC, COUNT(*) DESC, project ASC
-             LIMIT 1",
-            params![provider],
-            |r| r.get(0),
+    let mut project_totals = BTreeMap::<&str, (f64, usize)>::new();
+    for session in &sessions {
+        let entry = project_totals
+            .entry(session.project.as_str())
+            .or_insert((0.0, 0));
+        entry.0 += session.known_cost.unwrap_or(0.0);
+        entry.1 += 1;
+    }
+    let top_project = project_totals
+        .into_iter()
+        .max_by(
+            |(project_a, (cost_a, count_a)), (project_b, (cost_b, count_b))| {
+                cost_a
+                    .total_cmp(cost_b)
+                    .then_with(|| count_a.cmp(count_b))
+                    .then_with(|| project_b.cmp(project_a))
+            },
         )
-        .unwrap_or_else(|_| "—".to_string());
+        .map(|(project, _)| project.to_string())
+        .unwrap_or_else(|| "—".to_string());
 
     let top_model: String = conn
         .query_row(
@@ -1831,7 +1871,7 @@ fn cost_forecast_from_connection(
     };
     let sql = format!(
         "SELECT cost_status, cost_source, known_cost, provider, model, model_id,
-                input_tokens, output_tokens, cache_write_tokens, cache_read_tokens
+                input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, speed
          FROM sessions
          WHERE (?1 = 'all' OR provider = ?1) AND COALESCE({}, datetime('now')) >= ?2",
         history_timestamp_expr()
@@ -1856,13 +1896,14 @@ fn cost_forecast_from_connection(
                     } else {
                         model_id
                     };
-                    if let Some(est) = estimate_api_equivalent_cost(
+                    if let Some(est) = estimate_api_equivalent_cost_with_speed(
                         &row_provider,
                         &model,
                         row.get(6)?,
                         row.get(7)?,
                         row.get(8)?,
                         row.get(9)?,
+                        row.get::<_, String>(10)?.as_str(),
                     ) {
                         basis = CostBasis::Estimated;
                         source = "api_equivalent".to_string();
@@ -2086,7 +2127,7 @@ fn query_daily_costs(
     let mut sql = format!(
         "SELECT id, provider, project, model, model_id, {day_expr} AS day, COALESCE(known_cost, 0),
                 cost_status, cost_source, known_cost,
-                input_tokens, output_tokens, cache_write_tokens, cache_read_tokens
+                input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, speed
          FROM sessions
          WHERE (?1 = 'all' OR provider = ?1) AND {history_ts} IS NOT NULL AND {day_expr} >= ?2"
     );
@@ -2134,13 +2175,14 @@ fn query_daily_costs(
                 } else {
                     model_id
                 };
-                if let Some(est) = estimate_api_equivalent_cost(
+                if let Some(est) = estimate_api_equivalent_cost_with_speed(
                     &provider,
                     &model,
                     row.get(10)?,
                     row.get(11)?,
                     row.get(12)?,
                     row.get(13)?,
+                    row.get::<_, String>(14)?.as_str(),
                 ) {
                     basis = CostBasis::Estimated;
                     source = "api_equivalent".to_string();
@@ -2263,6 +2305,20 @@ mod tests {
     fn api_equivalent_estimate_never_invents_without_tokens_or_model() {
         assert!(estimate_api_equivalent_cost("codex", "gpt-5.6-sol", 0, 0, 0, 0).is_none());
         assert!(estimate_api_equivalent_cost("claude", "", 1_000_000, 1_000_000, 0, 0).is_none());
+    }
+
+    #[test]
+    fn api_equivalent_estimate_uses_persisted_fast_speed() {
+        let standard = estimate_api_equivalent_cost_with_speed(
+            "codex", "gpt-5.4", 1_000_000, 1_000_000, 0, 0, "standard",
+        )
+        .expect("standard cost");
+        let fast = estimate_api_equivalent_cost_with_speed(
+            "codex", "gpt-5.4", 1_000_000, 1_000_000, 0, 0, "fast",
+        )
+        .expect("fast cost");
+
+        assert!((fast.total - standard.total * 2.0).abs() < 0.001);
     }
 
     fn temporary_database_path(test_name: &str) -> PathBuf {
@@ -2994,6 +3050,30 @@ mod tests {
         assert_eq!(forecast.priced_sessions, 1);
         assert_eq!(forecast.cost_basis, CostBasis::Estimated);
         assert!(forecast.spent_this_month > 0.0);
+    }
+
+    #[test]
+    fn analytics_top_project_uses_reconstructed_cost_not_session_count() {
+        let conn = test_conn();
+        for (id, project, input_tokens) in [
+            ("cheap-1", "busy", 10_000),
+            ("cheap-2", "busy", 10_000),
+            ("expensive", "costly", 2_000_000),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, model_id, started_at, updated_at,
+                    cost_status, cost_source, known_cost, input_tokens, output_tokens
+                 ) VALUES (?1, 'codex', ?2, 'GPT-5.4', 'gpt-5.4',
+                    '2026-08-15T12:00:00Z', '2026-08-15T12:00:00Z',
+                    'unavailable', 'unknown', NULL, ?3, 1000)",
+                params![id, project, input_tokens],
+            )
+            .expect("insert project session");
+        }
+
+        let summary = analytics_summary_from_connection(&conn, "codex");
+        assert_eq!(summary.top_project, "costly");
     }
 
     #[test]
