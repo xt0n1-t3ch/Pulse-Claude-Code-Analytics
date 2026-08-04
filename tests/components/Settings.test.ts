@@ -5,7 +5,10 @@ import type { AnalyticsSummary, HealthResponse } from "@/lib/api";
 
 const summary: AnalyticsSummary = {
   total_sessions: 42,
+  priced_sessions: 42,
   total_cost: 100,
+  cost_basis: "exact",
+  cost_sources: ["anthropic_api_equivalent"],
   total_tokens: 5_000_000,
   total_cache_read: 2_000_000,
   total_cache_write: 200_000,
@@ -19,8 +22,10 @@ const summary: AnalyticsSummary = {
 
 const getDbSize = vi.fn(async () => 5 * 1024 * 1024);
 const getAnalyticsSummary = vi.fn(async () => summary);
-const getPlanInfo = vi.fn(async () => ({ provider: "claude", plan_key: "", plan_name: "Max 20x", detected: true }));
+const getPlanInfo = vi.fn(async () => ({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x", detected: true }));
 const setPlanOverride = vi.fn(async () => undefined);
+const setActiveProvider = vi.fn(async () => undefined);
+const getProviderCopy = vi.fn(async () => null);
 const clearHistory = vi.fn(async () => 7);
 const exportAllData = vi.fn(async () => ({ ok: true }));
 
@@ -32,6 +37,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getAnalyticsSummary: () => getAnalyticsSummary(),
     getPlanInfo: () => getPlanInfo(),
     setPlanOverride: (plan: string) => setPlanOverride(plan),
+    setActiveProvider: (provider: string) => setActiveProvider(provider),
+    getProviderCopy: () => getProviderCopy(),
     clearHistory: () => clearHistory(),
     exportAllData: () => exportAllData(),
   };
@@ -48,11 +55,21 @@ describe("Settings.svelte", () => {
   beforeEach(async () => {
     getDbSize.mockClear();
     getAnalyticsSummary.mockClear();
+    getPlanInfo.mockReset();
+    setPlanOverride.mockReset();
+    setActiveProvider.mockReset();
+    getProviderCopy.mockReset();
+    getPlanInfo.mockResolvedValue({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x", detected: true });
+    setPlanOverride.mockResolvedValue(undefined);
+    setActiveProvider.mockResolvedValue(undefined);
+    getProviderCopy.mockResolvedValue(null);
     clearHistory.mockClear();
     const { health, rateLimits, planInfo } = await import("@/lib/stores");
+    const { provider } = await import("@/lib/provider");
+    provider.set("claude");
     health.set(healthFixture);
     rateLimits.set(null);
-    planInfo.set({ provider: "claude", plan_key: "", plan_name: "Max 20x", detected: true });
+    planInfo.set({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x", detected: true });
   });
 
   it("mounts and shows the identity masthead plus configuration controls", async () => {
@@ -63,8 +80,8 @@ describe("Settings.svelte", () => {
     await tick();
 
     expect(getByText("Settings")).toBeTruthy();
-    expect(getByText("Data Sources")).toBeTruthy();
-    expect(getByText("Data Management")).toBeTruthy();
+    expect(getByText("Data sources")).toBeTruthy();
+    expect(getByText("Data management")).toBeTruthy();
     expect(container.querySelectorAll(".rail-ctrl").length).toBe(3);
   });
 
@@ -83,6 +100,38 @@ describe("Settings.svelte", () => {
     expect(planSelect?.textContent).not.toContain("Auto-detect");
   });
 
+  it("never combines the active provider with a stale plan from another provider", async () => {
+    const { planInfo } = await import("@/lib/stores");
+    const { provider } = await import("@/lib/provider");
+    provider.set("claude");
+    planInfo.set({ provider: "codex", plan_key: "pro_20x", plan_name: "Pro 20x", detected: true });
+
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { container, getByText } = render(Settings, {
+      props: { onToggleTheme: () => {}, currentTheme: "dark" },
+    });
+    await tick();
+
+    expect(getByText("Detecting plan…")).toBeTruthy();
+    expect(container.querySelector(".it-line")?.textContent).not.toContain("Pro 20x");
+  });
+
+  it("never renders an invalid same-provider plan claim", async () => {
+    const { planInfo } = await import("@/lib/stores");
+    const { provider } = await import("@/lib/provider");
+    provider.set("claude");
+    planInfo.set({ provider: "claude", plan_key: "pro_20x", plan_name: "Pro 20x", detected: true });
+
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { container, getByText } = render(Settings, {
+      props: { onToggleTheme: () => {}, currentTheme: "dark" },
+    });
+    await tick();
+
+    expect(getByText("Not reported")).toBeTruthy();
+    expect(container.querySelector(".it-line")?.textContent).not.toContain("Pro 20x");
+  });
+
   it("loads the database size and session total from the api layer", async () => {
     const Settings = (await import("@/views/Settings.svelte")).default;
     const { getByText } = render(Settings, {
@@ -95,12 +144,28 @@ describe("Settings.svelte", () => {
     expect(getByText("42")).toBeTruthy();
   });
 
+  it("shows backend failure explicitly instead of fabricating an empty database", async () => {
+    getDbSize.mockRejectedValueOnce(new Error("database locked"));
+    getAnalyticsSummary.mockRejectedValueOnce(new Error("database locked"));
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { container, findByRole } = render(Settings, {
+      props: { onToggleTheme: () => {}, currentTheme: "dark" },
+    });
+
+    expect((await findByRole("alert")).textContent).toContain("Local analytics unavailable");
+    const values = [...container.querySelectorAll(".dm-val")].map((node) => node.textContent?.trim());
+    expect(values).toEqual(["Unavailable", "Unavailable"]);
+    expect(values).not.toContain("0 B");
+  });
+
   it("requires a confirm step before clearing history", async () => {
     const Settings = (await import("@/views/Settings.svelte")).default;
     const { getByText } = render(Settings, {
       props: { onToggleTheme: () => {}, currentTheme: "dark" },
     });
     await tick();
+    await waitFor(() => expect(getDbSize).toHaveBeenCalled());
+    await waitFor(() => expect(getByText("Clear history").closest("button")?.hasAttribute("disabled")).toBe(false));
 
     await fireEvent.click(getByText("Clear history"));
     expect(clearHistory).not.toHaveBeenCalled();
@@ -120,5 +185,63 @@ describe("Settings.svelte", () => {
 
     await fireEvent.click(getByText("Light"));
     expect(onToggleTheme).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back a failed plan override instead of leaving an optimistic claim", async () => {
+    const { planInfo } = await import("@/lib/stores");
+    planInfo.set({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x", detected: false });
+    setPlanOverride.mockRejectedValueOnce(new Error("write failed"));
+
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { getByRole } = render(Settings, {
+      props: { onToggleTheme: () => {}, currentTheme: "dark" },
+    });
+    await tick();
+
+    await fireEvent.click(getByRole("button", { name: "Plan override" }));
+    await fireEvent.click(getByRole("option", { name: "Auto-detect" }));
+
+    await waitFor(() => expect(getByRole("alert").textContent).toContain("could not be saved"));
+    expect(getByRole("button", { name: "Plan override" }).textContent).toContain("Max 20x");
+  });
+
+  it("keeps the newest provider plan when an older request resolves last", async () => {
+    let resolveCodex!: (value: {
+      provider: "codex";
+      plan_key: string;
+      plan_name: string;
+      detected: boolean;
+    }) => void;
+    let resolveClaude!: (value: {
+      provider: "claude";
+      plan_key: string;
+      plan_name: string;
+      detected: boolean;
+    }) => void;
+    getPlanInfo
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveCodex = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveClaude = resolve; }));
+
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { getByRole, getByText, queryByText } = render(Settings, {
+      props: { onToggleTheme: () => {}, currentTheme: "dark" },
+    });
+    await tick();
+
+    await fireEvent.click(getByRole("button", { name: "Active provider" }));
+    await fireEvent.click(getByRole("option", { name: "Codex" }));
+    await waitFor(() => expect(getByRole("button", { name: "Active provider" }).textContent).toContain("Codex"));
+
+    await fireEvent.click(getByRole("button", { name: "Active provider" }));
+    await fireEvent.click(getByRole("option", { name: "Claude Code" }));
+
+    await waitFor(() => expect(getPlanInfo).toHaveBeenCalledTimes(2));
+    resolveClaude({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x", detected: true });
+    await waitFor(() => expect(getByText("Max 20x")).toBeTruthy());
+    resolveCodex({ provider: "codex", plan_key: "pro_20x", plan_name: "Pro 20x", detected: true });
+    await Promise.resolve();
+
+    expect(queryByText("Pro 20x")).toBeNull();
+    expect(getByRole("button", { name: "Active provider" }).textContent).toContain("Claude Code");
   });
 });

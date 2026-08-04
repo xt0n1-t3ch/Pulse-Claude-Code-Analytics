@@ -1,0 +1,30 @@
+{
+  "fixture_version": 1,
+  "raw_payload": {
+    "type": "error",
+    "error": { "type": "authentication_error", "message": "Synthetic authentication failure" }
+  },
+  "status": "unauthorized",
+  "source_contract": "anthropic_api.v1",
+  "captured_at": "2026-08-01T00:00:00Z",
+  "expected_dto": {
+    "source": {
+      "id": "anthropic-api:fixture-auth",
+      "kind": "anthropic_api",
+      "provider": "anthropic",
+      "auth_method": "api_key",
+      "proof": "none",
+      "plan": null
+    },
+    "availability": "unavailable",
+    "freshness": "unknown",
+    "provenance": "none",
+    "observed_at": "2026-08-01T00:00:00Z",
+    "fetched_at": "2026-08-01T00:00:00Z",
+    "expires_at": null,
+    "windows": [],
+    "credits": null,
+    "extra_usage": null,
+    "error": "Synthetic authentication failure"
+  }
+}

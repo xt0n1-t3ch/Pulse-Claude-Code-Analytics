@@ -1,12 +1,18 @@
 # Release contract
 
-Pulse releases are annotated-tag, exact-commit, and immutable. The local v1.6 worktree is not permission to publish.
+Pulse releases are annotated-tag, exact-commit, and immutable. The local
+v1.7.0 worktree is a release candidate, not permission to publish.
 
 ## Version surfaces
 
 `scripts/release-contract.json` records the product/core/config/database contract. A release tag must agree with every Cargo, npm, lockfile, Tauri, README, docs-index, and changelog version surface.
 
-Pulse additionally refuses release when `codex-presence-core` is a path dependency. Promotion requires the canonical Git URL, a full 40-character `rev`, core 1.0.0, and a canonical manifest carrying the same SHA.
+Pulse additionally refuses release when `codex-presence-core` is a path
+dependency. The current consumer targets the local upstream v1.9.0 / core
+2.0.0 candidate. Promotion requires that upstream release to be published,
+then requires the canonical Git URL, a full 40-character pushed `rev`, core
+2.0.0, and a manifest carrying the same SHA. Until that happens, the upstream
+candidate is not a tag, release, or immutable proof.
 
 ## Required proof
 
@@ -19,4 +25,8 @@ Pulse additionally refuses release when `codex-presence-core` is a path dependen
 
 ## Promotion
 
-Canonical v1.8.0 is promoted first. Pulse then replaces the local core path with the exact released Git revision and reruns every gate. Only explicit approval permits the annotated `v1.6.0` tag and tag-only release workflow.
+The upstream v1.9.0 / core 2.0.0 candidate is validated locally first. After
+the upstream owner publishes its immutable revision, Pulse replaces the
+candidate dependency with that exact Git revision and reruns every gate. Only
+explicit approval permits the annotated `v1.7.0` tag and tag-only release
+workflow.

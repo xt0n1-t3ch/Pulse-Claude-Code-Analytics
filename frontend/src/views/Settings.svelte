@@ -1,11 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { health, rateLimits, planInfo, addToast } from "../lib/stores";
+  import {
+    health,
+    rateLimits,
+    planInfo,
+    addToast,
+    selectedAnalyticsProviderScope,
+  } from "../lib/stores";
   import { provider, providerProfile, setProvider, PROVIDERS, type Provider } from "../lib/provider";
+  import { planLabelForKey, planOptionsFor } from "../lib/plans";
   import { setPlanOverride, exportAllData, clearHistory, getDbSize, getPlanInfo, getAnalyticsSummary } from "../lib/api";
   import type { AnalyticsSummary } from "../lib/api";
   import PulseMark from "../components/PulseMark.svelte";
   import Select from "../components/Select.svelte";
+  import DataSourceInspector from "../components/DataSourceInspector.svelte";
+  import IconDownload from "@tabler/icons-svelte/icons/download";
+  import IconRefresh from "@tabler/icons-svelte/icons/refresh";
+  import IconTrash from "@tabler/icons-svelte/icons/trash";
 
   let {
     onToggleTheme,
@@ -19,6 +30,11 @@
   let planSaving = $state(false);
   let planSavedFlash = $state(false);
   let planSavedTimer: ReturnType<typeof setTimeout> | null = null;
+  let settingsError = $state<string | null>(null);
+  let providerGeneration = 0;
+  let planGeneration = 0;
+  let analyticsGeneration = 0;
+  let planMutation: Promise<void> = Promise.resolve();
 
   $effect(() => {
     if (!$planInfo) return;
@@ -29,8 +45,33 @@
     planOverrideValue = $planInfo.detected ? "auto" : ($planInfo.plan_key || "auto");
   });
 
-  function handleProviderChange(val: string): void {
-    provider.set(val as Provider);
+  async function handleProviderChange(val: string): Promise<void> {
+    const nextProvider = val as Provider;
+    if (nextProvider === $provider) return;
+    const generation = ++providerGeneration;
+    const providerPlanGeneration = ++planGeneration;
+    settingsError = null;
+    planSaving = false;
+    planInfo.set(null);
+    try {
+      await setProvider(nextProvider);
+    } catch {
+      if (generation !== providerGeneration || providerPlanGeneration !== planGeneration) return;
+      settingsError = "Provider selection could not be saved.";
+      return;
+    }
+    try {
+      const fresh = await getPlanInfo();
+      if (generation !== providerGeneration || providerPlanGeneration !== planGeneration) return;
+      if (fresh.provider === nextProvider) {
+        planInfo.set(fresh);
+        return;
+      }
+      throw new Error("provider plan response did not match the selected provider");
+    } catch {
+      if (generation !== providerGeneration) return;
+      settingsError = "Provider was saved, but its plan details could not be refreshed.";
+    }
   }
 
   let providerOptions = $derived(
@@ -38,46 +79,67 @@
   );
 
   let planOptions = $derived.by(() => {
-    const opts: { value: string; label: string }[] = [{ value: "auto", label: "Auto-detect" }];
-    if ($provider === "claude") {
-      opts.push(
-        { value: "free", label: "Free" },
-        { value: "pro", label: "Pro" },
-        { value: "max_5x", label: "Max 5x" },
-        { value: "max_20x", label: "Max 20x" },
-        { value: "team", label: "Team" },
-        { value: "enterprise", label: "Enterprise" },
-      );
-    } else {
-      opts.push(
-        { value: "free", label: "Free" },
-        { value: "go", label: "Go" },
-        { value: "plus", label: "Plus" },
-        { value: "business", label: "Business" },
-        { value: "enterprise", label: "Enterprise" },
-        { value: "pro", label: "Pro" },
-      );
-    }
-    return opts;
+    return [{ value: "auto", label: "Auto-detect" }, ...planOptionsFor($provider)];
   });
 
   let planLabelFor = $derived((key: string): string =>
     planOptions.find((o) => o.value === key)?.label ?? key,
   );
 
-  let dbSizeBytes = $state(0);
+  let dbSizeBytes = $state<number | null>(null);
   let confirmClear = $state(false);
   let clearResult = $state<string | null>(null);
   let summary = $state<AnalyticsSummary | null>(null);
+  let dataLoading = $state(true);
+  let dataError = $state<string | null>(null);
+  let clearPending = $state(false);
 
-  onMount(async () => {
-    dbSizeBytes = await getDbSize();
-    try { summary = await getAnalyticsSummary(); } catch {}
+  async function loadLocalAnalytics(): Promise<void> {
+    const generation = ++analyticsGeneration;
+    const scope = $selectedAnalyticsProviderScope;
+    dataLoading = true;
+    dataError = null;
+    summary = null;
+    try {
+      const [nextSize, nextSummary] = await Promise.all([
+        getDbSize(),
+        getAnalyticsSummary(scope),
+      ]);
+      if (generation !== analyticsGeneration || scope !== $selectedAnalyticsProviderScope) return;
+      dbSizeBytes = nextSize;
+      summary = nextSummary;
+    } catch (error) {
+      if (generation !== analyticsGeneration) return;
+      dbSizeBytes = null;
+      summary = null;
+      dataError = error instanceof Error && error.message
+        ? `Local analytics unavailable. ${error.message}`
+        : "Local analytics unavailable. The database did not return a complete response.";
+    } finally {
+      if (generation === analyticsGeneration) dataLoading = false;
+    }
+  }
+
+  onMount(() => {
+    void loadLocalAnalytics();
+  });
+  let previousAnalyticsScope: string | undefined;
+  $effect(() => {
+    const scope = $selectedAnalyticsProviderScope;
+    if (previousAnalyticsScope !== undefined && scope !== previousAnalyticsScope) {
+      void loadLocalAnalytics();
+    }
+    previousAnalyticsScope = scope;
   });
 
   async function handlePlanChange(val: string): Promise<void> {
+    const generation = ++planGeneration;
+    const selectedProvider = $provider;
+    const previousValue = planOverrideValue;
+    const previousPlan = $planInfo;
     planOverrideValue = val;
     planSaving = true;
+    settingsError = null;
 
     if ($planInfo) {
       if (val === "auto") {
@@ -87,14 +149,28 @@
       }
     }
     try {
-      await setPlanOverride(val === "auto" ? "" : val);
+      const mutation = planMutation.then(() =>
+        setPlanOverride(val === "auto" ? "" : val, selectedProvider)
+      );
+      planMutation = mutation.catch(() => undefined);
+      await mutation;
       const fresh = await getPlanInfo();
+      if (generation !== planGeneration || selectedProvider !== $provider) return;
+      if (fresh.provider !== selectedProvider) {
+        throw new Error("plan response did not match the selected provider");
+      }
       planInfo.set(fresh);
       planSavedFlash = true;
       if (planSavedTimer) clearTimeout(planSavedTimer);
       planSavedTimer = setTimeout(() => { planSavedFlash = false; }, 1800);
-    } catch {}
-    planSaving = false;
+    } catch {
+      if (generation !== planGeneration) return;
+      planOverrideValue = previousValue;
+      planInfo.set(previousPlan);
+      settingsError = "Plan override could not be saved.";
+    } finally {
+      if (generation === planGeneration) planSaving = false;
+    }
   }
 
   function checkForUpdates(): void {
@@ -109,22 +185,37 @@
   }
 
   async function handleExport(): Promise<void> {
-    const data = await exportAllData();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `pulse-export-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const data = await exportAllData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `pulse-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      addToast(`Analytics export failed: ${String(error)}`, "danger", 5000);
+    }
   }
 
   async function handleClear(): Promise<void> {
-    const deleted = await clearHistory();
-    clearResult = `Cleared ${deleted} sessions`;
-    confirmClear = false;
-    dbSizeBytes = await getDbSize();
-    setTimeout(() => { clearResult = null; }, 3000);
+    if (clearPending) return;
+    clearPending = true;
+    try {
+      const deleted = await clearHistory($selectedAnalyticsProviderScope);
+      clearResult = `Cleared ${deleted} sessions`;
+      confirmClear = false;
+      await loadLocalAnalytics();
+      setTimeout(() => { clearResult = null; }, 3000);
+    } catch (error) {
+      dataError = error instanceof Error && error.message
+        ? `Local analytics unavailable. ${error.message}`
+        : "Local analytics unavailable. History could not be cleared.";
+      addToast(`History clear failed: ${String(error)}`, "danger", 5000);
+    } finally {
+      clearPending = false;
+    }
   }
 
   let discordStatus = $derived(($health?.discord_status ?? "—").toLowerCase());
@@ -134,23 +225,28 @@
     : "warn"
   );
 
-  let sessionTotal = $derived(summary?.total_sessions ?? 0);
-  let isManual = $derived.by(() => !!$planInfo && !$planInfo.detected);
+  let sessionTotal = $derived(summary?.total_sessions ?? null);
+  let activePlanInfo = $derived($planInfo?.provider === $provider ? $planInfo : null);
+  let activePlanLabel = $derived.by(() => {
+    if (!activePlanInfo?.plan_key) return "Not reported";
+    return planLabelForKey($provider, activePlanInfo.plan_key) ?? "Not reported";
+  });
+  let isManual = $derived.by(() => !!activePlanInfo && !activePlanInfo.detected);
   let planStateLabel = $derived.by(() => {
     if (planSaving) return "Saving";
-    if (!$planInfo) return "Detecting";
-    return $planInfo.detected ? "Auto" : "Manual";
+    if (!activePlanInfo) return "Detecting";
+    return activePlanInfo.detected ? "Auto" : "Manual";
   });
 </script>
 
-<div class="settings-view">
+<div class="settings-view app-view">
   <div class="view-header">
     <div class="settings-title">
       <h2 class="view-title">Settings</h2>
-      <span class="version-chip">v{$health?.version ?? "1.6.5"}</span>
+      <span class="version-chip">{$health?.version ? `v${$health.version}` : "Version unavailable"}</span>
     </div>
     <button type="button" class="btn check-updates-btn" onclick={checkForUpdates} aria-label="Check for application updates">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+      <IconRefresh size={13} stroke={2.2} aria-hidden="true" />
       Check for updates
     </button>
   </div>
@@ -167,7 +263,7 @@
           <div class="it-line">
             <span class="it-product" style="color: {$providerProfile.accent}">{$providerProfile.productName}</span>
             <span class="it-sep">·</span>
-            <span class="it-plan">{$planInfo?.plan_name ?? "Detecting plan…"}</span>
+            <span class="it-plan">{activePlanInfo ? activePlanLabel : "Detecting plan…"}</span>
           </div>
           <span class="it-sub">
             Broadcasting as <strong>{$providerProfile.label}</strong>
@@ -229,6 +325,9 @@
         </div>
       </div>
     </div>
+    {#if settingsError}
+      <div class="settings-error" role="alert">{settingsError}</div>
+    {/if}
   </section>
 
   <div class="settings-grid">
@@ -236,7 +335,7 @@
       <header class="s-card-head">
         <div class="head-accent" aria-hidden="true"></div>
         <div class="head-text">
-          <h3 class="s-card-title">Data Sources</h3>
+          <h3 class="s-card-title">Data sources</h3>
           <p class="s-card-desc">Where Pulse reads session, usage, and presence signals from.</p>
         </div>
       </header>
@@ -269,34 +368,42 @@
       <header class="s-card-head">
         <div class="head-accent" aria-hidden="true"></div>
         <div class="head-text">
-          <h3 class="s-card-title">Data Management</h3>
+          <h3 class="s-card-title">Data management</h3>
           <p class="s-card-desc">Export or reset the local analytics database. Destructive actions are irreversible.</p>
         </div>
       </header>
       <div class="dm-body">
+        {#if dataError}
+          <div class="dm-error" role="alert">
+            <span>Local analytics unavailable. {dataError.replace(/^Local analytics unavailable\.\s*/, "")}</span>
+            <button type="button" onclick={loadLocalAnalytics}>Retry</button>
+          </div>
+        {/if}
         <div class="dm-stats">
           <div class="dm-stat">
             <span class="dm-key">Database</span>
-            <span class="dm-val mono">{fmtBytes(dbSizeBytes)}</span>
+            <span class="dm-val mono">{dataLoading ? "Loading…" : dbSizeBytes === null ? "Unavailable" : fmtBytes(dbSizeBytes)}</span>
             <span class="dm-sub mono">pulse-analytics.db</span>
           </div>
           <div class="dm-stat">
             <span class="dm-key">Sessions</span>
-            <span class="dm-val">{sessionTotal.toLocaleString()}</span>
+            <span class="dm-val">{dataLoading ? "Loading…" : sessionTotal === null ? "Unavailable" : sessionTotal.toLocaleString()}</span>
             <span class="dm-sub">tracked locally</span>
           </div>
         </div>
         <div class="dm-actions">
-          <button class="btn" onclick={handleExport}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <button class="btn" onclick={handleExport} disabled={dataLoading || !!dataError}>
+            <IconDownload size={12} stroke={2.2} aria-hidden="true" />
             Export JSON
           </button>
           {#if confirmClear}
-            <button class="btn btn-danger" onclick={handleClear}>Confirm clear</button>
+            <button class="btn btn-danger" onclick={handleClear} disabled={clearPending}>
+              {clearPending ? "Clearing…" : "Confirm clear"}
+            </button>
             <button class="btn btn-ghost" onclick={() => confirmClear = false}>Cancel</button>
           {:else}
-            <button class="btn btn-danger" onclick={() => confirmClear = true}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+            <button class="btn btn-danger" onclick={() => confirmClear = true} disabled={dataLoading || !!dataError}>
+              <IconTrash size={12} stroke={2.2} aria-hidden="true" />
               Clear history
             </button>
           {/if}
@@ -307,6 +414,8 @@
       {/if}
     </section>
   </div>
+
+  <DataSourceInspector />
 
   <div class="meta-strip">
     <div class="meta-cell">
@@ -328,9 +437,7 @@
   .settings-view {
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    max-width: var(--content-max);
-    margin: 0 auto;
+    gap: var(--page-gap);
     width: 100%;
     animation: fadeIn 0.3s var(--ease-out);
   }
@@ -382,6 +489,8 @@
     min-width: 0;
   }
   @media (max-width: 760px) {
+    .view-header { flex-direction: column; gap: 12px; }
+    .check-updates-btn { width: 100%; justify-content: center; }
     .identity-top { grid-template-columns: 1fr; }
     .it-status { justify-content: flex-start; }
   }
@@ -483,7 +592,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(200px, 0.8fr);
     border-top: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-card) 100%);
+    background: var(--panel-sheen), var(--surface-panel);
     border-bottom-left-radius: var(--radius-lg);
     border-bottom-right-radius: var(--radius-lg);
     overflow: visible;
@@ -645,9 +754,30 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 18px;
     padding: 20px;
     flex: 1;
+  }
+  .dm-error {
+    flex: 0 0 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding-bottom: 14px;
+    color: var(--danger);
+    font-size: var(--fs-xs);
+    border-bottom: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  }
+  .dm-error button {
+    flex: 0 0 auto;
+    padding: 5px 10px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
   }
   .dm-stats { display: flex; gap: 24px; align-items: stretch; flex-wrap: wrap; }
   .dm-stat {
@@ -679,9 +809,23 @@
   .dm-sub { font-size: 11px; color: var(--text-muted); }
   .dm-sub.mono { font-family: var(--font-mono); }
   .dm-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .dm-actions button:disabled { cursor: not-allowed; opacity: 0.45; }
   @media (max-width: 560px) {
+    .s-row { align-items: flex-start; flex-direction: column; }
+    .s-value { max-width: 100%; }
     .dm-body { flex-direction: column; align-items: stretch; }
     .dm-actions { justify-content: stretch; }
+    .dm-actions button { flex: 1; }
+  }
+  .settings-error {
+    padding: 9px 22px;
+    color: var(--danger);
+    background: var(--danger-dim);
+    border-top: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+    border-bottom-left-radius: var(--radius-lg);
+    border-bottom-right-radius: var(--radius-lg);
+    font-size: var(--fs-xs);
+    font-weight: 600;
   }
 
   .clear-result {

@@ -97,8 +97,10 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
     }
 
     if let Some(routing) = ctx.routing
+        && routing.savings_estimate_available
         && routing.opus.cost_share_pct >= 90.0
         && routing.total_cost > 10.0
+        && routing.estimated_savings_if_rerouted > 0.0
     {
         recs.push(Recommendation {
             id: "opus-dominance".into(),
@@ -271,7 +273,10 @@ pub fn generate(ctx: &AnalysisContext) -> Vec<Recommendation> {
     let expensive: Vec<&HistoricalSession> = ctx
         .sessions
         .iter()
-        .filter(|s| s.total_cost > 20.0)
+        .filter(|s| {
+            s.cost_basis != crate::db::CostBasis::Unavailable
+                && s.known_cost.is_some_and(|cost| cost > 20.0)
+        })
         .collect();
     if !expensive.is_empty() {
         recs.push(Recommendation {

@@ -1,16 +1,16 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import type { AccessSnapshot, AnalyticsProviderScope } from "./access";
 
 /**
  * Tauri command dispatch, with a development fallback.
  *
  * Inside the Pulse window `invoke` talks to the Rust backend over the webview
  * IPC. When the same bundle is opened in a plain browser (Vite dev server, for
- * UI review), that IPC does not exist, so calls are routed to the debug-only
- * localhost bridge instead. The bridge serves a read-only allowlist; anything
- * else rejects, and both the bridge and this fallback are absent from release
- * builds because `import.meta.env.DEV` is statically false there.
+ * UI review), that IPC does not exist, so calls are routed through Vite's
+ * same-origin proxy to the authenticated Rust dev bridge. No provider fixture
+ * or browser-side fallback exists in this path.
  */
-const BRIDGE_ORIGIN = "http://127.0.0.1:1421";
+const BRIDGE_PATH = "/__pulse_api";
 
 /** True when running inside the Pulse webview, where Tauri IPC and events
  *  exist. False in a plain browser reviewing the UI through the dev bridge. */
@@ -22,26 +22,14 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
     if (hasTauriIpc() || !import.meta.env.DEV) {
         return tauriInvoke<T>(command, args);
     }
-    // The bridge is read-only by design, so a write has no backend to reach.
-    // Fail loudly here rather than letting the caller believe it persisted.
-    if (command.startsWith("set_") || command.startsWith("clear_")) {
-        throw new Error(
-            `${command} is a mutation; the read-only dev bridge cannot persist it. Run the packaged app to change settings.`,
-        );
-    }
-    // Forward every scalar argument under its Tauri name, so a filtered or
-    // windowed request reaches the same query the packaged app would run.
-    // Dropping arguments here silently answers a filtered request with
-    // unfiltered rows, which reads as "the filter matched everything".
-    const query = new URLSearchParams();
-    for (const [name, value] of Object.entries(args ?? {})) {
-        if (typeof value === "string" && value !== "") query.set(name, value);
-        else if (typeof value === "number" || typeof value === "boolean") query.set(name, String(value));
-    }
-    const suffix = query.size > 0 ? `?${query}` : "";
-    const res = await fetch(`${BRIDGE_ORIGIN}/invoke/${command}${suffix}`);
+    const res = await fetch(BRIDGE_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command, args: args ?? {} }),
+    });
     if (!res.ok) {
-        throw new Error(`dev bridge rejected ${command}: ${res.status}`);
+        const reason = await res.text();
+        throw new Error(`real dev backend rejected ${command}: ${res.status} ${reason}`.trim());
     }
     return (await res.json()) as T;
 }
@@ -62,6 +50,8 @@ export interface ModelMetric {
 
 export interface MetricsResponse {
     total_cost: number;
+    cost_available?: boolean;
+    cost_basis?: CostBasis;
     input_tokens: number;
     pure_input_tokens: number;
     output_tokens: number;
@@ -107,6 +97,8 @@ export interface SessionInfo {
     provider: string;
     context_window: string;
     cost: number;
+    cost_available?: boolean;
+    cost_basis?: CostBasis;
     tokens: number;
     input_tokens: number;
     output_tokens: number;
@@ -175,16 +167,26 @@ export interface QuotaWindow {
 export interface QuotaScope {
     id: string | null;
     name: string | null;
-    kind: "global" | "model" | "other";
+    kind: "global_account" | "individual_account" | "model" | "other";
     windows: QuotaWindow[];
 }
 
+export interface UsageSource {
+    lane: "codex_subscription" | "open_ai_api" | "claude_subscription" | "anthropic_api" | "unknown";
+    stream_id: string;
+    signals: string[];
+}
+
 export interface UsageSnapshot {
+    /** v1.6 compatibility fields retained by the backend. */
     provider: string;
+    source: string;
+    /** Structured v1.7 source identity. */
+    usage_source: UsageSource;
     scopes: QuotaScope[];
     credits: CreditBalance | null;
     observed_at: string | null;
-    source: string;
+    provenance_source: string;
 }
 
 export interface DiscordUserInfo {
@@ -193,6 +195,9 @@ export interface DiscordUserInfo {
     discriminator: string;
     avatar_hash: string;
     avatar_url: string;
+    /** Discord's built-in default avatar. Always resolves; used as the img
+     *  onerror fallback when `avatar_url` points at a stale hash (CDN 404). */
+    avatar_default_url: string;
     banner_hash: string | null;
     banner_url: string | null;
 }
@@ -301,6 +306,7 @@ export interface AppSnapshot {
     discord_preview: DiscordPresencePreview;
     discord_settings: DiscordSettings;
     plan: PlanInfo;
+    access: AccessSnapshot;
 }
 
 export function getHealth(): Promise<HealthResponse> {
@@ -384,16 +390,22 @@ export function getProviderCopy(): Promise<ProviderCopyInfo> {
     return invoke("get_provider_copy");
 }
 
-export function getTraceOverview(days?: number): Promise<TraceOverview> {
-    return invoke("get_trace_overview", { days: days ?? null });
+export function getTraceOverview(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<TraceOverview> {
+    return invoke("get_trace_overview", { days: days ?? null, provider: provider ?? null });
 }
 
-export function setPlanOverride(plan: string): Promise<void> {
-    return invoke("set_plan_override", { plan });
+export function setPlanOverride(plan: string, provider?: "codex" | "claude"): Promise<void> {
+    return invoke("set_plan_override", { plan, provider: provider ?? null });
 }
+
+export type CostBasis = "exact" | "partial" | "estimated" | "unavailable";
 
 export interface HistoricalSession {
     id: string;
+    provider: string;
     session_name: string | null;
     project: string;
     model: string;
@@ -405,6 +417,9 @@ export interface HistoricalSession {
     ended_at: string | null;
     duration_secs: number;
     total_cost: number;
+    cost_basis: CostBasis;
+    cost_source: string;
+    known_cost: number | null;
     input_tokens: number;
     output_tokens: number;
     cache_write_tokens: number;
@@ -424,7 +439,10 @@ export interface DailyStat {
     project: string;
     model: string;
     session_count: number;
+    priced_sessions: number;
     total_cost: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
     total_tokens: number;
     input_tokens: number;
     output_tokens: number;
@@ -434,7 +452,10 @@ export interface DailyStat {
 
 export interface AnalyticsSummary {
     total_sessions: number;
+    priced_sessions: number;
     total_cost: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
     total_tokens: number;
     total_cache_read: number;
     total_cache_write: number;
@@ -449,7 +470,10 @@ export interface AnalyticsSummary {
 export interface ProjectStat {
     project: string;
     session_count: number;
+    priced_sessions: number;
     total_cost: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
     total_tokens: number;
     avg_session_cost: number;
     avg_duration_secs: number;
@@ -461,7 +485,10 @@ export interface ProjectStat {
 export interface HourlyActivity {
     hour: number;
     session_count: number;
+    priced_sessions: number;
     total_cost: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
 }
 
 export interface CostForecast {
@@ -470,6 +497,10 @@ export interface CostForecast {
     days_in_month: number;
     projected_monthly: number;
     daily_average: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
+    sessions: number;
+    priced_sessions: number;
 }
 
 export interface BudgetStatus {
@@ -479,32 +510,52 @@ export interface BudgetStatus {
     pct_used: number;
     projected_monthly: number;
     over_budget: boolean;
+    cost_basis: CostBasis;
+    cost_sources: string[];
+    sessions: number;
+    priced_sessions: number;
 }
 
-export type ModelDistribution = [string, number, number];
+export interface ModelStat {
+    model: string;
+    session_count: number;
+    priced_sessions: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
+    total_cost: number;
+}
 
 export function getSessionHistory(
     days?: number,
     project?: string,
     limit?: number,
+    provider?: AnalyticsProviderScope,
 ): Promise<HistoricalSession[]> {
     return invoke("get_session_history", {
         days: days ?? null,
         project: project ?? null,
         limit: limit ?? null,
+        provider: provider ?? null,
     });
 }
 
-export function searchSessions(query: string, limit?: number): Promise<HistoricalSession[]> {
-    return invoke("search_sessions", { query, limit: limit ?? null });
+export function searchSessions(
+    query: string,
+    limit?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<HistoricalSession[]> {
+    return invoke("search_sessions", { query, limit: limit ?? null, provider: provider ?? null });
 }
 
-export function getDailyStats(days?: number): Promise<DailyStat[]> {
-    return invoke("get_daily_stats", { days: days ?? null });
+export function getDailyStats(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<DailyStat[]> {
+    return invoke("get_daily_stats", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getAnalyticsSummary(): Promise<AnalyticsSummary> {
-    return invoke("get_analytics_summary");
+export function getAnalyticsSummary(provider?: AnalyticsProviderScope): Promise<AnalyticsSummary> {
+    return invoke("get_analytics_summary", { provider: provider ?? null });
 }
 
 export interface ContextFileEntry {
@@ -529,8 +580,14 @@ export interface ContextBreakdown {
     mcp_total: number;
 }
 
-export function getContextBreakdown(sessionId?: string): Promise<ContextBreakdown> {
-    return invoke("get_context_breakdown", { sessionId: sessionId ?? null });
+export function getContextBreakdown(
+    sessionId?: string,
+    provider?: AnalyticsProviderScope,
+): Promise<ContextBreakdown> {
+    return invoke("get_context_breakdown", {
+        sessionId: sessionId ?? null,
+        provider: provider ?? null,
+    });
 }
 
 export interface SessionContextBreakdown {
@@ -542,8 +599,14 @@ export interface SessionContextBreakdown {
     breakdown: ContextBreakdown;
 }
 
-export function getContextBreakdowns(sessionIds?: string[]): Promise<SessionContextBreakdown[]> {
-    return invoke("get_context_breakdowns", { sessionIds: sessionIds ?? null });
+export function getContextBreakdowns(
+    sessionIds?: string[],
+    provider?: AnalyticsProviderScope,
+): Promise<SessionContextBreakdown[]> {
+    return invoke("get_context_breakdowns", {
+        sessionIds: sessionIds ?? null,
+        provider: provider ?? null,
+    });
 }
 
 export interface SessionContextUsage {
@@ -557,24 +620,41 @@ export interface SessionContextUsage {
     recommendation: string;
 }
 
-export function getSessionsContextUsage(days?: number): Promise<SessionContextUsage[]> {
-    return invoke("get_sessions_context_usage", { days: days ?? null });
+export function getSessionsContextUsage(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<SessionContextUsage[]> {
+    return invoke("get_sessions_context_usage", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getProjectStats(days?: number): Promise<ProjectStat[]> {
-    return invoke("get_project_stats", { days: days ?? null });
+export function getProjectStats(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<ProjectStat[]> {
+    return invoke("get_project_stats", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getHourlyActivity(days?: number): Promise<HourlyActivity[]> {
-    return invoke("get_hourly_activity", { days: days ?? null });
+export function getHourlyActivity(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<HourlyActivity[]> {
+    return invoke("get_hourly_activity", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getTopSessions(limit?: number, days?: number): Promise<HistoricalSession[]> {
-    return invoke("get_top_sessions", { limit: limit ?? null, days: days ?? null });
+export function getTopSessions(
+    limit?: number,
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<HistoricalSession[]> {
+    return invoke("get_top_sessions", {
+        limit: limit ?? null,
+        days: days ?? null,
+        provider: provider ?? null,
+    });
 }
 
-export function getCostForecast(): Promise<CostForecast> {
-    return invoke("get_cost_forecast");
+export function getCostForecast(provider?: AnalyticsProviderScope): Promise<CostForecast> {
+    return invoke("get_cost_forecast", { provider: provider ?? null });
 }
 
 /**
@@ -593,8 +673,14 @@ export interface CostTotals {
     cache_write_cost: number;
     cache_read_cost: number;
     total_tokens: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_write_tokens: number;
     cache_read_tokens: number;
     pure_input_tokens: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
+    priced_sessions: number;
     by_model: CostSlice[];
     by_project: CostSlice[];
 }
@@ -605,40 +691,67 @@ export interface CostSlice {
     sessions: number;
 }
 
-export function getCostTotals(days?: number, project?: string): Promise<CostTotals> {
-    return invoke("get_cost_totals", { days: days ?? null, project: project ?? null });
+export function getCostTotals(
+    days?: number,
+    project?: string,
+    provider?: AnalyticsProviderScope,
+): Promise<CostTotals> {
+    return invoke("get_cost_totals", {
+        days: days ?? null,
+        project: project ?? null,
+        provider: provider ?? null,
+    });
 }
 
-export function getBudgetStatus(): Promise<BudgetStatus> {
-    return invoke("get_budget_status");
+export function getBudgetStatus(provider?: AnalyticsProviderScope): Promise<BudgetStatus> {
+    return invoke("get_budget_status", { provider: provider ?? null });
 }
 
 export function setBudget(monthlyBudget: number, alertThresholdPct?: number): Promise<void> {
     return invoke("set_budget", { monthlyBudget, alertThresholdPct: alertThresholdPct ?? null });
 }
 
-export function getModelDistribution(days?: number): Promise<ModelDistribution[]> {
-    return invoke("get_model_distribution", { days: days ?? null });
+export function getModelDistribution(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<ModelStat[]> {
+    return invoke("get_model_distribution_v2", { days: days ?? null, provider: provider ?? null });
 }
 
 export function exportAllData(): Promise<Record<string, unknown>> {
     return invoke("export_all_data");
 }
 
-export function clearHistory(): Promise<number> {
-    return invoke("clear_history");
+export function clearHistory(provider?: AnalyticsProviderScope): Promise<number> {
+    return invoke("clear_history", { provider: provider ?? null });
 }
 
 export function getDbSize(): Promise<number> {
     return invoke("get_db_size");
 }
 
-export function generateHtmlReport(days?: number, project?: string): Promise<string> {
-    return invoke("generate_html_report", { days: days ?? null, project: project ?? null });
+export function generateHtmlReport(
+    days?: number,
+    project?: string,
+    provider?: AnalyticsProviderScope,
+): Promise<string> {
+    return invoke("generate_html_report", {
+        days: days ?? null,
+        project: project ?? null,
+        provider: provider ?? null,
+    });
 }
 
-export function generateMarkdownReport(days?: number, project?: string): Promise<string> {
-    return invoke("generate_markdown_report", { days: days ?? null, project: project ?? null });
+export function generateMarkdownReport(
+    days?: number,
+    project?: string,
+    provider?: AnalyticsProviderScope,
+): Promise<string> {
+    return invoke("generate_markdown_report", {
+        days: days ?? null,
+        project: project ?? null,
+        provider: provider ?? null,
+    });
 }
 
 
@@ -662,13 +775,17 @@ export interface InflectionPoint {
     multiplier: number;
     direction: "spike" | "drop" | "";
     sessions_on_day: number;
+    observed_sessions_on_day: number;
     cost_on_day: number;
     baseline_cost: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
     note: string;
 }
 
 export interface FamilyStats {
     sessions: number;
+    priced_sessions: number;
     cost: number;
     cost_share_pct: number;
     avg_cost_per_session: number;
@@ -676,11 +793,15 @@ export interface FamilyStats {
 
 export interface ModelRoutingReport {
     total_sessions: number;
+    priced_sessions: number;
     total_cost: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
     opus: FamilyStats;
     sonnet: FamilyStats;
     haiku: FamilyStats;
     other: FamilyStats;
+    savings_estimate_available: boolean;
     estimated_savings_if_rerouted: number;
     diagnosis: string;
 }
@@ -696,24 +817,44 @@ export interface Recommendation {
     color: string;
 }
 
-export function getCacheHealth(days?: number): Promise<CacheHealthReport> {
-    return invoke("get_cache_health", { days: days ?? null });
+export function getCacheHealth(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<CacheHealthReport> {
+    return invoke("get_cache_health", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getInflectionPoints(days?: number): Promise<InflectionPoint[]> {
-    return invoke("get_inflection_points", { days: days ?? null });
+export function getInflectionPoints(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<InflectionPoint[]> {
+    return invoke("get_inflection_points", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getModelRouting(days?: number): Promise<ModelRoutingReport | null> {
-    return invoke("get_model_routing", { days: days ?? null });
+export function getModelRouting(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<ModelRoutingReport | null> {
+    return invoke("get_model_routing", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getRecommendations(days?: number): Promise<Recommendation[]> {
-    return invoke("get_recommendations", { days: days ?? null });
+export function getRecommendations(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<Recommendation[]> {
+    return invoke("get_recommendations", { days: days ?? null, provider: provider ?? null });
 }
 
-export function copyFixPrompt(recId: string): Promise<string> {
-    return invoke("copy_fix_prompt", { recId });
+export function copyFixPrompt(
+    recId: string,
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<string> {
+    return invoke("copy_fix_prompt", {
+        recId,
+        days: days ?? null,
+        provider: provider ?? null,
+    });
 }
 
 
@@ -772,16 +913,25 @@ export interface SessionHealthReport {
     diagnosis: string;
 }
 
-export function getToolFrequency(days?: number): Promise<ToolFrequencyReport> {
-    return invoke("get_tool_frequency", { days: days ?? null });
+export function getToolFrequency(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<ToolFrequencyReport> {
+    return invoke("get_tool_frequency", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getPromptComplexity(days?: number): Promise<PromptComplexityReport> {
-    return invoke("get_prompt_complexity", { days: days ?? null });
+export function getPromptComplexity(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<PromptComplexityReport> {
+    return invoke("get_prompt_complexity", { days: days ?? null, provider: provider ?? null });
 }
 
-export function getSessionHealth(days?: number): Promise<SessionHealthReport> {
-    return invoke("get_session_health", { days: days ?? null });
+export function getSessionHealth(
+    days?: number,
+    provider?: AnalyticsProviderScope,
+): Promise<SessionHealthReport> {
+    return invoke("get_session_health", { days: days ?? null, provider: provider ?? null });
 }
 
 
@@ -790,6 +940,9 @@ export interface ReportsBundle {
     capabilities: ProviderCapabilities;
     days: number;
     total_sessions: number;
+    priced_sessions: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
     recommendations: Recommendation[];
     trace_overview: TraceOverview;
     tool_frequency: ToolFrequencyReport;
@@ -806,10 +959,21 @@ export interface DailyCostPoint {
     date: string;
     cost: number;
     sessions: number;
+    priced_sessions: number;
+    cost_basis: CostBasis;
+    cost_sources: string[];
 }
 
-export function getReportsBundle(days?: number, project?: string): Promise<ReportsBundle> {
-    return invoke("get_reports_bundle", { days: days ?? null, project: project ?? null });
+export function getReportsBundle(
+    days?: number,
+    project?: string,
+    provider?: AnalyticsProviderScope,
+): Promise<ReportsBundle> {
+    return invoke("get_reports_bundle", {
+        days: days ?? null,
+        project: project ?? null,
+        provider: provider ?? null,
+    });
 }
 
 export interface SessionHistoryFilter {
@@ -820,6 +984,7 @@ export interface SessionHistoryFilter {
     min_cost?: number | null;
     max_cost?: number | null;
     limit?: number | null;
+    provider?: AnalyticsProviderScope | null;
 }
 
 export function getSessionHistoryFiltered(
@@ -833,6 +998,7 @@ export function getSessionHistoryFiltered(
         minCost: filter.min_cost ?? null,
         maxCost: filter.max_cost ?? null,
         limit: filter.limit ?? null,
+        provider: filter.provider ?? null,
     });
 }
 
@@ -840,11 +1006,13 @@ export function getSessionsByHourRange(
     startHour: number,
     endHour: number,
     days?: number,
+    provider?: AnalyticsProviderScope,
 ): Promise<HistoricalSession[]> {
     return invoke("get_sessions_by_hour_range", {
         startHour,
         endHour,
         days: days ?? null,
+        provider: provider ?? null,
     });
 }
 
@@ -852,6 +1020,46 @@ export function getSessionsByHourRange(
 /// next tick (~5s cycle). Returns immediately; stores re-poll picks up fresh data.
 export function refreshUsage(): Promise<void> {
     return invoke("refresh_usage");
+}
+
+export type NotificationKind =
+    | "provider_health"
+    | "quota_threshold"
+    | "quota_reset"
+    | "discord_connectivity";
+
+/** Durable backend notification as stored in Pulse's local SQLite database. */
+export interface PulseNotification {
+    id: number;
+    kind: NotificationKind;
+    provider: string;
+    key: string;
+    title: string;
+    body: string;
+    action: string | null;
+    created_at: string;
+    read_at: string | null;
+    dismissed_at: string | null;
+}
+
+export function getNotifications(limit = 30): Promise<PulseNotification[]> {
+    return invoke("get_notifications", { limit });
+}
+
+export function getUnreadNotificationCount(): Promise<number> {
+    return invoke("get_unread_notification_count");
+}
+
+export function markNotificationRead(id: number): Promise<boolean> {
+    return invoke("mark_notification_read", { id });
+}
+
+export function markAllNotificationsRead(): Promise<number> {
+    return invoke("mark_all_notifications_read");
+}
+
+export function dismissNotification(id: number): Promise<boolean> {
+    return invoke("dismiss_notification", { id });
 }
 
 export interface AppUpdateAsset {

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "fixtures": [
+    { "name": "codex_subscription", "path": "codex_subscription/fixture.json", "source_contract": "codex_subscription.v1" },
+    { "name": "openai_api_negative_auth", "path": "openai_api_negative_auth/fixture.json", "source_contract": "open_ai_api.v1" },
+    { "name": "openai_api_negative_status", "path": "openai_api_negative_status/fixture.json", "source_contract": "open_ai_api.v1" },
+    { "name": "claude_subscription", "path": "claude_subscription/fixture.json", "source_contract": "claude_subscription.v1" },
+    { "name": "anthropic_api_negative_auth", "path": "anthropic_api_negative_auth/fixture.json", "source_contract": "anthropic_api.v1" },
+    { "name": "anthropic_api_negative_status", "path": "anthropic_api_negative_status/fixture.json", "source_contract": "anthropic_api.v1" },
+    { "name": "hybrid", "path": "hybrid/fixture.json", "source_contract": "hybrid.v1" },
+    { "name": "no_data", "path": "no_data/fixture.json", "source_contract": "aggregate.v1" },
+    { "name": "stale_cache", "path": "stale_cache/fixture.json", "source_contract": "cache.v1" },
+    { "name": "window_removal", "path": "window_removal/fixture.json", "source_contract": "window_delta.v1" },
+    { "name": "discord", "path": "discord/fixture.json", "source_contract": "discord_ipc.v1" }
+  ]
+}

@@ -28,6 +28,11 @@
   let projected = $derived(forecast?.projected_monthly ?? 0);
   let cap = $derived(budget?.monthly_budget ?? 0);
   let hasCap = $derived(cap > 0);
+  let costAvailable = $derived(
+    forecast !== null
+      && (forecast.cost_basis === "exact" || forecast.cost_basis === "estimated")
+      && forecast.priced_sessions > 0,
+  );
 
   /**
    * Track ceiling. With a cap, leave headroom so the tick is never flush
@@ -56,6 +61,7 @@
   let alertThreshold = $derived(budget?.alert_threshold_pct ?? 0);
   let spentShareOfCap = $derived(hasCap && cap > 0 ? (spent / cap) * 100 : 0);
   let status = $derived.by((): "none" | "ok" | "warn" | "over" => {
+    if (!costAvailable) return "none";
     if (!hasCap) return "none";
     if (spent > cap) return "over";
     if (projected > cap) return "warn";
@@ -69,7 +75,10 @@
 
   /** One plain sentence, so the gauge does not need decoding. */
   let verdict = $derived.by(() => {
-    if (!forecast || forecast.days_elapsed === 0) {
+    if (!forecast || !costAvailable) {
+      return "Cost unavailable for this month.";
+    }
+    if (spent <= 0) {
       return "No spend recorded this month yet.";
     }
     if (!hasCap) {
@@ -92,13 +101,13 @@
   <header class="ck-head">
     <div class="ck-primary">
       <span class="ck-label">Spent this month</span>
-      <span class="ck-figure">{fmtCost(spent)}</span>
+      <span class="ck-figure">{costAvailable ? fmtCost(spent) : "—"}</span>
     </div>
 
     <div class="ck-marks">
       <div class="ck-mark">
         <span class="ck-mark-label">Projected</span>
-        <span class="ck-mark-value">{fmtCost(projected)}</span>
+        <span class="ck-mark-value">{costAvailable ? fmtCost(projected) : "—"}</span>
       </div>
       <div class="ck-mark">
         <span class="ck-mark-label">Monthly budget</span>
@@ -113,28 +122,30 @@
     </div>
   </header>
 
-  <div
-    class="ck-track"
-    role="meter"
-    aria-label="Month-to-date spend against budget"
-    aria-valuemin="0"
-    aria-valuemax={ceiling}
-    aria-valuenow={spent}
-  >
-    <!-- Projection sits behind the actual fill so the gap between them reads
-         as "still to come" rather than as a separate quantity. -->
-    <div class="ck-projected" style="width:{projectedPct}%"></div>
-    <div class="ck-spent" style="width:{spentPct}%"></div>
-    {#if hasCap}
-      <div class="ck-cap" style="left:{capPct}%">
-        <span class="ck-cap-tick"></span>
-      </div>
-    {/if}
-  </div>
+  {#if costAvailable}
+    <div
+      class="ck-track"
+      role="meter"
+      aria-label="Month-to-date spend against budget"
+      aria-valuemin="0"
+      aria-valuemax={ceiling}
+      aria-valuenow={spent}
+    >
+      <!-- Projection sits behind the actual fill so the gap between them reads
+           as "still to come" rather than as a separate quantity. -->
+      <div class="ck-projected" style="width:{projectedPct}%"></div>
+      <div class="ck-spent" style="width:{spentPct}%"></div>
+      {#if hasCap}
+        <div class="ck-cap" style="left:{capPct}%">
+          <span class="ck-cap-tick"></span>
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <p class="ck-verdict">{verdict}</p>
 
-  {#if forecast && forecast.days_in_month > 0}
+  {#if forecast && costAvailable && forecast.days_in_month > 0}
     <p class="ck-period">
       Day {forecast.days_elapsed} of {forecast.days_in_month}
       {#if hasCap}· {capShare.toFixed(0)}% of cap projected{/if}

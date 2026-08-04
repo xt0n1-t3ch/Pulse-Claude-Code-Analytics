@@ -1,0 +1,162 @@
+import { fireEvent, render, waitFor } from "@testing-library/svelte";
+import { get } from "svelte/store";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import NotificationCenter from "@/components/NotificationCenter.svelte";
+import {
+  accessSnapshot,
+  currentView,
+  selectedAccessSourceId,
+} from "@/lib/stores";
+
+const api = vi.hoisted(() => ({
+  getNotifications: vi.fn(),
+  getUnreadNotificationCount: vi.fn(),
+  markNotificationRead: vi.fn(),
+  markAllNotificationsRead: vi.fn(),
+  dismissNotification: vi.fn(),
+}));
+
+const tauriEvents = vi.hoisted(() => ({
+  listeners: new Map<string, () => void>(),
+  emit: vi.fn(async () => undefined),
+  listen: vi.fn(async (event: string, handler: () => void) => {
+    tauriEvents.listeners.set(event, handler);
+    return () => tauriEvents.listeners.delete(event);
+  }),
+}));
+
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  ...api,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: tauriEvents.emit,
+  listen: tauriEvents.listen,
+}));
+
+const notification = {
+  id: 42,
+  kind: "quota_threshold" as const,
+  provider: "claude",
+  key: "claude:weekly:80",
+  title: "Claude weekly usage reached 80%",
+  body: "Provider-reported weekly allowance is now above the configured threshold.",
+  action: "Open quota details",
+  created_at: "2026-08-01T14:00:00Z",
+  read_at: null,
+  dismissed_at: null,
+};
+
+describe("NotificationCenter", () => {
+  beforeEach(() => {
+    tauriEvents.listeners.clear();
+    tauriEvents.emit.mockClear();
+    tauriEvents.listen.mockClear();
+    currentView.set("sessions");
+    selectedAccessSourceId.set("all");
+    accessSnapshot.set({
+      routes: [{
+        source: {
+          id: "claude-subscription",
+          kind: "claude_subscription",
+          provider: "claude",
+          auth_method: "oauth",
+          proof: "quota_response",
+          plan: "Max 20x",
+        },
+        availability: "available",
+        freshness: "fresh",
+        provenance: "provider_api",
+        observed_at: "2026-08-01T14:00:00Z",
+        fetched_at: "2026-08-01T14:00:01Z",
+        expires_at: "2026-08-01T14:00:31Z",
+        windows: [],
+        credits: null,
+        extra_usage: null,
+        error: null,
+      }],
+    });
+    for (const mock of Object.values(api)) mock.mockReset();
+    api.getNotifications.mockResolvedValue([notification]);
+    api.getUnreadNotificationCount.mockResolvedValue(1);
+    api.markNotificationRead.mockResolvedValue(true);
+    api.markAllNotificationsRead.mockResolvedValue(1);
+    api.dismissNotification.mockResolvedValue(true);
+  });
+
+  it("loads durable notifications and routes quota actions to Home", async () => {
+    const { getByRole, getByText } = render(NotificationCenter);
+
+    await waitFor(() => expect(getByRole("button", { name: /1 unread/ })).toBeTruthy());
+    await fireEvent.click(getByRole("button", { name: /1 unread/ }));
+    await waitFor(() => expect(getByText("Claude weekly usage reached 80%")).toBeTruthy());
+
+    const row = getByText("Claude weekly usage reached 80%").closest("button");
+    expect(row).toBeTruthy();
+    await fireEvent.click(row!);
+    expect(api.markNotificationRead).toHaveBeenCalledWith(42);
+    expect(get(currentView)).toBe("dashboard");
+  });
+
+  it("marks every unread event and refreshes the backend count", async () => {
+    const { getByRole } = render(NotificationCenter);
+    await waitFor(() => expect(getByRole("button", { name: /1 unread/ })).toBeTruthy());
+    await fireEvent.click(getByRole("button", { name: /1 unread/ }));
+    await fireEvent.click(getByRole("button", { name: "Mark all read" }));
+
+    expect(api.markAllNotificationsRead).toHaveBeenCalledOnce();
+    expect(api.getUnreadNotificationCount).toHaveBeenCalled();
+  });
+
+  it("preserves the last provider-backed snapshot when a refresh fails", async () => {
+    const { getByRole, getByText } = render(NotificationCenter);
+    await waitFor(() => expect(getByRole("button", { name: /1 unread/ })).toBeTruthy());
+    await fireEvent.click(getByRole("button", { name: /1 unread/ }));
+    await waitFor(() => expect(getByText(notification.title)).toBeTruthy());
+
+    api.getNotifications.mockRejectedValueOnce(new Error("native database unavailable"));
+    tauriEvents.listeners.get("pulse://notification")?.();
+
+    await waitFor(() => expect(getByRole("alert")).toBeTruthy());
+    expect(getByText(notification.title)).toBeTruthy();
+    expect(getByRole("button", { name: /1 unread/ })).toBeTruthy();
+  });
+
+  it("ignores a stale refresh that resolves after a newer snapshot", async () => {
+    let resolveStale!: (rows: typeof notification[]) => void;
+    api.getNotifications
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+      .mockResolvedValueOnce([{ ...notification, id: 84, title: "Newest provider event" }]);
+    api.getUnreadNotificationCount.mockResolvedValue(1);
+
+    const { getByRole, getByText, queryByText } = render(NotificationCenter);
+    await fireEvent.click(getByRole("button", { name: "Notifications" }));
+    await waitFor(() => expect(getByText("Newest provider event")).toBeTruthy());
+
+    resolveStale([{ ...notification, title: "Stale provider event" }]);
+    await Promise.resolve();
+    expect(queryByText("Stale provider event")).toBeNull();
+  });
+
+  it("navigates even when marking a notification as read fails", async () => {
+    api.markNotificationRead.mockRejectedValueOnce(new Error("write failed"));
+    const { getByRole, getByText } = render(NotificationCenter);
+    await waitFor(() => expect(getByRole("button", { name: /1 unread/ })).toBeTruthy());
+    await fireEvent.click(getByRole("button", { name: /1 unread/ }));
+    await waitFor(() => expect(getByText(notification.title)).toBeTruthy());
+    await fireEvent.click(getByText(notification.title).closest("button")!);
+
+    expect(get(currentView)).toBe("dashboard");
+  });
+
+  it("opens from the native tray event and refreshes the durable feed", async () => {
+    const { getByRole, getByText } = render(NotificationCenter);
+    await waitFor(() => expect(tauriEvents.listeners.has("pulse://open-notifications")).toBe(true));
+
+    tauriEvents.listeners.get("pulse://open-notifications")?.();
+
+    await waitFor(() => expect(getByRole("dialog", { name: "Notification center" })).toBeTruthy());
+    await waitFor(() => expect(getByText(notification.title)).toBeTruthy());
+  });
+});

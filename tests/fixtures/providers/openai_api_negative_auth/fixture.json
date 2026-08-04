@@ -1,0 +1,33 @@
+{
+  "fixture_version": 1,
+  "raw_payload": {
+    "error": {
+      "message": "Synthetic authentication failure",
+      "type": "authentication_error",
+      "code": "invalid_api_key"
+    }
+  },
+  "status": "unauthorized",
+  "source_contract": "open_ai_api.v1",
+  "captured_at": "2026-08-01T00:00:00Z",
+  "expected_dto": {
+    "source": {
+      "id": "openai-api:fixture-auth",
+      "kind": "open_ai_api",
+      "provider": "openai",
+      "auth_method": "api_key",
+      "proof": "none",
+      "plan": null
+    },
+    "availability": "unavailable",
+    "freshness": "unknown",
+    "provenance": "none",
+    "observed_at": "2026-08-01T00:00:00Z",
+    "fetched_at": "2026-08-01T00:00:00Z",
+    "expires_at": null,
+    "windows": [],
+    "credits": null,
+    "extra_usage": null,
+    "error": "Synthetic authentication failure"
+  }
+}

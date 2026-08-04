@@ -128,11 +128,15 @@ const minimalBundle: ReportsBundle = {
   },
   model_routing: {
     total_sessions: 1,
+    priced_sessions: 0,
     total_cost: 0,
-    opus: { sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
-    sonnet: { sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
-    haiku: { sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
-    other: { sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+    cost_basis: "unavailable",
+    cost_sources: [],
+    opus: { sessions: 0, priced_sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+    sonnet: { sessions: 0, priced_sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+    haiku: { sessions: 0, priced_sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+    other: { sessions: 0, priced_sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+    savings_estimate_available: false,
     estimated_savings_if_rerouted: 0,
     diagnosis: "",
   },
@@ -209,7 +213,7 @@ describe("Phase 5 flow", () => {
     getReportsBundle.mockClear();
   });
 
-  it("re-queries the breakdown when a different live context is selected", async () => {
+  it("switches context from the same list observation without a second backend query", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
 
@@ -217,8 +221,7 @@ describe("Phase 5 flow", () => {
     const { container } = render(Context);
     await tick();
 
-    await waitFor(() => expect(getContextBreakdown).toHaveBeenCalled());
-    const callsBefore = getContextBreakdown.mock.calls.length;
+    await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalledTimes(1));
 
     let otherContext: HTMLElement | undefined;
     await waitFor(() => {
@@ -230,9 +233,11 @@ describe("Phase 5 flow", () => {
     await fireEvent.click(otherContext!);
 
     await waitFor(() => {
-      expect(getContextBreakdown.mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(container.querySelector(".hero-owner")?.textContent).toContain("other");
+      expect(container.querySelector(".model-chip")?.textContent).toContain("s2");
     });
-    expect(getContextBreakdown).toHaveBeenCalledWith("s2");
+    expect(getContextBreakdown).not.toHaveBeenCalled();
+    expect(getContextBreakdowns).toHaveBeenCalledTimes(1);
   });
 
   it("renders the reports bundle through a single bundle call", async () => {

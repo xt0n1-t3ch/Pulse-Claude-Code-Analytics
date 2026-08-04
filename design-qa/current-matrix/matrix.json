@@ -1,0 +1,2326 @@
+[
+  {
+    "theme": "dark",
+    "viewport": "1280x860",
+    "view": "Home",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "SECTION",
+          "class": "work-now s-K9uVagfrk9cM",
+          "scroll": 920,
+          "client": 892
+        },
+        {
+          "tag": "STRONG",
+          "class": "s-K9uVagfrk9cM",
+          "scroll": 174,
+          "client": 129
+        },
+        {
+          "tag": "SECTION",
+          "class": "glance-section s-K9uVagfrk9cM",
+          "scroll": 920,
+          "client": 892
+        },
+        {
+          "tag": "DIV",
+          "class": "insight-row s-K9uVagfrk9cM",
+          "scroll": 902,
+          "client": 856
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "1280x860",
+    "view": "Sessions",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "1280x860",
+    "view": "Context",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "1280x860",
+    "view": "Costs",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "1280x860",
+    "view": "Reports",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "text",
+          "class": {},
+          "scroll": 50,
+          "client": 44
+        },
+        {
+          "tag": "text",
+          "class": {},
+          "scroll": 50,
+          "client": 44
+        },
+        {
+          "tag": "text",
+          "class": {},
+          "scroll": 50,
+          "client": 44
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "1280x860",
+    "view": "Discord",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "hm-beacon s-m7JIaXzBT7b3 live",
+          "scroll": 11,
+          "client": 7
+        },
+        {
+          "tag": "DIV",
+          "class": "dp-activity-details s-m7JIaXzBT7b3",
+          "scroll": 326,
+          "client": 263
+        },
+        {
+          "tag": "DIV",
+          "class": "dp-activity-state s-m7JIaXzBT7b3",
+          "scroll": 345,
+          "client": 263
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "1280x860",
+    "view": "Settings",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "900x600",
+    "view": "Home",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "SECTION",
+          "class": "work-now s-K9uVagfrk9cM",
+          "scroll": 899,
+          "client": 864
+        },
+        {
+          "tag": "SECTION",
+          "class": "glance-section s-K9uVagfrk9cM",
+          "scroll": 899,
+          "client": 864
+        },
+        {
+          "tag": "DIV",
+          "class": "insight-row s-K9uVagfrk9cM",
+          "scroll": 881,
+          "client": 828
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "900x600",
+    "view": "Sessions",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "ht-col project s-52aeETytj1YQ",
+          "scroll": 306,
+          "client": 225
+        },
+        {
+          "tag": "SPAN",
+          "class": "ht-col model s-52aeETytj1YQ",
+          "scroll": 223,
+          "client": 169
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "900x600",
+    "view": "Context",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "900x600",
+    "view": "Costs",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "dt-col project s-7YTyFON8EASp",
+          "scroll": 302,
+          "client": 240
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "900x600",
+    "view": "Reports",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "900x600",
+    "view": "Discord",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "hm-beacon s-m7JIaXzBT7b3 live",
+          "scroll": 11,
+          "client": 7
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "900x600",
+    "view": "Settings",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "720x560",
+    "view": "Home",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "720x560",
+    "view": "Sessions",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "DIV",
+          "class": "history-table s-52aeETytj1YQ",
+          "scroll": 720,
+          "client": 644
+        },
+        {
+          "tag": "DIV",
+          "class": "ht-row-wrap s-52aeETytj1YQ",
+          "scroll": 720,
+          "client": 644
+        },
+        {
+          "tag": "SPAN",
+          "class": "ht-col project s-52aeETytj1YQ",
+          "scroll": 306,
+          "client": 166
+        },
+        {
+          "tag": "SPAN",
+          "class": "ht-col model s-52aeETytj1YQ",
+          "scroll": 223,
+          "client": 124
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "720x560",
+    "view": "Context",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "720x560",
+    "view": "Costs",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "DIV",
+          "class": "detail-table s-7YTyFON8EASp",
+          "scroll": 760,
+          "client": 644
+        },
+        {
+          "tag": "SPAN",
+          "class": "dt-col project s-7YTyFON8EASp",
+          "scroll": 302,
+          "client": 176
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "720x560",
+    "view": "Reports",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "720x560",
+    "view": "Discord",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "hm-beacon s-m7JIaXzBT7b3 live",
+          "scroll": 11,
+          "client": 7
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "dark",
+    "viewport": "720x560",
+    "view": "Settings",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "dark",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "1280x860",
+    "view": "Home",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "SECTION",
+          "class": "work-now s-K9uVagfrk9cM",
+          "scroll": 920,
+          "client": 892
+        },
+        {
+          "tag": "STRONG",
+          "class": "s-K9uVagfrk9cM",
+          "scroll": 174,
+          "client": 129
+        },
+        {
+          "tag": "SECTION",
+          "class": "glance-section s-K9uVagfrk9cM",
+          "scroll": 920,
+          "client": 892
+        },
+        {
+          "tag": "DIV",
+          "class": "insight-row s-K9uVagfrk9cM",
+          "scroll": 902,
+          "client": 856
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "1280x860",
+    "view": "Sessions",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "1280x860",
+    "view": "Context",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "1280x860",
+    "view": "Costs",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "1280x860",
+    "view": "Reports",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "text",
+          "class": {},
+          "scroll": 50,
+          "client": 44
+        },
+        {
+          "tag": "text",
+          "class": {},
+          "scroll": 50,
+          "client": 44
+        },
+        {
+          "tag": "text",
+          "class": {},
+          "scroll": 50,
+          "client": 44
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "1280x860",
+    "view": "Discord",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "hm-beacon s-m7JIaXzBT7b3 live",
+          "scroll": 11,
+          "client": 7
+        },
+        {
+          "tag": "DIV",
+          "class": "dp-activity-details s-m7JIaXzBT7b3",
+          "scroll": 326,
+          "client": 263
+        },
+        {
+          "tag": "DIV",
+          "class": "dp-activity-state s-m7JIaXzBT7b3",
+          "scroll": 345,
+          "client": 263
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "1280x860",
+    "view": "Settings",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "900x600",
+    "view": "Home",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "SECTION",
+          "class": "work-now s-K9uVagfrk9cM",
+          "scroll": 899,
+          "client": 864
+        },
+        {
+          "tag": "SECTION",
+          "class": "glance-section s-K9uVagfrk9cM",
+          "scroll": 899,
+          "client": 864
+        },
+        {
+          "tag": "DIV",
+          "class": "insight-row s-K9uVagfrk9cM",
+          "scroll": 881,
+          "client": 828
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "900x600",
+    "view": "Sessions",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "ht-col project s-52aeETytj1YQ",
+          "scroll": 306,
+          "client": 225
+        },
+        {
+          "tag": "SPAN",
+          "class": "ht-col model s-52aeETytj1YQ",
+          "scroll": 223,
+          "client": 169
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "900x600",
+    "view": "Context",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "900x600",
+    "view": "Costs",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "dt-col project s-7YTyFON8EASp",
+          "scroll": 302,
+          "client": 240
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "900x600",
+    "view": "Reports",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "900x600",
+    "view": "Discord",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "hm-beacon s-m7JIaXzBT7b3 live",
+          "scroll": 11,
+          "client": 7
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "900x600",
+    "view": "Settings",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "720x560",
+    "view": "Home",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "720x560",
+    "view": "Sessions",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "DIV",
+          "class": "history-table s-52aeETytj1YQ",
+          "scroll": 720,
+          "client": 644
+        },
+        {
+          "tag": "DIV",
+          "class": "ht-row-wrap s-52aeETytj1YQ",
+          "scroll": 720,
+          "client": 644
+        },
+        {
+          "tag": "SPAN",
+          "class": "ht-col project s-52aeETytj1YQ",
+          "scroll": 306,
+          "client": 166
+        },
+        {
+          "tag": "SPAN",
+          "class": "ht-col model s-52aeETytj1YQ",
+          "scroll": 223,
+          "client": 124
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "720x560",
+    "view": "Context",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "720x560",
+    "view": "Costs",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "DIV",
+          "class": "detail-table s-7YTyFON8EASp",
+          "scroll": 760,
+          "client": 644
+        },
+        {
+          "tag": "SPAN",
+          "class": "dt-col project s-7YTyFON8EASp",
+          "scroll": 302,
+          "client": 176
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "720x560",
+    "view": "Reports",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "720x560",
+    "view": "Discord",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": [
+        {
+          "tag": "SPAN",
+          "class": "hm-beacon s-m7JIaXzBT7b3 live",
+          "scroll": 11,
+          "client": 7
+        }
+      ]
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  },
+  {
+    "theme": "light",
+    "viewport": "720x560",
+    "view": "Settings",
+    "overflow": {
+      "document": 0,
+      "body": 0,
+      "main": 0,
+      "theme": "light",
+      "offenders": []
+    },
+    "errors": [],
+    "idle": {
+      "duration_ms": 1200,
+      "before": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      },
+      "after": {
+        "get_active_provider": 1,
+        "plugin:app|set_app_theme": 2,
+        "plugin:event|listen": 3,
+        "get_notifications": 1,
+        "get_unread_notification_count": 1,
+        "check_app_update": 1,
+        "get_discord_user": 1,
+        "get_provider_copy": 1,
+        "get_app_snapshot": 2,
+        "get_analytics_summary": 1,
+        "get_session_history": 1,
+        "get_cost_forecast": 1,
+        "get_hourly_activity": 1,
+        "get_project_stats": 1
+      }
+    }
+  }
+]

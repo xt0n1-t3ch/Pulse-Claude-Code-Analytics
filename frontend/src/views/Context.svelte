@@ -1,13 +1,14 @@
 <script lang="ts">
+  import IconCopy from "@tabler/icons-svelte/icons/copy";
   import { fmtTokens, fmtPct } from "../lib/utils";
   import {
-    getContextBreakdown,
     getContextBreakdowns,
     type ContextBreakdown,
     type ContextFileEntry,
     type SessionContextBreakdown,
   } from "../lib/api";
-  import { addToast } from "../lib/stores";
+  import { addToast, selectedAnalyticsProviderScope } from "../lib/stores";
+  import { providerMatchesAnalyticsScope } from "../lib/access";
   import { providerProfile } from "../lib/provider";
   import { sessions } from "../lib/stores";
 
@@ -16,20 +17,31 @@
   let selectedSessionId = $state<string | null>(null);
   let refreshing = $state(false);
   let loaded = $state(false);
-  let showMcp = $state(true);
-  let showMemory = $state(true);
-  let showSkills = $state(true);
+  let contextError = $state<string | null>(null);
+  // Keep inventories one click away without making the live context decision
+  // path scroll through thousands of tokens of secondary detail.
+  let showMcp = $state(false);
+  let showMemory = $state(false);
+  let showSkills = $state(false);
 
-  let breakdownRequest = 0;
   let breakdownListRequest = 0;
   let lastBreakdownKey = "";
+  let scopedLiveSessions = $derived(
+    $sessions.filter(
+      (session) =>
+        !session.is_idle
+        && providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
+    ),
+  );
 
   $effect(() => {
-    const list = $sessions.filter((session) => !session.is_idle);
+    const list = scopedLiveSessions;
     if (list.length === 0) {
       selectedSessionId = null;
-      breakdownRequest++;
+      breakdownListRequest++;
+      breakdowns = [];
       ctx = null;
+      contextError = null;
       refreshing = false;
       loaded = true;
       return;
@@ -40,52 +52,60 @@
     }
   });
 
-  async function loadBreakdown(): Promise<void> {
-    if (!selectedSessionId) return;
-    const request = ++breakdownRequest;
-    refreshing = true;
-    try {
-      const next = await getContextBreakdown(selectedSessionId);
-      if (request === breakdownRequest) {
-        ctx = next;
-        loaded = true;
-      }
-    } finally {
-      if (request === breakdownRequest) refreshing = false;
-    }
-  }
-
   async function loadBreakdowns(activeIds: string[]): Promise<void> {
     const request = ++breakdownListRequest;
+    const scope = $selectedAnalyticsProviderScope;
     const active = new Set(activeIds);
-    const next = await getContextBreakdowns();
-    if (request === breakdownListRequest) {
-      const current = next.filter((entry) => active.has(entry.session_id) && !entry.is_idle);
-      breakdowns = current;
-
-      // The list and hero must represent the same backend observation. Reuse
-      // the selected list payload instead of leaving its detail snapshot stale.
-      const selected = current.find((entry) => entry.session_id === selectedSessionId);
-      if (selected) {
-        breakdownRequest++;
-        ctx = selected.breakdown;
+    refreshing = true;
+    loaded = false;
+    breakdowns = [];
+    ctx = null;
+    contextError = null;
+    try {
+      const next = await getContextBreakdowns(activeIds, scope);
+      if (request === breakdownListRequest && scope === $selectedAnalyticsProviderScope) {
+        const current = next.filter((entry) => active.has(entry.session_id) && !entry.is_idle);
+        breakdowns = current;
+        const selected = current.find((entry) => entry.session_id === selectedSessionId)
+          ?? current[0]
+          ?? null;
+        if (selected) {
+          selectedSessionId = selected.session_id;
+          ctx = selected.breakdown;
+        } else {
+          selectedSessionId = null;
+          ctx = null;
+        }
         loaded = true;
-        refreshing = false;
       }
+    } catch (error) {
+      if (request === breakdownListRequest && scope === $selectedAnalyticsProviderScope) {
+        breakdowns = [];
+        ctx = null;
+        loaded = true;
+        contextError = error instanceof Error && error.message
+          ? `Context data unavailable. ${error.message}`
+          : "Context data unavailable. Pulse could not read the active context window.";
+      }
+    } finally {
+      if (request === breakdownListRequest) refreshing = false;
     }
   }
 
   $effect(() => {
-    void selectedSessionId;
-    loadBreakdown();
+    const selected = breakdowns.find((entry) => entry.session_id === selectedSessionId);
+    if (selected) {
+      ctx = selected.breakdown;
+      contextError = null;
+      loaded = true;
+    }
   });
 
   $effect(() => {
-    const activeSessions = $sessions
-      .filter((session) => !session.is_idle)
+    const activeSessions = scopedLiveSessions
       .sort((a, b) => a.session_id.localeCompare(b.session_id));
     const activeIds = activeSessions.map((session) => session.session_id);
-    const key = `${$providerProfile.id}:${activeSessions.map((session) => [
+    const key = `${$selectedAnalyticsProviderScope}:${activeSessions.map((session) => [
       session.session_id,
       session.context_used_tokens ?? 0,
       session.context_window_tokens ?? 0,
@@ -96,6 +116,10 @@
     if (activeIds.length === 0) {
       breakdownListRequest++;
       breakdowns = [];
+      ctx = null;
+      contextError = null;
+      refreshing = false;
+      loaded = true;
       return;
     }
     void loadBreakdowns(activeIds);
@@ -104,6 +128,15 @@
   function clampPct(pct: number): number {
     if (!Number.isFinite(pct)) return 0;
     return Math.max(0, Math.min(pct, 100));
+  }
+
+  function percent(part: number, total: number): number {
+    return total > 0 ? clampPct((part / total) * 100) : 0;
+  }
+
+  function retryContext(): void {
+    const activeIds = scopedLiveSessions.map((session) => session.session_id);
+    if (activeIds.length > 0) void loadBreakdowns(activeIds);
   }
 
   function utilizationColor(pct: number): string {
@@ -145,8 +178,8 @@
     const out: CtxAdvice[] = [];
     const profile = $providerProfile;
     const product = profile.productName;
-    const usedPctValue = (ctx.used_tokens / ctx.context_window) * 100;
-    const freePctValue = (ctx.free_space / ctx.context_window) * 100;
+    const usedPctValue = percent(ctx.used_tokens, ctx.context_window);
+    const freePctValue = percent(ctx.free_space, ctx.context_window);
 
     if (usedPctValue >= 85) {
       out.push({
@@ -227,9 +260,9 @@
     }
   }
 
-  let usedPct = $derived(ctx ? (ctx.used_tokens / ctx.context_window) * 100 : 0);
-  let freePct = $derived(ctx ? (ctx.free_space / ctx.context_window) * 100 : 0);
-  let autocompactPct = $derived(ctx ? (ctx.autocompact_buffer / ctx.context_window) * 100 : 0);
+  let usedPct = $derived(ctx ? percent(ctx.used_tokens, ctx.context_window) : 0);
+  let freePct = $derived(ctx ? percent(ctx.free_space, ctx.context_window) : 0);
+  let autocompactPct = $derived(ctx ? percent(ctx.autocompact_buffer, ctx.context_window) : 0);
 
   interface CatItem { label: string; tokens: number; pct: number; icon: string; color: string }
 
@@ -249,7 +282,7 @@
   );
 </script>
 
-<div class="ctx-page">
+<div class="ctx-page app-view">
   <div class="view-header">
     <div class="view-title-line">
       <h2 class="view-title">Context</h2>
@@ -261,12 +294,19 @@
     </div>
   </div>
 
-  {#if ctx}
+  {#if contextError}
+    <section class="context-state state-panel error" role="alert">
+      <span class="state-eyebrow">Context</span>
+      <h3>Context data unavailable</h3>
+      <p>{contextError.replace(/^Context data unavailable\.\s*/, "")}</p>
+      <button type="button" class="btn" onclick={retryContext}>Retry</button>
+    </section>
+  {:else if ctx}
     {#if breakdowns.length > 0}
       <div class="active-section">
         <div class="advice-title-row">
-          <h3 class="advice-title">Live windows</h3>
-          <span class="advice-sub">Select one to inspect its current provider-reported fill.</span>
+          <h3 class="advice-title">Active windows</h3>
+          <span class="advice-sub">Select a session to inspect how full its context window is.</span>
         </div>
         <div class="active-grid">
           {#each breakdowns as entry (entry.session_id)}
@@ -380,7 +420,7 @@
               <p class="advice-desc">{item.description}</p>
               {#if item.fix_prompt}
                 <button class="advice-btn" onclick={() => handleFix(item)}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                  <IconCopy size={13} stroke={2.2} aria-hidden="true" />
                   Fix with {$providerProfile.productName}
                 </button>
               {/if}
@@ -456,14 +496,14 @@
     </div>
   {:else if !loaded}
     <section class="context-state state-panel" aria-live="polite">
-      <span class="state-eyebrow">Context telemetry</span>
+      <span class="state-eyebrow">Context</span>
       <h3>Reading the active context window</h3>
       <p>Pulse is resolving session usage, instruction inventory, and compaction headroom.</p>
       <div class="state-progress" aria-hidden="true"><span></span></div>
     </section>
   {:else}
     <section class="context-state state-panel">
-      <span class="state-eyebrow">Context telemetry</span>
+      <span class="state-eyebrow">Context</span>
       <h3>No active context to inspect</h3>
       <p>Start a session and Pulse will place its live window, inventory, and pressure signals here.</p>
     </section>
@@ -471,7 +511,7 @@
 </div>
 
 <style>
-  .ctx-page { display: flex; flex-direction: column; gap: 14px; }
+  .ctx-page { display: flex; flex-direction: column; gap: var(--page-gap); }
 
   .view-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
   .view-title-line { display: flex; align-items: center; gap: 10px; }
@@ -523,7 +563,7 @@
       transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
   }
   .active-ctx-card:hover { border-color: var(--border-hover); transform: var(--lift); }
-  .active-ctx-card.selected { border-color: var(--info); background: var(--surface-panel); box-shadow: inset 0 -2px 0 var(--info); }
+  .active-ctx-card.selected { border-color: var(--provider-accent); background: var(--surface-panel); box-shadow: inset 0 -2px 0 var(--provider-accent); }
   .active-ctx-card.idle { opacity: 0.6; }
   .act-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .act-project { font-size: 13px; font-weight: 700; color: var(--text-primary); }
@@ -566,6 +606,9 @@
   .context-state { min-height: 196px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 28px 30px; }
   .context-state h3 { margin-top: 8px; font-size: 18px; }
   .context-state p { max-width: 540px; margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+  .context-state.error { border-color: color-mix(in srgb, var(--danger) 34%, var(--border)); }
+  .context-state.error h3 { color: var(--danger); }
+  .context-state .btn { margin-top: 18px; }
   .state-eyebrow { color: var(--text-secondary); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
   .state-progress { width: min(360px, 100%); height: 3px; margin-top: 22px; overflow: hidden; background: var(--bg-elevated); }
   .state-progress span { display: block; width: 36%; height: 100%; background: var(--info); animation: context-load 1.35s var(--ease-in-out) infinite alternate; }
@@ -714,8 +757,23 @@
   .sub-list { padding: 0 18px 14px; display: flex; flex-direction: column; gap: 1px; }
   .sub-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; border-radius: var(--radius-sm); transition: background 0.1s ease; }
   .sub-item:hover { background: var(--bg-elevated); }
-  .item-name { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
-  .item-tokens { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .item-name {
+    min-width: 0;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .item-tokens {
+    flex-shrink: 0;
+    margin-left: 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
 
   /* Spinner */
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -820,6 +878,9 @@
   }
 
   @media (max-width: 800px) {
+    .view-header { flex-direction: column; }
+    .header-meta { width: 100%; justify-content: space-between; }
+    .model-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .active-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .cat-grid { grid-template-columns: 1fr; }
     .hero-card { padding: 16px; }

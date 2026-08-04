@@ -168,10 +168,11 @@ pub enum OpenAiPlanTier {
         alias = "pro-100"
     )]
     Pro5x,
+    // Keep the paid usage multiplier explicit; a legacy bare `pro` value is
+    // rejected instead of being silently upgraded to the 20x tier.
     #[default]
     #[serde(
         rename = "pro_20x",
-        alias = "pro",
         alias = "pro20x",
         alias = "pro-20x",
         alias = "pro_200",
@@ -1379,12 +1380,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_pro_plan_deserializes_to_pro_20x() {
+    fn bare_pro_plan_is_rejected_without_an_exact_usage_tier() {
         let raw = r#"{"mode":"manual","tier":"pro","show_price":true}"#;
-        let plan: OpenAiPlanDisplayConfig = serde_json::from_str(raw).expect("plan");
-
-        assert_eq!(plan.tier, OpenAiPlanTier::Pro20x);
-        assert_eq!(plan.label(), "Pro 20x ($200/month)");
+        assert!(serde_json::from_str::<OpenAiPlanDisplayConfig>(raw).is_err());
     }
 
     #[test]

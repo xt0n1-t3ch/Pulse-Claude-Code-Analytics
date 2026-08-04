@@ -70,6 +70,8 @@ function makeSession(id: string, project: string): SessionInfo {
     provider: "claude",
     context_window: "200K",
     cost: 2.5,
+    cost_available: true,
+    cost_basis: "exact",
     tokens: 120_000,
     input_tokens: 40_000,
     output_tokens: 20_000,
@@ -105,6 +107,7 @@ const discordUserFixture: DiscordUserInfo = {
   discriminator: "0",
   avatar_hash: "abc",
   avatar_url: "https://cdn.discordapp.com/avatars/123/abc.png",
+  avatar_default_url: "https://cdn.discordapp.com/embed/avatars/5.png",
   banner_hash: null,
   banner_url: null,
 };
@@ -139,7 +142,17 @@ describe("Discord.svelte", () => {
     discordPreviewPayload = null;
     const { provider } = await import("@/lib/provider");
     provider.set("claude");
-    const { sessions, discordUser, health, discordPreview, discordPresencePreview } = await import("@/lib/stores");
+    const {
+      accessSnapshot,
+      sessions,
+      discordUser,
+      health,
+      discordPreview,
+      discordPresencePreview,
+      selectedAccessSourceId,
+    } = await import("@/lib/stores");
+    accessSnapshot.set(null);
+    selectedAccessSourceId.set("all");
     sessions.set([makeSession("s1", "pulse")]);
     discordUser.set(discordUserFixture);
     health.set(healthFixture);
@@ -284,6 +297,84 @@ describe("Discord.svelte", () => {
     expect(getByText("Credits available")).toBeTruthy();
     expect(getByText("Context usage")).toBeTruthy();
     expect(container.querySelectorAll(".preset-opt").length).toBe(3);
+  });
+
+  it("does not broadcast stale allowance windows as current quota", async () => {
+    const { accessSnapshot } = await import("@/lib/stores");
+    accessSnapshot.set({
+      routes: [{
+        source: {
+          id: "claude-subscription:default",
+          kind: "claude_subscription",
+          provider: "claude",
+          auth_method: "oauth",
+          proof: "quota_response",
+          plan: "max_20x",
+        },
+        availability: "available",
+        freshness: "stale",
+        provenance: "provider_api",
+        observed_at: "2026-08-03T10:00:00Z",
+        fetched_at: "2026-08-03T10:00:00Z",
+        expires_at: null,
+        windows: [{
+          key: "weekly",
+          label: "Weekly",
+          window_minutes: 10080,
+          used_percent: 88,
+          remaining_percent: null,
+          resets_at: "2026-08-07T00:00:00Z",
+        }],
+        credits: null,
+        extra_usage: null,
+        error: null,
+      }],
+    });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    expect(container.querySelector(".dp-activity-state")?.textContent).not.toContain("Weekly 88% used");
+  });
+
+  it("previews a session from the selected provider instead of the first global session", async () => {
+    const { sessions, selectedAccessSourceId } = await import("@/lib/stores");
+    const claude = makeSession("claude-1", "claude-project");
+    const codex = makeSession("codex-1", "codex-project");
+    codex.provider = "codex";
+    codex.model = "GPT-5.6 Sol";
+    sessions.set([claude, codex]);
+    selectedAccessSourceId.set("codex-subscription:default");
+    const { accessSnapshot } = await import("@/lib/stores");
+    accessSnapshot.set({
+      routes: [{
+        source: {
+          id: "codex-subscription:default",
+          kind: "codex_subscription",
+          provider: "codex",
+          auth_method: "app_server",
+          proof: "quota_response",
+          plan: "pro_20x",
+        },
+        availability: "available",
+        freshness: "fresh",
+        provenance: "app_server",
+        observed_at: "2026-08-03T10:00:00Z",
+        fetched_at: "2026-08-03T10:00:00Z",
+        expires_at: null,
+        windows: [],
+        credits: null,
+        extra_usage: null,
+        error: null,
+      }],
+    });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    expect(container.querySelector(".dp-activity-details")?.textContent).toContain("codex-project");
   });
 
   it("marks provider-unsupported fields unavailable instead of offering a switch that reverts", async () => {
@@ -501,6 +592,46 @@ describe("Discord.svelte", () => {
     expect(container.querySelector(".dp-activity-details")?.textContent).not.toContain("idle-project");
   });
 
+  it("does not publish quota text without an authenticated access-route proof", async () => {
+    const { accessSnapshot } = await import("@/lib/stores");
+    accessSnapshot.set({
+      routes: [{
+        source: {
+          id: "claude-unproved",
+          kind: "claude_subscription",
+          provider: "claude",
+          auth_method: "oauth",
+          proof: "none",
+          plan: null,
+        },
+        availability: "available",
+        freshness: "fresh",
+        provenance: "session_jsonl",
+        observed_at: "2026-08-02T12:00:00Z",
+        fetched_at: "2026-08-02T12:00:00Z",
+        expires_at: "2026-08-02T12:05:00Z",
+        windows: [{
+          key: "weekly",
+          label: "Weekly",
+          window_minutes: 10_080,
+          used_percent: 99,
+          remaining_percent: 1,
+          resets_at: null,
+        }],
+        credits: null,
+        extra_usage: null,
+        error: null,
+      }],
+    });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    expect(container.querySelector(".dp-activity-state")?.textContent).not.toContain("Weekly");
+    expect(container.querySelector(".dp-activity-state")?.textContent).not.toContain("99%");
+  });
+
   it("calls setDiscordEnabled when the master toggle is flipped off", async () => {
     const Discord = (await import("@/views/Discord.svelte")).default;
     const { container } = render(Discord);
@@ -617,6 +748,41 @@ describe("Discord.svelte", () => {
       );
 
       expect(container.querySelector(".dp-status-dot.offline")).not.toBeNull();
+    });
+  });
+
+  describe("avatar fallback", () => {
+    it("starts from the real avatar URL", async () => {
+      const Discord = (await import("@/views/Discord.svelte")).default;
+      const { container } = render(Discord);
+      await tick();
+      const img = container.querySelector(".dp-avatar img") as HTMLImageElement;
+      expect(img).not.toBeNull();
+      expect(img.getAttribute("src")).toBe(discordUserFixture.avatar_url);
+    });
+
+    it("swaps to the always-resolvable default avatar when the custom hash 404s", async () => {
+      const Discord = (await import("@/views/Discord.svelte")).default;
+      const { container } = render(Discord);
+      await tick();
+      const img = container.querySelector(".dp-avatar img") as HTMLImageElement;
+      await fireEvent.error(img);
+      await tick();
+      const after = container.querySelector(".dp-avatar img") as HTMLImageElement;
+      expect(after.getAttribute("src")).toBe(discordUserFixture.avatar_default_url);
+    });
+
+    it("falls back to the Pulse mark when even the default avatar fails", async () => {
+      const { discordUser } = await import("@/lib/stores");
+      discordUser.set({ ...discordUserFixture, avatar_default_url: "" });
+      const Discord = (await import("@/views/Discord.svelte")).default;
+      const { container } = render(Discord);
+      await tick();
+      const img = container.querySelector(".dp-avatar img") as HTMLImageElement;
+      await fireEvent.error(img);
+      await tick();
+      expect(container.querySelector(".dp-avatar img")).toBeNull();
+      expect(container.querySelector(".dp-avatar svg")).not.toBeNull();
     });
   });
 });

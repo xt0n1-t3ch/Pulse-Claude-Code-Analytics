@@ -29,7 +29,6 @@ pub enum DetectedPlanTier {
     Pro5x,
     #[serde(
         rename = "pro_20x",
-        alias = "pro",
         alias = "pro20x",
         alias = "pro-20x",
         alias = "pro_200",
@@ -257,7 +256,7 @@ pub fn parse_plan_type(raw: Option<&str>) -> DetectedPlanTier {
         "plus" => DetectedPlanTier::Plus,
         "business" | "team" | "self_serve_business_usage_based" => DetectedPlanTier::Business,
         "enterprise" | "enterprise_cbp_usage_based" => DetectedPlanTier::Enterprise,
-        "pro" | "pro20x" | "pro_20x" | "pro-20x" | "pro200" | "pro_200" | "pro-200" => {
+        "pro20x" | "pro_20x" | "pro-20x" | "pro200" | "pro_200" | "pro-200" => {
             DetectedPlanTier::Pro20x
         }
         "prolite" | "pro5x" | "pro_5x" | "pro-5x" | "pro100" | "pro_100" | "pro-100" => {
@@ -364,7 +363,7 @@ fn select_plan_signal_from<'a>(
             scope_priority: envelope.scope.preference(),
             session_last_activity,
         };
-        if envelope.scope == RateLimitScope::GlobalCodex {
+        if envelope.scope == RateLimitScope::GlobalAccount {
             global_candidates.push(signal);
         } else {
             fallback_candidates.push(signal);
@@ -443,7 +442,8 @@ mod tests {
             rate_limit_envelopes: vec![RateLimitEnvelope {
                 limit_id: Some(
                     match scope {
-                        RateLimitScope::GlobalCodex => "codex",
+                        RateLimitScope::GlobalAccount => "codex",
+                        RateLimitScope::IndividualAccount => "account",
                         RateLimitScope::ModelScoped => "codex_bengalfox",
                         RateLimitScope::Other => "other_limit",
                     }
@@ -454,15 +454,12 @@ mod tests {
                 observed_at: Some(Utc::now()),
                 scope,
                 credits: None,
-                limits: RateLimits {
-                    primary: Some(UsageWindow {
-                        used_percent: 1.0,
-                        remaining_percent: 99.0,
-                        window_minutes: 300,
-                        resets_at: None,
-                    }),
-                    secondary: None,
-                },
+                limits: RateLimits::new(vec![UsageWindow {
+                    used_percent: 1.0,
+                    remaining_percent: 99.0,
+                    window_minutes: 300,
+                    resets_at: None,
+                }]),
             }],
             activity: None,
             started_at: None,
@@ -485,7 +482,7 @@ mod tests {
             parse_plan_type(Some("enterprise")),
             DetectedPlanTier::Enterprise
         );
-        assert_eq!(parse_plan_type(Some("pro")), DetectedPlanTier::Pro20x);
+        assert_eq!(parse_plan_type(Some("pro")), DetectedPlanTier::Unknown);
         assert_eq!(parse_plan_type(Some("pro_5x")), DetectedPlanTier::Pro5x);
         assert_eq!(parse_plan_type(Some("pro-20x")), DetectedPlanTier::Pro20x);
         assert_eq!(parse_plan_type(Some("pro_100")), DetectedPlanTier::Pro5x);
@@ -507,11 +504,21 @@ mod tests {
     }
 
     #[test]
+    fn codex_parser_rejects_claude_max_family_labels() {
+        assert_eq!(parse_plan_type(Some("max")), DetectedPlanTier::Unknown);
+        assert_eq!(parse_plan_type(Some("max_20x")), DetectedPlanTier::Unknown);
+        assert_eq!(
+            parse_plan_type(Some("claude_max_20x")),
+            DetectedPlanTier::Unknown
+        );
+    }
+
+    #[test]
     fn detector_prefers_global_signal() {
         let mut detector = PlanDetector::new();
         let sessions = vec![
             sample_session(Some("plus"), RateLimitScope::ModelScoped),
-            sample_session(Some("pro"), RateLimitScope::GlobalCodex),
+            sample_session(Some("pro_20x"), RateLimitScope::GlobalAccount),
         ];
         let resolved =
             detector.resolve_from_sessions(&sessions, &OpenAiPlanDisplayConfig::default());
@@ -522,7 +529,7 @@ mod tests {
     #[test]
     fn detector_resolves_plan_from_cached_envelopes_without_active_sessions() {
         let envelopes =
-            sample_session(Some("pro"), RateLimitScope::GlobalCodex).rate_limit_envelopes;
+            sample_session(Some("pro_20x"), RateLimitScope::GlobalAccount).rate_limit_envelopes;
         let mut detector = PlanDetector {
             last_telemetry: None,
             cached: None,
@@ -538,7 +545,7 @@ mod tests {
     #[test]
     fn detector_respects_manual_override() {
         let mut detector = PlanDetector::new();
-        let sessions = vec![sample_session(Some("free"), RateLimitScope::GlobalCodex)];
+        let sessions = vec![sample_session(Some("free"), RateLimitScope::GlobalAccount)];
         let resolved = detector.resolve_from_sessions(
             &sessions,
             &OpenAiPlanDisplayConfig {
@@ -597,12 +604,12 @@ mod tests {
             tier: DetectedPlanTier::Pro20x,
             source: DetectedPlanSource::Telemetry,
             observed_at: Utc.timestamp_opt(10, 0).single(),
-            raw_plan_type: Some("pro".to_string()),
+            raw_plan_type: Some("pro_20x".to_string()),
         };
 
         save_plan_cache_to_path(&payload, &path).expect("save");
         let loaded = load_plan_cache_from_path(&path).expect("load");
         assert_eq!(loaded.tier, DetectedPlanTier::Pro20x);
-        assert_eq!(loaded.raw_plan_type.as_deref(), Some("pro"));
+        assert_eq!(loaded.raw_plan_type.as_deref(), Some("pro_20x"));
     }
 }

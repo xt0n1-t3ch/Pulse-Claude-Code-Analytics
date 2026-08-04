@@ -1,0 +1,17 @@
+{
+  "fixture_version": 1,
+  "raw_payload": {
+    "session_id": "synthetic-unpriced",
+    "total_tokens": 1200,
+    "known_cost_usd": null,
+    "pricing_status": "unavailable"
+  },
+  "status": "partial",
+  "source_contract": "session_metrics.v1",
+  "captured_at": "2026-08-01T00:00:00Z",
+  "expected_dto": {
+    "cost": 0,
+    "cost_available": false,
+    "cost_basis": "unavailable"
+  }
+}

@@ -3,7 +3,8 @@
   import {
     sessions,
     activeSessions,
-    rateLimits,
+    selectedAccessRoutes,
+    selectedAnalyticsProviderScope,
     discordUser,
     health,
     discordPreview,
@@ -15,7 +16,7 @@
     previewToDisplayPrefs,
     refreshDiscordPresencePreview,
   } from "../lib/stores";
-  import { provider, providerProfile } from "../lib/provider";
+  import { provider, providerProfile, PROVIDERS, type Provider } from "../lib/provider";
   import {
     setCodexDesktopDesign,
     setDiscordDisplayPrefs,
@@ -23,6 +24,11 @@
     setDiscordFieldOrder,
   } from "../lib/api";
   import type { SessionInfo } from "../lib/api";
+  import {
+    accessKindLabel,
+    allowancePresentation,
+    providerMatchesAnalyticsScope,
+  } from "../lib/access";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
   import { rpArtFor } from "../lib/rpArt";
   import PulseMark from "../components/PulseMark.svelte";
@@ -148,33 +154,64 @@
   }
 
 
-  let previewSession = $derived($activeSessions[0] ?? $sessions[0]);
-  let activeSessionCount = $derived($activeSessions.length);
-  let previewAppName = $derived(previewSession?.app_name ?? $providerProfile.productName);
-  let presenceAppName = $derived($discordPresencePreview?.app_name ?? previewAppName);
+  let previewProvider = $derived(
+    $selectedAnalyticsProviderScope === "all"
+      ? $provider
+      : $selectedAnalyticsProviderScope,
+  );
+  let previewSession = $derived(
+    previewProvider
+      ? $activeSessions.find((session) => session.provider === previewProvider)
+        ?? $sessions.find((session) => session.provider === previewProvider)
+      : undefined,
+  );
+  let scopedPresencePreview = $derived(
+    $discordPresencePreview
+    && providerMatchesAnalyticsScope(
+      $discordPresencePreview.provider,
+      $selectedAnalyticsProviderScope,
+    )
+      ? $discordPresencePreview
+      : null,
+  );
+  let activeSessionCount = $derived(
+    $activeSessions.filter((session) =>
+      providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
+    ).length,
+  );
+  let previewProfile = $derived.by(() => {
+    const candidate = scopedPresencePreview?.provider ?? previewSession?.provider ?? previewProvider;
+    return candidate === "claude" || candidate === "codex"
+      ? PROVIDERS[candidate as Provider]
+      : $providerProfile;
+  });
+  let previewAppName = $derived(previewSession?.app_name ?? previewProfile.productName);
+  let presenceAppName = $derived(scopedPresencePreview?.app_name ?? previewAppName);
   let previewArt = $derived(
     rpArtFor(
-      $discordPresencePreview?.provider ?? previewSession?.provider ?? $provider,
-      $discordPresencePreview?.large_image_key,
-      $discordPresencePreview?.large_text,
+      scopedPresencePreview?.provider
+        ?? previewSession?.provider
+        ?? (previewProvider === "claude" || previewProvider === "codex" ? previewProvider : $provider),
+      scopedPresencePreview?.large_image_key,
+      scopedPresencePreview?.large_text,
     ),
   );
   let previewAssetKey = $derived(previewArt.assetKey);
   let previewFast = $derived(previewSession?.fast ?? false);
 
   let detailsLine = $derived.by(() => {
-    if ($discordPresencePreview) return $discordPresencePreview.details;
+    if (scopedPresencePreview) return scopedPresencePreview.details;
     if (!previewSession) return "No active session";
     const s = $discordPreview;
     let parts: string[] = [];
     if (s.showProject) parts.push(previewSession.project);
     if (s.showBranch && previewSession.branch) parts.push(previewSession.branch);
-    if (s.showCost) parts.push(fmtCost(previewSession.cost));
+    if (s.showCost && previewSession.cost_available === true) parts.push(fmtCost(previewSession.cost));
     return parts.join(" · ") || "No active session";
   });
 
   let stateLine = $derived.by(() => {
-    if ($discordPresencePreview) return $discordPresencePreview.state;
+    if (scopedPresencePreview) return scopedPresencePreview.state;
     if (!previewSession) return "Idle";
     const s = $discordPreview;
     let parts: string[] = [];
@@ -221,10 +258,20 @@
   }
 
   function sessionLimitPart(): string | null {
-    const usage = $rateLimits?.usage;
-    if (!usage) return null;
-    return usage.scopes
-      .flatMap((scope) => scope.windows.map((window) => `${windowLabel(window.window_minutes)} ${window.remaining_percent.toFixed(0)}%`))
+    return $selectedAccessRoutes
+      .flatMap((route) => {
+        return route.windows.flatMap((window) => {
+          const presentation = allowancePresentation(route, window);
+          if (!presentation) return [];
+          const sourcePrefix = $selectedAnalyticsProviderScope === "all"
+            ? `${accessKindLabel(route.source.kind).product} `
+            : "";
+          return [
+            `${sourcePrefix}${window.label || windowLabel(window.window_minutes ?? 0)} `
+            + `${presentation.percent.toFixed(0)}% ${presentation.direction}`,
+          ];
+        });
+      })
       .join(" • ") || null;
   }
 
@@ -239,13 +286,25 @@
   }
 
   function creditsPart(): string | null {
-    const credits = $rateLimits?.usage?.credits;
-    if (!credits) return null;
-    if (credits.unlimited) return "Credits Unlimited";
-    if (credits.balance == null) return null;
-    const numeric = Number(credits.balance);
-    const display = Number.isFinite(numeric) ? numeric.toLocaleString() : credits.balance;
-    return `Credits ${display}`;
+    const presentations = $selectedAccessRoutes
+      .filter((route) =>
+        route.availability === "available"
+        && route.freshness === "fresh"
+        && route.credits
+      )
+      .flatMap((route) => {
+        const credits = route.credits;
+        if (!credits) return [];
+        const prefix = $selectedAnalyticsProviderScope === "all"
+          ? `${accessKindLabel(route.source.kind).product} `
+          : "";
+        if (credits.unlimited) return [`${prefix}Credits Unlimited`];
+        if (credits.balance == null) return [];
+        const numeric = Number(credits.balance);
+        const display = Number.isFinite(numeric) ? numeric.toLocaleString() : credits.balance;
+        return [`${prefix}Credits ${display}`];
+      });
+    return presentations.join(" • ") || null;
   }
 
   const fieldRows = [
@@ -346,14 +405,44 @@
         ? "Waiting for Discord"
         : "Paused",
   );
+
+  /**
+   * The custom avatar hash cached in Discord's LevelDB can go stale (the user
+   * changes their avatar and the old CDN URL 404s). Fall back to the always
+   * resolvable default avatar on the first error, then to PulseMark if even
+   * that fails, so the profile never renders an empty ring.
+   */
+  let avatarStage = $state<0 | 1 | 2>(0);
+  let avatarSrc = $derived(
+    avatarStage === 0
+      ? ($discordUser?.avatar_url ?? "")
+      : avatarStage === 1
+        ? ($discordUser?.avatar_default_url ?? "")
+        : "",
+  );
+  let avatarExhausted = $derived(avatarStage === 2 || !avatarSrc);
+  $effect(() => {
+    // Reset the fallback latch whenever the identity changes.
+    void $discordUser?.avatar_url;
+    avatarStage = 0;
+  });
+  function onAvatarError(): void {
+    avatarStage = avatarStage === 0 && $discordUser?.avatar_default_url ? 1 : 2;
+  }
+
+  let bannerFailed = $state(false);
+  $effect(() => {
+    void $discordUser?.banner_url;
+    bannerFailed = false;
+  });
 </script>
 
-<div class="discord-view" style="--provider-accent: {$providerProfile.accent}">
+<div class="discord-view app-view" style="--provider-accent: {previewProfile.accent}">
   <div class="view-header">
     <div class="view-title-group">
       <h2 class="view-title">Broadcast</h2>
       <span class="view-sub">
-        {activeCount}/{availableFieldCount} fields · {$providerProfile.productName}
+        {activeCount}/{availableFieldCount} fields · {previewProfile.productName}
       </span>
     </div>
     <div class="header-meta">
@@ -480,7 +569,7 @@
                 <span class="field-label">{row.label}</span>
                 <span class="field-hint">
                   {unsupportedFields.has(row.id)
-                    ? `Not available for ${$providerProfile.productName}.`
+                    ? `Not available for ${previewProfile.productName}.`
                     : row.hint}
                 </span>
               </div>
@@ -518,16 +607,20 @@
       </div>
 
       <div class="dp-profile">
-        {#if $discordUser?.banner_url}
-          <div class="dp-banner" style="background-image: url({$discordUser.banner_url});"></div>
+        {#if $discordUser?.banner_url && !bannerFailed}
+          <div class="dp-banner" style="background-image: url({$discordUser.banner_url});">
+            <!-- A CSS background can't report load errors, so a hidden probe
+                 mirrors the same URL and drops to the default banner on 404. -->
+            <img class="dp-banner-probe" src={$discordUser.banner_url} alt="" aria-hidden="true" onerror={() => (bannerFailed = true)} />
+          </div>
         {:else}
           <div class="dp-banner dp-banner-default"></div>
         {/if}
         <div class="dp-body">
           <div class="dp-avatar-ring">
             <div class="dp-avatar">
-              {#if $discordUser}
-                <img src={$discordUser.avatar_url} alt="avatar" />
+              {#if $discordUser && !avatarExhausted}
+                <img src={avatarSrc} alt="avatar" onerror={onAvatarError} />
               {:else}
                 <PulseMark size={40} />
               {/if}
@@ -535,7 +628,7 @@
             <div class="dp-status-dot" class:offline={!discordEnabled}></div>
           </div>
           <div class="dp-username">
-            {$discordUser?.username ?? "xt0n1"} <span class="dp-tag">ツ</span>
+            {$discordUser?.username ?? "Discord user unavailable"} <span class="dp-tag">ツ</span>
           </div>
           <div class="dp-separator"></div>
           <div class="dp-section-title">Current Activity</div>
@@ -568,9 +661,7 @@
   .discord-view {
     display: flex;
     flex-direction: column;
-    gap: 20px;
-    max-width: var(--content-max);
-    margin: 0 auto;
+    gap: var(--page-gap);
     width: 100%;
     animation: fadeIn 0.3s var(--ease-out);
   }
@@ -607,13 +698,12 @@
     display: inline-flex;
     align-items: center;
     min-height: 28px;
-    padding: 0 9px;
+    padding: 0 4px;
     color: var(--text-muted);
-    background: var(--surface-panel-soft);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-full);
+    background: transparent;
+    border: 0;
     font-size: var(--fs-xs);
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
   }
 
@@ -690,18 +780,20 @@
   /* ── LAYOUT ── */
   .discord-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(360px, 440px);
+    grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
     gap: 18px;
     align-items: start;
+    min-width: 0;
   }
   @media (max-width: 960px) {
-    .discord-layout { grid-template-columns: 1fr; }
+    .discord-layout { grid-template-columns: minmax(0, 1fr); }
     .stage { grid-row: 1; position: static; }
     .control-card { grid-row: 2; }
   }
 
   /* ── CONTROL CARD (flat, Dashboard-aligned) ── */
   .control-card {
+    min-width: 0;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -907,6 +999,7 @@
 
   /* ── STAGE ── */
   .stage {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -967,6 +1060,13 @@
     background-size: cover;
     background-position: center;
     position: relative;
+  }
+  .dp-banner-probe {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    pointer-events: none;
   }
   .dp-banner::after {
     content: '';
@@ -1116,7 +1216,7 @@
   }
 
   @media (max-width: 760px) {
-    .view-header { gap: 12px; }
+    .view-header { flex-direction: column; gap: 12px; }
     .header-meta { width: 100%; }
     .cc-section-head { align-items: flex-start; flex-direction: column; padding: 14px; }
     .cc-toggle-row { padding-inline: 14px; }

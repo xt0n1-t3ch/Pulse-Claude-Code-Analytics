@@ -27,6 +27,23 @@
   --accent-fg: #000000;
   --accent-soft: #1a1a1a;
 
+  /* Provider identity as a structural accent. Codex blue, Claude coral.
+     `--provider-accent` is resolved from html[data-provider]; before the
+     backend resolves the active provider it falls back to neutral info blue. */
+  --codex: #3b82f6;
+  --codex-dim: rgba(59, 130, 246, 0.12);
+  --claude: #d97757;
+  --claude-dim: rgba(217, 119, 87, 0.14);
+  --provider-accent: var(--info);
+  --provider-accent-dim: var(--info-dim);
+
+  /* Flat by design. Panels read as one clean matte system separated by borders,
+     never drop-shadow glow. Elevation tokens stay as named hooks but resolve to
+     no shadow so no surface floats or smudges (especially in light theme). */
+  --elev-0: none;
+  --elev-1: none;
+  --elev-2: none;
+
   --success: #22c55e;
   --success-glow: rgba(34, 197, 94, 0.22);
   --success-dim: rgba(34, 197, 94, 0.10);
@@ -69,7 +86,7 @@
   --border: #202022;
   --border-strong: #2b2b2e;
   --border-hover: #444449;
-  --border-focus: var(--accent);
+  --border-focus: var(--provider-accent);
 
   --radius-xs: 4px;
   --radius-sm: 6px;
@@ -82,7 +99,7 @@
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.6);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.7);
   --shadow-lg: 0 20px 56px rgba(0, 0, 0, 0.85);
-  --shadow-ring: 0 0 0 3px var(--accent-dim);
+  --shadow-ring: 0 0 0 3px var(--provider-accent-dim);
 
   --fs-xs: 10px;
   --fs-sm: 11px;
@@ -112,7 +129,13 @@
 
   --sidebar-width: 152px;
   --topbar-height: 56px;
-  --content-max: 1440px;
+  /* Desktop analytics surfaces consume the available Tauri viewport. The
+     individual grids own readable column widths instead of centering the
+     entire product inside a fixed canvas. */
+  --content-max: none;
+  --page-padding-inline: clamp(12px, 1.15vw, 20px);
+  --page-padding-block: clamp(12px, 1vw, 18px);
+  --page-gap: clamp(10px, 0.9vw, 14px);
   --control-height: 36px;
 
   /* Discord Rich Presence preview surface.
@@ -145,19 +168,11 @@
    * system instead of each view inventing its own card. Defined here (not
    * per-view) because these are the mutable contract; views reference them.  */
 
-  /* Hairline that fades in from the panel edges — gives a card a lit top
-     edge without a hard 1px line running the full width. */
-  --panel-edge: linear-gradient(
-    90deg,
-    transparent,
-    var(--border-hover) 18%,
-    var(--border-hover) 82%,
-    transparent
-  );
-  /* Top-down light falloff layered over a panel background. */
-  --panel-sheen: linear-gradient(transparent, transparent);
-  /* Same idea at higher intensity, for the one hero panel per view. */
-  --panel-sheen-strong: linear-gradient(transparent, transparent);
+  /* Flat surface system: no lit edge, no top-down falloff. Panels separate
+     with borders alone, so nothing glows or smudges in either theme. */
+  --panel-edge: transparent;
+  --panel-sheen: none;
+  --panel-sheen-strong: none;
   /* Fill for meters and progress tracks. */
   --meter-fill: linear-gradient(90deg, var(--chart-2), var(--text-primary));
   --meter-track: rgba(255, 255, 255, 0.055);
@@ -202,6 +217,11 @@
   --accent-fg: #ffffff;
   --accent-soft: #f1f1f1;
 
+  --codex: #1d4ed8;
+  --codex-dim: rgba(29, 78, 216, 0.10);
+  --claude: #9a3412;
+  --claude-dim: rgba(154, 52, 18, 0.10);
+
   --success: #16a34a;
   --success-dim: rgba(22, 163, 74, 0.08);
   --success-glow: rgba(22, 163, 74, 0.18);
@@ -241,7 +261,7 @@
   --border: #e5e5e5;
   --border-strong: #d4d4d4;
   --border-hover: #a3a3a3;
-  --border-focus: #0a0a0a;
+  --border-focus: var(--provider-accent);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.06);
@@ -272,11 +292,21 @@
     0 4px 12px rgba(0, 0, 0, 0.06);
   --dc-art-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.10);
 
-  /* Light theme inverts the sheen: a white overlay on white is invisible, so
-     the falloff has to come from a soft shadow tint instead. */
-  --panel-sheen: linear-gradient(180deg, rgba(10, 10, 10, 0.030), transparent 42%);
-  --panel-sheen-strong: linear-gradient(180deg, rgba(10, 10, 10, 0.050), transparent 55%);
+  /* Flat in light theme too: no shadow tint, no falloff. */
+  --panel-sheen: none;
+  --panel-sheen-strong: none;
   --meter-track: rgba(10, 10, 10, 0.075);
+}
+
+/* Provider accent resolves once from the active provider and cascades to nav,
+   selected source rings, focus rings, and hero highlights across both themes. */
+html[data-provider="codex"] {
+  --provider-accent: var(--codex);
+  --provider-accent-dim: var(--codex-dim);
+}
+html[data-provider="claude"] {
+  --provider-accent: var(--claude);
+  --provider-accent-dim: var(--claude-dim);
 }
 
 *, *::before, *::after {
@@ -486,6 +516,73 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
   border-radius: var(--radius-lg);
 }
 
+/* --- Panel contract ---------------------------------------------------- *
+ * One shared surface language for every card across shell, views, and the
+ * Discord control column. `.panel` is the matte base; `.panel--raised` adds
+ * elevation + sheen + a lit top edge; `.panel--hero` is the single strongest
+ * surface per view. Views compose these instead of inventing a tinted-gradient
+ * fill, which is what made Costs/Reports read as a different product.        */
+.panel {
+  position: relative;
+  background: var(--surface-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.panel--raised {
+  background:
+    var(--panel-sheen),
+    var(--surface-panel);
+  box-shadow: var(--elev-1);
+}
+.panel--raised::before,
+.panel--hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: var(--panel-edge);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  pointer-events: none;
+}
+.panel--hero {
+  background:
+    var(--panel-sheen-strong),
+    var(--surface-panel);
+  box-shadow: var(--elev-2);
+}
+.panel--pad { padding: 20px; }
+.panel--pad-lg { padding: clamp(18px, 1.6vw, 26px); }
+
+/* Section kicker tinted by the active provider. Structural accent, not a
+   status color, so it carries provider identity into every panel header. */
+.kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--provider-accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.kicker::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  box-shadow: 0 0 0 3px var(--provider-accent-dim);
+}
+
+/* Every route participates in one viewport contract. Views may define their
+   own grids, but none may silently shrink the app back into a centered page. */
+.app-view {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  max-width: none;
+}
+
 @media (max-width: 900px) {
   :root { --sidebar-width: 64px; }
   .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -682,9 +779,19 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
 
 @media (max-width: 800px) {
   :root {
+    --topbar-height: 96px;
     --fs-display: 36px;
     --fs-3xl: 28px;
     --fs-2xl: 22px;
+    --page-padding-inline: 12px;
+    --page-padding-block: 12px;
+  }
+}
+
+@media (max-width: 520px) {
+  :root {
+    --page-padding-inline: 8px;
+    --page-padding-block: 8px;
   }
 }
 

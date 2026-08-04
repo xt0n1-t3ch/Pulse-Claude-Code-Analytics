@@ -126,9 +126,14 @@ fn vendored_windows_polling_commands_use_silent_launcher() {
 
     assert!(
         manifest.contains(r#""schema_version": 3"#)
-            && manifest.contains(r#""canonical_release": "v1.8.0""#)
+            && manifest.contains(r#""canonical_release": "v1.9.0""#)
+            && manifest
+                .contains(r#""canonical_commit": "e95e2b1573eb86da945d03412f57b6a18cc28c50""#)
+            && manifest.contains(r#""mode": "git-rev""#)
+            && manifest.contains(r#""rev": "e95e2b1573eb86da945d03412f57b6a18cc28c50""#)
+            && manifest.contains(r#""version": "2.0.0""#)
             && manifest.contains(r#""package": "codex-presence-core""#),
-        "Pulse must declare the canonical core release contract"
+        "Pulse must declare the promoted immutable core contract"
     );
     assert!(
         !parser.contains(r#"Command::new("git")"#),
@@ -569,6 +574,27 @@ fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
             );
         }
     }
+}
+
+#[test]
+fn tauri_e2e_runner_starts_owned_frontend_before_pulse() {
+    let source = read(repository_root().join("scripts/e2e/run-pulse.ps1"));
+    let tauri = source
+        .split("function Invoke-TauriMode")
+        .nth(1)
+        .expect("Tauri mode function");
+
+    let frontend_start = tauri
+        .find("Start-OwnedProcess $bun")
+        .expect("Tauri mode must launch the frontend dev process");
+    let pulse_start = tauri
+        .find("Start-OwnedProcess $binary")
+        .expect("Tauri mode must launch the repo-owned Pulse binary");
+
+    assert!(frontend_start < pulse_start);
+    assert!(tauri.contains("Assert-PortOwned $browserPort"));
+    assert!(tauri.contains("Assert-PortOwned $bridgePort"));
+    assert!(tauri.contains("Wait-Http \"http://127.0.0.1:$browserPort/\""));
 }
 
 fn manifest_fixture(hash: &str) -> TempDir {

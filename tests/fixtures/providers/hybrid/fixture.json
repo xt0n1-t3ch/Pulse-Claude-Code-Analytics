@@ -1,0 +1,62 @@
+{
+  "fixture_version": 1,
+  "raw_payload": {
+    "codex_subscription": {
+      "plan": "pro_20x",
+      "windows": [
+        { "key": "weekly", "label": "Weekly", "used_percent": 4 },
+        { "key": "codex_bengalfox_weekly", "label": "GPT-5.3-Codex-Spark · Weekly", "used_percent": 13 }
+      ]
+    },
+    "claude_subscription": {
+      "plan": "max_20x",
+      "windows": [
+        { "key": "five_hour", "label": "5h", "used_percent": 24 },
+        { "key": "weekly", "label": "Weekly", "used_percent": 9 },
+        { "key": "fable", "label": "Fable-only", "used_percent": 11 }
+      ]
+    },
+    "open_ai_api": { "configured": false },
+    "anthropic_api": { "configured": false }
+  },
+  "status": "ok",
+  "source_contract": "hybrid.v1",
+  "captured_at": "2026-08-01T00:00:00Z",
+  "expected_dto": {
+    "routes": [
+      {
+        "source": { "id": "codex-subscription:fixture", "kind": "codex_subscription", "provider": "codex", "auth_method": "app_server", "proof": "quota_response", "plan": "Pro 20x" },
+        "availability": "available",
+        "freshness": "fresh",
+        "provenance": "app_server",
+        "observed_at": "2026-08-01T00:00:00Z",
+        "fetched_at": "2026-08-01T00:00:00Z",
+        "expires_at": "2026-08-01T00:00:30Z",
+        "windows": [
+          { "key": "weekly", "label": "Weekly", "window_minutes": 10080, "used_percent": 4, "remaining_percent": 96, "resets_at": "2026-08-08T00:00:00Z" },
+          { "key": "codex_bengalfox_weekly", "label": "GPT-5.3-Codex-Spark · Weekly", "window_minutes": 10080, "used_percent": 13, "remaining_percent": 87, "resets_at": "2026-08-08T00:00:00Z" }
+        ],
+        "credits": { "balance": "9750", "has_credits": true, "unlimited": false },
+        "extra_usage": null,
+        "error": null
+      },
+      {
+        "source": { "id": "claude-subscription:fixture", "kind": "claude_subscription", "provider": "claude", "auth_method": "oauth", "proof": "quota_response", "plan": "Max 20x" },
+        "availability": "available",
+        "freshness": "fresh",
+        "provenance": "provider_api",
+        "observed_at": "2026-08-01T00:00:00Z",
+        "fetched_at": "2026-08-01T00:00:00Z",
+        "expires_at": "2026-08-01T00:00:30Z",
+        "windows": [
+          { "key": "five_hour", "label": "5h", "window_minutes": 300, "used_percent": 24, "remaining_percent": 76, "resets_at": "2026-08-01T05:00:00Z" },
+          { "key": "weekly", "label": "Weekly", "window_minutes": 10080, "used_percent": 9, "remaining_percent": 91, "resets_at": "2026-08-08T00:00:00Z" },
+          { "key": "fable", "label": "Fable-only", "window_minutes": null, "used_percent": 11, "remaining_percent": 89, "resets_at": "2026-08-08T00:00:00Z" }
+        ],
+        "credits": null,
+        "extra_usage": { "enabled": false, "used": 0, "limit": null, "utilization": null },
+        "error": null
+      }
+    ]
+  }
+}

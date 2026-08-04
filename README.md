@@ -24,7 +24,14 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.6.5</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.0</h2>
+
+- **Provider-neutral access routes** — authenticated subscription and API paths stay distinct, carry proof and provenance metadata, and fail closed when an API key cannot be verified.
+- **Fresh quota everywhere** — the Dashboard, Live Preview, and Discord presence share freshness-gated provider windows, including sparse windows and Extra Usage metadata.
+- **Typed Codex core** — Pulse consumes the `codex-presence-core` 2.0.0 contract while validating the upstream v1.9.0 candidate locally; exact costs remain partial or unavailable when their source cannot prove them.
+
+<details>
+<summary>Previous v1.6.5 highlights</summary>
 
 - **Live Codex quota, not yesterday's JSONL** — Pulse reads the authenticated `account/rateLimits/read` backend, so a provider-reported 83% used renders as 17% available. JSONL is a short-lived fallback and stale quota events stay unavailable.
 - **Multi-instance Dashboard** — every active session is selectable from one responsive live-work owner; the detail panel follows that selection and renders exact `used / available window` values.
@@ -32,6 +39,8 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 - **Richer factual telemetry** — live token composition replaces the misleading empty spend timeline, and Activity by Hour groups timestamps in the user's local timezone with proper AM/PM labels.
 - **Matte Geist surfaces** — the dark theme uses neutral black panels rather than navy/gray sheens; color remains scoped to provider identity and semantic values.
 - **Responsive controls and persistence** — Discord fields stack before they clip, expose automatic save state, and the signed in-app updater remains a single approve/update/relaunch flow.
+
+</details>
 
 <details>
 <summary>Previous v1.6.2 highlights</summary>
@@ -64,7 +73,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 </details>
 
-**[Download v1.6.5](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.7.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
@@ -83,7 +92,7 @@ You may pay for Claude Code every month, ChatGPT every month, or both: **Claude 
 
 **One product, two factual lanes.** Claude sessions keep Anthropic-specific model routing, cache TTL, Extra Usage, and statusline authority. Codex sessions use the canonical GPT catalog and current local App metadata, including **GPT-5.6 Sol / Terra / Luna**, independent reasoning and Standard/Fast modes, and **372K raw / 353.4K usable** context. Unpublished Fast economics or missing cache-write telemetry stay partial or unavailable instead of becoming an invented multiplier.
 
-Codex Discord Rich Presence has its own source-of-truth repo: **[xt0n1-t3ch/Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)**. Pulse mirrors that Rust core into `src/codex/` through checked sync scripts and CI freshness gates, so Codex support can move fast here while the standalone Rich Presence project keeps its own audience.
+Codex Discord Rich Presence has its own source-of-truth repo: **[xt0n1-t3ch/Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)**. Pulse consumes its typed core through a checked Git dependency; the upstream v1.9.0 / `codex-presence-core` 2.0.0 source is still a local candidate until its immutable pushed revision is recorded. The standalone Rich Presence project keeps its own audience while Pulse owns the Tauri integration and analytics presentation.
 
 Written in **Rust** + **Tauri 2** + **Svelte 5**. ≈ 12 MB on Windows, ≈ 18 MB on macOS. Cold-starts in under 200 ms. One-click installers for Windows (NSIS + MSI), macOS (DMG — Apple Silicon + Intel), and Linux (deb, rpm, AppImage). Apache-2.0 licensed (attribution required — see [`NOTICE`](NOTICE)). The data never leaves your machine.
 

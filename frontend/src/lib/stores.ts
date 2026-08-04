@@ -19,6 +19,14 @@ import {
   getDiscordUser,
   hasTauriIpc,
 } from "./api";
+import {
+  analyticsProviderScopeForSelection,
+  authenticatedAccessRoutes,
+  displayableAccessRoutes,
+  type AnalyticsProviderScope,
+  type AccessRouteSnapshot,
+  type AccessSnapshot,
+} from "./access";
 
 export const health = writable<HealthResponse | null>(null);
 export const metrics = writable<MetricsResponse | null>(null);
@@ -28,6 +36,54 @@ export const discordUser = writable<DiscordUserInfo | null>(null);
 export const discordPresencePreview = writable<DiscordPresencePreview | null>(null);
 export const discordSettings = writable<DiscordSettings | null>(null);
 export const planInfo = writable<PlanInfo | null>(null);
+export const accessSnapshot = writable<AccessSnapshot | null>(null);
+export const backendConnection = writable<"connecting" | "live" | "disconnected">("connecting");
+export const selectedAccessSourceId = writable<string>("all");
+export const sourceInspectorExpanded = writable(false);
+const knownAnalyticsScopes = new Map<string, AnalyticsProviderScope>();
+export const selectedAnalyticsProviderScope = writable<AnalyticsProviderScope>("all");
+let currentSelectedAccessSourceId = "all";
+
+accessSnapshot.subscribe((snapshot) => {
+  if (!snapshot) return;
+  for (const route of displayableAccessRoutes(snapshot.routes)) {
+    knownAnalyticsScopes.set(route.source.id, route.source.provider);
+  }
+  if (currentSelectedAccessSourceId !== "all") {
+    const scope = knownAnalyticsScopes.get(currentSelectedAccessSourceId);
+    if (scope) selectedAnalyticsProviderScope.set(scope);
+  }
+});
+
+selectedAccessSourceId.subscribe((selectedId) => {
+  currentSelectedAccessSourceId = selectedId;
+  if (selectedId === "all") {
+    selectedAnalyticsProviderScope.set("all");
+    return;
+  }
+  const scope = knownAnalyticsScopes.get(selectedId);
+  if (scope) selectedAnalyticsProviderScope.set(scope);
+});
+
+export const selectedAccessRoutes = derived(
+  [accessSnapshot, selectedAccessSourceId],
+  ([$snapshot, $selectedId]): AccessRouteSnapshot[] => {
+    const routes = authenticatedAccessRoutes($snapshot?.routes ?? []);
+    if ($selectedId === "all") return routes;
+    return routes.filter((route) => route.source.id === $selectedId);
+  },
+);
+/** Diagnostic routes include failed probes so Source health can explain why a
+ *  provider is unavailable. They remain separate from proof-gated selectors
+ *  and allowance cards, which must never promote a configured key to a source. */
+export const selectedAccessDiagnostics = derived(
+  [accessSnapshot, selectedAccessSourceId],
+  ([$snapshot, $selectedId]): AccessRouteSnapshot[] => {
+    const routes = $snapshot?.routes ?? [];
+    if ($selectedId === "all") return routes;
+    return routes.filter((route) => route.source.id === $selectedId);
+  },
+);
 export const currentView = writable<string>("dashboard");
 
 export interface DiscordPreviewSettings {
@@ -122,45 +178,74 @@ export const activeSessions = derived(sessions, ($s) =>
   $s.filter((s) => !s.is_idle),
 );
 
-let prevRateLimits: RateLimitInfo | null = null;
+let snapshotSequence = 0;
+let pollInFlight: Promise<void> | null = null;
+let pollPending = false;
 
-export async function poll(): Promise<void> {
-  try {
-    applySnapshot(await getAppSnapshot());
-  } catch (e) {
-    console.warn("Snapshot error:", e);
+export function poll(): Promise<void> {
+  if (pollInFlight) {
+    pollPending = true;
+    return pollInFlight;
   }
+  const startedAtSequence = snapshotSequence;
+  pollInFlight = getAppSnapshot()
+    .then((snapshot) => {
+      // A push event received after this poll began is newer than the response.
+      if (startedAtSequence === snapshotSequence) applySnapshot(snapshot);
+    })
+    .catch((error) => {
+      if (startedAtSequence === snapshotSequence) clearLiveSnapshot();
+      console.warn("Snapshot error:", error);
+    })
+    .finally(() => {
+      pollInFlight = null;
+      if (pollPending) {
+        pollPending = false;
+        void poll();
+      }
+    });
+  return pollInFlight;
+}
+
+/** Provider selection changes invalidate every proof-bound live field before
+ *  the replacement snapshot is requested. Incrementing the sequence also
+ *  prevents an already-running poll for the prior provider from winning. */
+export function invalidateLiveSnapshotForProviderChange(): void {
+  snapshotSequence++;
+  clearLiveSnapshot("connecting");
 }
 
 function applySnapshot(snapshot: AppSnapshot): void {
+    snapshotSequence++;
+    const routes = displayableAccessRoutes(snapshot.access.routes);
+    const selectedId = currentSelectedAccessSourceId;
+    const selectedScope = analyticsProviderScopeForSelection(selectedId, routes);
+    if (selectedScope) selectedAnalyticsProviderScope.set(selectedScope);
+    backendConnection.set("live");
     health.set(snapshot.health);
     metrics.set(snapshot.metrics);
     sessions.set(snapshot.sessions);
     discordPresencePreview.set(snapshot.discord_preview);
     rateLimits.set(snapshot.rate_limits);
     planInfo.set(snapshot.plan);
+    accessSnapshot.set(snapshot.access);
     applyDiscordSettings(snapshot.discord_settings);
-    const r = snapshot.rate_limits;
-    if (r && prevRateLimits) {
-      if (r.five_hour_pct > 80 && prevRateLimits.five_hour_pct <= 80) {
-        addToast("Session usage above 80%", "warning");
-      }
-      if (r.seven_day_pct > 95 && prevRateLimits.seven_day_pct <= 95) {
-        addToast("Weekly usage above 95%!", "danger");
-      }
-      if (
-        r.extra_used !== null &&
-        prevRateLimits.extra_used !== null &&
-        r.extra_used > prevRateLimits.extra_used
-      ) {
-        addToast(
-          `Extra usage charge: $${r.extra_used.toFixed(2)}`,
-          "danger",
-          8000,
-        );
-      }
-    }
-    prevRateLimits = r;
+}
+
+/** A failed real-backend read must never leave the last successful counters
+ * looking current. Historical views keep their own explicit loading/error
+ * states; the shared live shell fails closed until a fresh snapshot arrives. */
+function clearLiveSnapshot(
+  connection: "connecting" | "disconnected" = "disconnected",
+): void {
+  backendConnection.set(connection);
+  health.set(null);
+  metrics.set(null);
+  sessions.set([]);
+  discordPresencePreview.set(null);
+  rateLimits.set(null);
+  planInfo.set(null);
+  accessSnapshot.set(null);
 }
 
 export async function refreshDiscordPresencePreview(): Promise<void> {
@@ -182,6 +267,7 @@ export async function loadDiscordUser(): Promise<void> {
 
 let snapshotUnlisten: Promise<UnlistenFn> | null = null;
 let snapshotPollTimer: ReturnType<typeof setInterval> | null = null;
+let snapshotSyncGeneration = 0;
 
 /** How often the browser fallback re-reads the snapshot. Matches the backend
  *  poll interval, so the reviewed UI moves at the same cadence as the app. */
@@ -202,6 +288,7 @@ function startSnapshotPolling(): void {
 
 export function startSnapshotSync(): void {
   if (snapshotUnlisten) return;
+  const generation = ++snapshotSyncGeneration;
   if (!hasTauriIpc()) {
     startSnapshotPolling();
     return;
@@ -210,8 +297,15 @@ export function startSnapshotSync(): void {
     applySnapshot(event.payload);
   });
   void snapshotUnlisten
-    .then(() => poll())
+    .then((unlisten) => {
+      if (generation !== snapshotSyncGeneration) {
+        unlisten();
+        return;
+      }
+      return poll();
+    })
     .catch((error) => {
+      if (generation !== snapshotSyncGeneration) return;
       snapshotUnlisten = null;
       console.warn("Snapshot listener:", error);
       startSnapshotPolling();
@@ -219,6 +313,9 @@ export function startSnapshotSync(): void {
 }
 
 export function stopSnapshotSync(): void {
+  snapshotSyncGeneration++;
+  snapshotSequence++;
+  pollPending = false;
   if (snapshotPollTimer) {
     clearInterval(snapshotPollTimer);
     snapshotPollTimer = null;

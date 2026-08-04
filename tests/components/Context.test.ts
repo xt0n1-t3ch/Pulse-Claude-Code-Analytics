@@ -97,10 +97,30 @@ function makeSession(id: string, project: string): SessionInfo {
 }
 
 describe("Context.svelte", () => {
-  beforeEach(() => {
-    getContextBreakdown.mockClear();
-    getContextBreakdowns.mockClear();
-    getSessionsContextUsage.mockClear();
+  beforeEach(async () => {
+    getContextBreakdown.mockReset();
+    getContextBreakdown.mockResolvedValue(breakdown);
+    getContextBreakdowns.mockReset();
+    getContextBreakdowns.mockImplementation(async (sessionIds?: string[]) =>
+      (sessionIds ?? breakdowns.map((entry) => entry.session_id)).map((sessionId) => ({
+        session_id: sessionId,
+        project: sessionId === "s2" ? "other" : "pulse",
+        model_id: "claude-opus-4-8",
+        is_idle: false,
+        activity: "Idle",
+        breakdown,
+      }))
+    );
+    getSessionsContextUsage.mockReset();
+    getSessionsContextUsage.mockResolvedValue(usage);
+    const {
+      sessions,
+      selectedAccessSourceId,
+      selectedAnalyticsProviderScope,
+    } = await import("@/lib/stores");
+    sessions.set([]);
+    selectedAccessSourceId.set("all");
+    selectedAnalyticsProviderScope.set("all");
   });
 
   it("renders one active-session selector without a second stale history list", async () => {
@@ -159,7 +179,7 @@ describe("Context.svelte", () => {
     });
   });
 
-  it("queries the breakdown when a session is selected", async () => {
+  it("queries the list observation when a session is selected", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([makeSession("sel", "pulse")]);
 
@@ -168,8 +188,9 @@ describe("Context.svelte", () => {
     await tick();
 
     await waitFor(() => {
-      expect(getContextBreakdown).toHaveBeenCalled();
+      expect(getContextBreakdowns).toHaveBeenCalledWith(["sel"], "all");
     });
+    expect(getContextBreakdown).not.toHaveBeenCalled();
   });
 
   it("refreshes the active row and selected detail from the same live snapshot", async () => {
@@ -208,13 +229,13 @@ describe("Context.svelte", () => {
     const Context = (await import("@/views/Context.svelte")).default;
     const { container } = render(Context);
     await waitFor(() => expect(container.querySelector(".hero-card")).not.toBeNull());
-    getContextBreakdown.mockClear();
+    getContextBreakdowns.mockClear();
 
     sessions.set([{ ...makeSession("live", "pulse"), is_idle: true }]);
     await tick();
 
     await waitFor(() => expect(container.querySelector(".hero-card")).toBeNull());
-    expect(getContextBreakdown).not.toHaveBeenCalled();
+    expect(getContextBreakdowns).not.toHaveBeenCalled();
   });
 
   it("labels installed skills as estimated inventory instead of loaded context", async () => {

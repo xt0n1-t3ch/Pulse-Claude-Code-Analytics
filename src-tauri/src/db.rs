@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -67,6 +68,13 @@ fn active_provider() -> Provider {
 
 fn active_provider_slug() -> &'static str {
     active_provider().as_str()
+}
+
+fn analytics_provider_scope(provider: Option<&str>) -> String {
+    match provider.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(provider) => provider.to_ascii_lowercase(),
+        None => active_provider_slug().to_string(),
+    }
 }
 
 fn storage_session_id(provider: &str, session_id: &str) -> String {
@@ -259,8 +267,8 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
             window_tokens INTEGER DEFAULT 0,
             context_source TEXT NOT NULL DEFAULT 'unknown',
             context_raw_source TEXT NOT NULL DEFAULT 'unknown',
-            raw_window_tokens INTEGER DEFAULT NULL
-                CHECK (raw_window_tokens IS NULL OR raw_window_tokens >= 0),
+            raw_window_tokens INTEGER NOT NULL DEFAULT 0
+                CHECK (raw_window_tokens >= 0),
             effective_context_percent INTEGER DEFAULT NULL
                 CHECK (
                     effective_context_percent IS NULL
@@ -321,7 +329,7 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
         ("context_raw_source", "TEXT NOT NULL DEFAULT 'unknown'"),
         (
             "raw_window_tokens",
-            "INTEGER DEFAULT NULL CHECK (raw_window_tokens IS NULL OR raw_window_tokens >= 0)",
+            "INTEGER NOT NULL DEFAULT 0 CHECK (raw_window_tokens >= 0)",
         ),
         (
             "effective_context_percent",
@@ -386,7 +394,7 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
                  cached_input_savings = NULL,
                  context_source = 'legacy',
                  context_raw_source = 'unknown',
-                 raw_window_tokens = NULL,
+                 raw_window_tokens = 0,
                  effective_context_percent = NULL
              WHERE lower(provider) = 'codex'",
             [],
@@ -460,6 +468,33 @@ fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CostBasis {
+    Exact,
+    Partial,
+    /// Cost was not billed by the provider (subscription usage) but is
+    /// reconstructed from real token counts x published per-model API rates.
+    /// An API-equivalent estimate, never provider-billed spend.
+    Estimated,
+    #[default]
+    Unavailable,
+}
+
+impl CostBasis {
+    fn from_storage(status: &str, source: &str, known_cost: Option<f64>) -> Self {
+        if known_cost.is_none() {
+            return Self::Unavailable;
+        }
+        let _ = source;
+        match status {
+            "exact" => Self::Exact,
+            "partial" => Self::Partial,
+            _ => Self::Unavailable,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct HistoricalSession {
     pub id: String,
@@ -475,6 +510,9 @@ pub struct HistoricalSession {
     pub ended_at: Option<String>,
     pub duration_secs: i64,
     pub total_cost: f64,
+    pub cost_basis: CostBasis,
+    pub cost_source: String,
+    pub known_cost: Option<f64>,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_write_tokens: i64,
@@ -495,6 +533,174 @@ fn history_timestamp_expr() -> &'static str {
     "COALESCE(started_at, created_at, updated_at)"
 }
 
+/// API-equivalent cost reconstructed from real token counts x published
+/// per-model API rates. Used for subscription sessions the provider never
+/// billed per-token. It is an estimate, never provider-billed spend, and is
+/// `None` whenever the model has no resolvable published rate (we never invent
+/// a rate to force a number).
+pub(crate) struct EstimatedCost {
+    pub total: f64,
+    pub input_cost: f64,
+    pub output_cost: f64,
+    pub cache_write_cost: f64,
+    pub cache_read_cost: f64,
+}
+
+/// True when a model id belongs to the OpenAI/Codex family (priced from the
+/// bundled model catalog) rather than the Claude family (priced from
+/// `cc_discord_presence::cost`).
+fn is_codex_family(provider: &str, model_id: &str) -> bool {
+    let p = provider.trim().to_lowercase();
+    if p == "codex" || p == "openai" {
+        return true;
+    }
+    let m = model_id.trim().to_lowercase();
+    m.starts_with("gpt") || m.contains("codex")
+}
+
+/// Reconstruct API-equivalent spend for one session. DB token columns follow
+/// the accumulator contract where `input_tokens` already includes cache write
+/// and cache read, so pure (non-cached) input is `input - cache_write -
+/// cache_read`.
+pub(crate) fn estimate_api_equivalent_cost(
+    provider: &str,
+    model_id: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_write_tokens: i64,
+    cache_read_tokens: i64,
+) -> Option<EstimatedCost> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return None;
+    }
+    let input = input_tokens.max(0) as u64;
+    let output = output_tokens.max(0) as u64;
+    let cache_write = cache_write_tokens.max(0) as u64;
+    let cache_read = cache_read_tokens.max(0) as u64;
+    if input == 0 && output == 0 {
+        return None;
+    }
+    let pure_input = input.saturating_sub(cache_write).saturating_sub(cache_read);
+
+    if is_codex_family(provider, model_id) {
+        use cc_discord_presence::codex::config::PricingConfig;
+        use cc_discord_presence::codex::cost::{TokenUsage, compute_cost};
+        use cc_discord_presence::codex::model::{SessionSpeed, SpeedMode, SpeedSource};
+
+        // `compute_cost` bills `input_tokens - cached_input_tokens` at the input
+        // rate, so pass pure+cache_read as input and cache_read as cached to
+        // avoid double-charging cache write, which is billed on its own line.
+        let usage = TokenUsage {
+            input_tokens: pure_input + cache_read,
+            cached_input_tokens: cache_read,
+            cache_write_tokens: Some(cache_write),
+            output_tokens: output,
+        };
+        let computed = compute_cost(
+            model_id,
+            usage,
+            SessionSpeed::explicit(SpeedMode::Standard, SpeedSource::LegacyDefault),
+            &PricingConfig::default(),
+        );
+        let total = computed.known_total_cost_usd?;
+        if !total.is_finite() || total < 0.0 {
+            return None;
+        }
+        Some(EstimatedCost {
+            total,
+            input_cost: computed.breakdown.input_cost_usd,
+            output_cost: computed.breakdown.output_cost_usd,
+            cache_write_cost: computed.breakdown.cache_write_cost_usd,
+            cache_read_cost: computed.breakdown.cached_input_cost_usd,
+        })
+    } else {
+        let b = cost::calculate_category_costs(
+            model_id,
+            pure_input,
+            output,
+            cache_write,
+            cache_read,
+            false,
+        );
+        let total = b.total();
+        if !total.is_finite() || total <= 0.0 {
+            return None;
+        }
+        Some(EstimatedCost {
+            total,
+            input_cost: b.input_cost,
+            output_cost: b.output_cost,
+            cache_write_cost: b.cache_write_cost,
+            cache_read_cost: b.cache_read_cost,
+        })
+    }
+}
+
+/// Fills in an API-equivalent estimate for any session the provider left
+/// unpriced but that still carries token counts and a resolvable model. Exact
+/// and provider-billed sessions are left untouched.
+fn apply_api_equivalent_estimates(sessions: &mut [HistoricalSession]) {
+    for s in sessions.iter_mut() {
+        if s.cost_basis != CostBasis::Unavailable || s.known_cost.is_some() {
+            continue;
+        }
+        let model = if s.model_id.trim().is_empty() {
+            s.model.as_str()
+        } else {
+            s.model_id.as_str()
+        };
+        if let Some(est) = estimate_api_equivalent_cost(
+            &s.provider,
+            model,
+            s.input_tokens,
+            s.output_tokens,
+            s.cache_write_tokens,
+            s.cache_read_tokens,
+        ) {
+            s.total_cost = est.total;
+            s.known_cost = Some(est.total);
+            s.cost_basis = CostBasis::Estimated;
+            s.cost_source = "api_equivalent".to_string();
+            s.input_cost = est.input_cost;
+            s.output_cost = est.output_cost;
+            s.cache_write_cost = est.cache_write_cost;
+            s.cache_read_cost = est.cache_read_cost;
+        }
+    }
+}
+
+fn provider_history_inventory(conn: &Connection, days: Option<i64>) -> BTreeMap<String, u64> {
+    let history_ts = history_timestamp_expr();
+    let sql = format!(
+        "SELECT lower(provider), COUNT(*)
+         FROM sessions
+         WHERE trim(provider) <> ''
+           AND (?1 IS NULL OR COALESCE({history_ts}, datetime('now')) >= ?1)
+         GROUP BY lower(provider)
+         ORDER BY lower(provider)"
+    );
+    let cutoff = days.map(|days| (Utc::now() - chrono::Duration::days(days)).to_rfc3339());
+
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return BTreeMap::new();
+    };
+    let rows = stmt.query_map(params![cutoff], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+    });
+
+    rows.ok()
+        .map(|rows| rows.filter_map(Result::ok).collect())
+        .unwrap_or_default()
+}
+
+pub fn get_provider_history_inventory(days: Option<i64>) -> BTreeMap<String, u64> {
+    let Ok(conn) = db().lock() else {
+        return BTreeMap::new();
+    };
+    provider_history_inventory(&conn, days)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn query_sessions(
     conn: &Connection,
@@ -513,12 +719,12 @@ fn query_sessions(
     let history_ts = history_timestamp_expr();
     let mut sql = String::from(
         "SELECT id, provider, session_name, project, model, model_id, context_window, branch, effort,
-            started_at, ended_at, duration_secs, total_cost,
+            started_at, ended_at, duration_secs, COALESCE(known_cost, 0), cost_status, cost_source, known_cost,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, total_tokens,
             input_cost, output_cost, cache_write_cost, cache_read_cost,
             has_thinking, subagent_count, is_active, used_tokens, window_tokens
          FROM sessions
-         WHERE provider = ?1",
+         WHERE (?1 = 'all' OR provider = ?1)",
     );
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(provider.to_string())];
     let mut param_idx = 2;
@@ -561,13 +767,13 @@ fn query_sessions(
     }
 
     if let Some(min_cost) = min_cost {
-        sql.push_str(&format!(" AND total_cost >= ?{param_idx}"));
+        sql.push_str(&format!(" AND known_cost >= ?{param_idx}"));
         params_vec.push(Box::new(min_cost));
         param_idx += 1;
     }
 
     if let Some(max_cost) = max_cost {
-        sql.push_str(&format!(" AND total_cost <= ?{param_idx}"));
+        sql.push_str(&format!(" AND known_cost <= ?{param_idx}"));
         params_vec.push(Box::new(max_cost));
         param_idx += 1;
     }
@@ -625,26 +831,39 @@ fn query_sessions(
                 ended_at: row.get(10)?,
                 duration_secs: row.get(11)?,
                 total_cost: row.get(12)?,
-                input_tokens: row.get(13)?,
-                output_tokens: row.get(14)?,
-                cache_write_tokens: row.get(15)?,
-                cache_read_tokens: row.get(16)?,
-                total_tokens: row.get(17)?,
-                input_cost: row.get(18)?,
-                output_cost: row.get(19)?,
-                cache_write_cost: row.get(20)?,
-                cache_read_cost: row.get(21)?,
-                has_thinking: row.get::<_, i32>(22)? != 0,
-                subagent_count: row.get(23)?,
-                is_active: row.get::<_, i32>(24)? != 0,
-                used_tokens: row.get(25)?,
-                window_tokens: row.get(26)?,
+                cost_basis: CostBasis::from_storage(
+                    row.get::<_, String>(13)?.as_str(),
+                    row.get::<_, String>(14)?.as_str(),
+                    row.get(15)?,
+                ),
+                cost_source: row.get(14)?,
+                known_cost: row.get(15)?,
+                input_tokens: row.get(16)?,
+                output_tokens: row.get(17)?,
+                cache_write_tokens: row.get(18)?,
+                cache_read_tokens: row.get(19)?,
+                total_tokens: row.get(20)?,
+                input_cost: row.get(21)?,
+                output_cost: row.get(22)?,
+                cache_write_cost: row.get(23)?,
+                cache_read_cost: row.get(24)?,
+                has_thinking: row.get::<_, i32>(25)? != 0,
+                subagent_count: row.get(26)?,
+                is_active: row.get::<_, i32>(27)? != 0,
+                used_tokens: row.get(28)?,
+                window_tokens: row.get(29)?,
             })
         })
         .ok();
 
-    rows.map(|r| r.filter_map(|x| x.ok()).collect())
-        .unwrap_or_default()
+    let mut sessions: Vec<HistoricalSession> = rows
+        .map(|r| r.filter_map(|x| x.ok()).collect())
+        .unwrap_or_default();
+    // Subscription sessions arrive unpriced; reconstruct API-equivalent spend
+    // from real tokens x published rates so cost views are complete instead of
+    // blank. Provider-billed and exact rows are left untouched.
+    apply_api_equivalent_estimates(&mut sessions);
+    sessions
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -653,6 +872,9 @@ pub struct DailyStat {
     pub project: String,
     pub model: String,
     pub session_count: i64,
+    pub priced_sessions: i64,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
     pub total_cost: f64,
     pub total_tokens: i64,
     pub input_tokens: i64,
@@ -665,6 +887,9 @@ pub struct DailyStat {
 pub struct ProjectStat {
     pub project: String,
     pub session_count: i64,
+    pub priced_sessions: i64,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
     pub total_cost: f64,
     pub total_tokens: i64,
     pub avg_session_cost: f64,
@@ -678,6 +903,19 @@ pub struct ProjectStat {
 pub struct HourlyActivity {
     pub hour: i64,
     pub session_count: i64,
+    pub priced_sessions: i64,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
+    pub total_cost: f64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ModelStat {
+    pub model: String,
+    pub session_count: i64,
+    pub priced_sessions: i64,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
     pub total_cost: f64,
 }
 
@@ -688,6 +926,10 @@ pub struct CostForecast {
     pub days_in_month: i64,
     pub projected_monthly: f64,
     pub daily_average: f64,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
+    pub sessions: usize,
+    pub priced_sessions: usize,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -698,6 +940,10 @@ pub struct BudgetStatus {
     pub pct_used: f64,
     pub projected_monthly: f64,
     pub over_budget: bool,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
+    pub sessions: usize,
+    pub priced_sessions: usize,
 }
 
 fn bounded_i64(value: u64) -> i64 {
@@ -712,18 +958,141 @@ fn nonnegative_finite(value: f64) -> f64 {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CostCoverage {
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
+    pub sessions: usize,
+    pub priced_sessions: usize,
+}
+
+pub(crate) fn summarize_cost_provenance<'a, I>(observations: I) -> CostCoverage
+where
+    I: IntoIterator<Item = (CostBasis, &'a str, Option<f64>)>,
+{
+    let mut sources = BTreeSet::new();
+    let mut sessions = 0usize;
+    let mut priced_sessions = 0usize;
+    let mut exact = 0usize;
+    let mut partial = 0usize;
+    let mut estimated = 0usize;
+
+    for (basis, source, known_cost) in observations {
+        sessions += 1;
+        if !known_cost.is_some_and(|cost| cost.is_finite() && cost >= 0.0)
+            || basis == CostBasis::Unavailable
+        {
+            continue;
+        }
+        priced_sessions += 1;
+        match basis {
+            CostBasis::Exact => exact += 1,
+            CostBasis::Partial => partial += 1,
+            CostBasis::Estimated => estimated += 1,
+            CostBasis::Unavailable => {}
+        }
+        let source = source.trim();
+        if !source.is_empty() && source != "unknown" {
+            sources.insert(source.to_string());
+        }
+    }
+
+    // An API-equivalent estimate is weaker than provider-billed exact cost but
+    // stronger than nothing. Any estimate in the mix downgrades the aggregate to
+    // Estimated so the UI never presents reconstructed spend as billed. A true
+    // partial (a provider-billed lower bound) still takes precedence as the
+    // most conservative "known" label.
+    let cost_basis = if priced_sessions == 0 {
+        CostBasis::Unavailable
+    } else if partial > 0 || priced_sessions != sessions {
+        // Any unpriced session, or a provider-billed lower bound, keeps the
+        // aggregate at Partial: coverage is genuinely incomplete.
+        CostBasis::Partial
+    } else if estimated > 0 {
+        // Fully covered, but at least one figure is an API-equivalent estimate
+        // rather than provider-billed spend.
+        CostBasis::Estimated
+    } else if exact == priced_sessions {
+        CostBasis::Exact
+    } else {
+        CostBasis::Partial
+    };
+
+    CostCoverage {
+        cost_basis,
+        cost_sources: sources.into_iter().collect(),
+        sessions,
+        priced_sessions,
+    }
+}
+
+fn coverage_from_sql(
+    sessions: i64,
+    exact: i64,
+    partial: i64,
+    provider_billed: i64,
+    sources: Option<String>,
+) -> CostCoverage {
+    let priced_sessions = (exact + partial + provider_billed).max(0) as usize;
+    let sessions = sessions.max(0) as usize;
+    let cost_basis = if priced_sessions == 0 {
+        CostBasis::Unavailable
+    } else if priced_sessions != sessions || partial > 0 {
+        CostBasis::Partial
+    } else if (exact + provider_billed) as usize == priced_sessions {
+        CostBasis::Exact
+    } else {
+        CostBasis::Partial
+    };
+    let cost_sources = sources
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|source| !source.is_empty() && *source != "unknown")
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    CostCoverage {
+        cost_basis,
+        cost_sources,
+        sessions,
+        priced_sessions,
+    }
+}
+
+const COST_COVERAGE_SQL: &str = "
+    COALESCE(SUM(CASE
+        WHEN known_cost IS NOT NULL
+         AND cost_status = 'exact'
+         AND lower(replace(cost_source, '-', '_')) != 'provider_billed'
+        THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE
+        WHEN known_cost IS NOT NULL AND cost_status = 'partial'
+        THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE
+        WHEN known_cost IS NOT NULL
+         AND cost_status = 'exact'
+         AND lower(replace(cost_source, '-', '_')) = 'provider_billed'
+        THEN 1 ELSE 0 END), 0),
+    GROUP_CONCAT(DISTINCT CASE
+        WHEN known_cost IS NOT NULL
+         AND cost_status IN ('exact', 'partial')
+         AND trim(cost_source) NOT IN ('', 'unknown')
+        THEN cost_source END)";
+
 fn session_cost_provenance(
     session: &super::commands::SessionInfo,
 ) -> (&'static str, &'static str, Option<f64>) {
+    if !session.cost_available {
+        return ("unavailable", "unknown", None);
+    }
     let cost = nonnegative_finite(session.cost);
-    if session.provider.eq_ignore_ascii_case("codex") {
-        if cost > 0.0 {
-            ("partial", "session-subtotal", Some(cost))
-        } else {
-            ("unavailable", "unknown", None)
-        }
-    } else {
-        ("exact", "session-calculated", Some(cost))
+    match session.cost_basis.as_str() {
+        "exact" => ("exact", "session-calculated", Some(cost)),
+        "partial" => ("partial", "session-calculated", Some(cost)),
+        "provider_billed" => ("exact", "provider_billed", Some(cost)),
+        _ => ("unavailable", "unknown", None),
     }
 }
 
@@ -759,7 +1128,7 @@ fn upsert_session_into(
             context_source, context_raw_source, raw_window_tokens, effective_context_percent)
         VALUES (
             ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,NULL,
-            ?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,1,?30,?31,?32,?33,'unknown',NULL,NULL
+             ?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,1,?30,?31,?32,?33,'unknown',0,NULL
         )
         ON CONFLICT(id) DO UPDATE SET
             provider=?2,
@@ -778,7 +1147,7 @@ fn upsert_session_into(
             input_cost=?24, output_cost=?25, cache_write_cost=?26, cache_read_cost=?27,
             has_thinking=?28, subagent_count=?29, is_active=1, updated_at=?30,
             used_tokens=?31, window_tokens=?32,
-            context_source=?33, context_raw_source='unknown', raw_window_tokens=NULL,
+            context_source=?33, context_raw_source='unknown', raw_window_tokens=0,
             effective_context_percent=NULL",
         params![
             storage_id,
@@ -826,10 +1195,14 @@ fn upsert_session_into(
     Ok(())
 }
 
-pub fn upsert_session(s: &super::commands::SessionInfo) {
-    let Ok(conn) = db().lock() else { return };
-    if let Err(error) = upsert_session_into(&conn, s, &Utc::now().to_rfc3339()) {
-        warn!("Failed to persist analytics session: {error}");
+pub fn upsert_session(s: &super::commands::SessionInfo) -> bool {
+    let Ok(conn) = db().lock() else { return false };
+    match upsert_session_into(&conn, s, &Utc::now().to_rfc3339()) {
+        Ok(()) => true,
+        Err(error) => {
+            warn!("Failed to persist analytics session: {error}");
+            false
+        }
     }
 }
 
@@ -899,12 +1272,21 @@ pub fn get_session_history(
     project: Option<&str>,
     limit: Option<i64>,
 ) -> Vec<HistoricalSession> {
-    let provider = active_provider_slug();
+    get_session_history_scoped(None, days, project, limit)
+}
+
+pub fn get_session_history_scoped(
+    provider: Option<&str>,
+    days: Option<i64>,
+    project: Option<&str>,
+    limit: Option<i64>,
+) -> Vec<HistoricalSession> {
+    let provider = analytics_provider_scope(provider);
     let Ok(conn) = db().lock() else {
         return vec![];
     };
     query_sessions(
-        &conn, provider, days, None, None, project, None, None, None, None, None, limit,
+        &conn, &provider, days, None, None, project, None, None, None, None, None, limit,
     )
 }
 
@@ -917,12 +1299,28 @@ pub fn get_session_history_filtered(
     max_cost: Option<f64>,
     limit: Option<i64>,
 ) -> Vec<HistoricalSession> {
-    let provider = active_provider_slug();
+    get_session_history_filtered_scoped(
+        None, from_iso, to_iso, project, model, min_cost, max_cost, limit,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn get_session_history_filtered_scoped(
+    provider: Option<&str>,
+    from_iso: Option<&str>,
+    to_iso: Option<&str>,
+    project: Option<&str>,
+    model: Option<&str>,
+    min_cost: Option<f64>,
+    max_cost: Option<f64>,
+    limit: Option<i64>,
+) -> Vec<HistoricalSession> {
+    let provider = analytics_provider_scope(provider);
     let Ok(conn) = db().lock() else {
         return vec![];
     };
     query_sessions(
-        &conn, provider, None, from_iso, to_iso, project, model, min_cost, max_cost, None, None,
+        &conn, &provider, None, from_iso, to_iso, project, model, min_cost, max_cost, None, None,
         limit,
     )
 }
@@ -932,13 +1330,22 @@ pub fn get_sessions_by_hour_range(
     end_hour: i64,
     days: Option<i64>,
 ) -> Vec<HistoricalSession> {
-    let provider = active_provider_slug();
+    get_sessions_by_hour_range_scoped(None, start_hour, end_hour, days)
+}
+
+pub fn get_sessions_by_hour_range_scoped(
+    provider: Option<&str>,
+    start_hour: i64,
+    end_hour: i64,
+    days: Option<i64>,
+) -> Vec<HistoricalSession> {
+    let provider = analytics_provider_scope(provider);
     let Ok(conn) = db().lock() else {
         return vec![];
     };
     query_sessions(
         &conn,
-        provider,
+        &provider,
         days,
         None,
         None,
@@ -953,20 +1360,29 @@ pub fn get_sessions_by_hour_range(
 }
 
 pub fn search_sessions(query: &str, limit: Option<i64>) -> Vec<HistoricalSession> {
+    search_sessions_scoped(None, query, limit)
+}
+
+pub fn search_sessions_scoped(
+    provider: Option<&str>,
+    query: &str,
+    limit: Option<i64>,
+) -> Vec<HistoricalSession> {
     let Ok(conn) = db().lock() else {
         return vec![];
     };
 
     let lim = limit.unwrap_or(50);
-    let provider = active_provider_slug().to_string();
+    let provider = analytics_provider_scope(provider);
     let sql = "SELECT s.id, s.provider, s.session_name, s.project, s.model, s.model_id, s.context_window, s.branch, s.effort,
-            s.started_at, s.ended_at, s.duration_secs, s.total_cost,
+            s.started_at, s.ended_at, s.duration_secs, COALESCE(s.known_cost, 0),
+            s.cost_status, s.cost_source, s.known_cost,
             s.input_tokens, s.output_tokens, s.cache_write_tokens, s.cache_read_tokens, s.total_tokens,
             s.input_cost, s.output_cost, s.cache_write_cost, s.cache_read_cost,
             s.has_thinking, s.subagent_count, s.is_active, s.used_tokens, s.window_tokens
         FROM sessions_fts fts
         JOIN sessions s ON s.rowid = fts.rowid
-        WHERE s.provider = ?1 AND sessions_fts MATCH ?2
+        WHERE (?1 = 'all' OR s.provider = ?1) AND sessions_fts MATCH ?2
         ORDER BY bm25(sessions_fts)
         LIMIT ?3";
 
@@ -994,20 +1410,27 @@ pub fn search_sessions(query: &str, limit: Option<i64>) -> Vec<HistoricalSession
                 ended_at: row.get(10)?,
                 duration_secs: row.get(11)?,
                 total_cost: row.get(12)?,
-                input_tokens: row.get(13)?,
-                output_tokens: row.get(14)?,
-                cache_write_tokens: row.get(15)?,
-                cache_read_tokens: row.get(16)?,
-                total_tokens: row.get(17)?,
-                input_cost: row.get(18)?,
-                output_cost: row.get(19)?,
-                cache_write_cost: row.get(20)?,
-                cache_read_cost: row.get(21)?,
-                has_thinking: row.get::<_, i32>(22)? != 0,
-                subagent_count: row.get(23)?,
-                is_active: row.get::<_, i32>(24)? != 0,
-                used_tokens: row.get(25)?,
-                window_tokens: row.get(26)?,
+                cost_basis: CostBasis::from_storage(
+                    row.get::<_, String>(13)?.as_str(),
+                    row.get::<_, String>(14)?.as_str(),
+                    row.get(15)?,
+                ),
+                cost_source: row.get(14)?,
+                known_cost: row.get(15)?,
+                input_tokens: row.get(16)?,
+                output_tokens: row.get(17)?,
+                cache_write_tokens: row.get(18)?,
+                cache_read_tokens: row.get(19)?,
+                total_tokens: row.get(20)?,
+                input_cost: row.get(21)?,
+                output_cost: row.get(22)?,
+                cache_write_cost: row.get(23)?,
+                cache_read_cost: row.get(24)?,
+                has_thinking: row.get::<_, i32>(25)? != 0,
+                subagent_count: row.get(26)?,
+                is_active: row.get::<_, i32>(27)? != 0,
+                used_tokens: row.get(28)?,
+                window_tokens: row.get(29)?,
             })
         })
         .ok();
@@ -1028,9 +1451,10 @@ fn query_daily_stats(conn: &Connection, provider: &str, cutoff: &str) -> Vec<Dai
                 COALESCE(SUM(input_tokens), 0),
                 COALESCE(SUM(output_tokens), 0),
                 COALESCE(SUM(cache_write_tokens), 0),
-                COALESCE(SUM(cache_read_tokens), 0)
+                COALESCE(SUM(cache_read_tokens), 0),
+                {COST_COVERAGE_SQL}
          FROM sessions
-         WHERE provider = ?1
+         WHERE (?1 = 'all' OR provider = ?1)
            AND date({history_timestamp}) >= ?2
          GROUP BY session_date, project, model
          ORDER BY session_date DESC, project, model"
@@ -1042,11 +1466,22 @@ fn query_daily_stats(conn: &Connection, provider: &str, cutoff: &str) -> Vec<Dai
 
     let rows = stmt
         .query_map(params![provider, cutoff], |row| {
+            let session_count = row.get::<_, i64>(3)?;
+            let coverage = coverage_from_sql(
+                session_count,
+                row.get(10)?,
+                row.get(11)?,
+                row.get(12)?,
+                row.get(13)?,
+            );
             Ok(DailyStat {
                 date: row.get(0)?,
                 project: row.get(1)?,
                 model: row.get(2)?,
-                session_count: row.get(3)?,
+                session_count,
+                priced_sessions: coverage.priced_sessions as i64,
+                cost_basis: coverage.cost_basis,
+                cost_sources: coverage.cost_sources,
                 total_cost: row.get(4)?,
                 total_tokens: row.get(5)?,
                 input_tokens: row.get(6)?,
@@ -1062,10 +1497,14 @@ fn query_daily_stats(conn: &Connection, provider: &str, cutoff: &str) -> Vec<Dai
 }
 
 pub fn get_daily_stats(days: Option<i64>) -> Vec<DailyStat> {
+    get_daily_stats_scoped(None, days)
+}
+
+pub fn get_daily_stats_scoped(provider: Option<&str>, days: Option<i64>) -> Vec<DailyStat> {
     let Ok(conn) = db().lock() else {
         return vec![];
     };
-    let provider = active_provider_slug().to_string();
+    let provider = analytics_provider_scope(provider);
     let cutoff = (Utc::now() - chrono::Duration::days(days.unwrap_or(30)))
         .format("%Y-%m-%d")
         .to_string();
@@ -1073,55 +1512,74 @@ pub fn get_daily_stats(days: Option<i64>) -> Vec<DailyStat> {
 }
 
 pub fn get_analytics_summary() -> AnalyticsSummary {
+    get_analytics_summary_scoped(None)
+}
+
+pub fn get_analytics_summary_scoped(provider: Option<&str>) -> AnalyticsSummary {
     let Ok(conn) = db().lock() else {
         return AnalyticsSummary::default();
     };
-    let provider = active_provider_slug().to_string();
+    let provider = analytics_provider_scope(provider);
+    analytics_summary_from_connection(&conn, &provider)
+}
 
-    let total_sessions: i64 = conn
+fn analytics_summary_from_connection(conn: &Connection, provider: &str) -> AnalyticsSummary {
+    let (total_sessions, total_cost, exact, partial, provider_billed, sources): (
+        i64,
+        f64,
+        i64,
+        i64,
+        i64,
+        Option<String>,
+    ) = conn
         .query_row(
-            "SELECT COUNT(*) FROM sessions WHERE provider = ?1",
-            params![provider.clone()],
-            |r| r.get(0),
+            &format!(
+                "SELECT COUNT(*), COALESCE(SUM(known_cost), 0), {COST_COVERAGE_SQL}
+                 FROM sessions WHERE (?1 = 'all' OR provider = ?1)"
+            ),
+            params![provider],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
-        .unwrap_or(0);
-
-    let total_cost: f64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(total_cost), 0) FROM sessions WHERE provider = ?1",
-            params![provider.clone()],
-            |r| r.get(0),
-        )
-        .unwrap_or(0.0);
+        .unwrap_or((0, 0.0, 0, 0, 0, None));
+    let coverage = coverage_from_sql(total_sessions, exact, partial, provider_billed, sources);
 
     let total_tokens: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(total_tokens), 0) FROM sessions WHERE provider = ?1",
-            params![provider.clone()],
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM sessions WHERE (?1 = 'all' OR provider = ?1)",
+            params![provider],
             |r| r.get(0),
         )
         .unwrap_or(0);
 
     let total_cache_read: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(cache_read_tokens), 0) FROM sessions WHERE provider = ?1",
-            params![provider.clone()],
+            "SELECT COALESCE(SUM(cache_read_tokens), 0) FROM sessions WHERE (?1 = 'all' OR provider = ?1)",
+            params![provider],
             |r| r.get(0),
         )
         .unwrap_or(0);
 
     let total_cache_write: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(cache_write_tokens), 0) FROM sessions WHERE provider = ?1",
-            params![provider.clone()],
+            "SELECT COALESCE(SUM(cache_write_tokens), 0) FROM sessions WHERE (?1 = 'all' OR provider = ?1)",
+            params![provider],
             |r| r.get(0),
         )
         .unwrap_or(0);
 
     let avg_duration_secs: f64 = conn
         .query_row(
-            "SELECT COALESCE(AVG(duration_secs), 0) FROM sessions WHERE provider = ?1 AND duration_secs > 0",
-            params![provider.clone()],
+            "SELECT COALESCE(AVG(duration_secs), 0) FROM sessions WHERE (?1 = 'all' OR provider = ?1) AND duration_secs > 0",
+            params![provider],
             |r| r.get(0),
         )
         .unwrap_or(0.0);
@@ -1132,24 +1590,27 @@ pub fn get_analytics_summary() -> AnalyticsSummary {
         0.0
     };
 
-    let avg_cost_per_session: f64 = if total_sessions > 0 {
-        total_cost / total_sessions as f64
+    let avg_cost_per_session: f64 = if coverage.priced_sessions > 0 {
+        total_cost / coverage.priced_sessions as f64
     } else {
         0.0
     };
 
     let top_project: String = conn
         .query_row(
-            "SELECT project FROM sessions WHERE provider = ?1 GROUP BY project ORDER BY SUM(total_cost) DESC LIMIT 1",
-            params![provider.clone()],
+            "SELECT project FROM sessions WHERE (?1 = 'all' OR provider = ?1)
+             GROUP BY project
+             ORDER BY COALESCE(SUM(known_cost), 0) DESC, COUNT(*) DESC, project ASC
+             LIMIT 1",
+            params![provider],
             |r| r.get(0),
         )
         .unwrap_or_else(|_| "—".to_string());
 
     let top_model: String = conn
         .query_row(
-            "SELECT model FROM sessions WHERE provider = ?1 GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1",
-            params![provider.clone()],
+            "SELECT model FROM sessions WHERE (?1 = 'all' OR provider = ?1) GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1",
+            params![provider],
             |r| r.get(0),
         )
         .unwrap_or_else(|_| "—".to_string());
@@ -1157,7 +1618,7 @@ pub fn get_analytics_summary() -> AnalyticsSummary {
     let days_tracked: i64 = conn
         .query_row(
             &format!(
-                "SELECT COUNT(DISTINCT date({})) FROM sessions WHERE provider = ?1",
+                "SELECT COUNT(DISTINCT date({})) FROM sessions WHERE (?1 = 'all' OR provider = ?1)",
                 history_timestamp_expr()
             ),
             params![provider],
@@ -1167,6 +1628,9 @@ pub fn get_analytics_summary() -> AnalyticsSummary {
 
     AnalyticsSummary {
         total_sessions,
+        priced_sessions: coverage.priced_sessions as i64,
+        cost_basis: coverage.cost_basis,
+        cost_sources: coverage.cost_sources,
         total_cost,
         total_tokens,
         total_cache_read,
@@ -1183,6 +1647,9 @@ pub fn get_analytics_summary() -> AnalyticsSummary {
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct AnalyticsSummary {
     pub total_sessions: i64,
+    pub priced_sessions: i64,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
     pub total_cost: f64,
     pub total_tokens: i64,
     pub total_cache_read: i64,
@@ -1196,24 +1663,38 @@ pub struct AnalyticsSummary {
 }
 
 pub fn get_project_stats(days: Option<i64>) -> Vec<ProjectStat> {
+    get_project_stats_scoped(None, days)
+}
+
+pub fn get_project_stats_scoped(provider: Option<&str>, days: Option<i64>) -> Vec<ProjectStat> {
     let Ok(conn) = db().lock() else { return vec![] };
-    let provider = active_provider_slug().to_string();
+    let provider = analytics_provider_scope(provider);
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
+    query_project_stats(&conn, &provider, &cutoff)
+}
+
+fn query_project_stats(conn: &Connection, provider: &str, cutoff: &str) -> Vec<ProjectStat> {
     let sql = format!(
         "SELECT project,
             COUNT(*) as cnt,
-            COALESCE(SUM(total_cost), 0),
+            COALESCE(SUM(known_cost), 0),
             COALESCE(SUM(total_tokens), 0),
-            COALESCE(AVG(total_cost), 0),
+            CASE
+                WHEN COUNT(known_cost) > 0
+                THEN COALESCE(SUM(known_cost), 0) / COUNT(known_cost)
+                ELSE 0
+            END,
             COALESCE(AVG(duration_secs), 0),
             COALESCE(SUM(cache_read_tokens), 0),
             COALESCE(SUM(cache_write_tokens), 0),
-            (SELECT model FROM sessions s2 WHERE s2.provider = sessions.provider AND s2.project = sessions.project
-             GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1)
+            (SELECT model FROM sessions s2
+             WHERE (?1 = 'all' OR s2.provider = ?1) AND s2.project = sessions.project
+             GROUP BY model ORDER BY COUNT(*) DESC LIMIT 1),
+            {COST_COVERAGE_SQL}
         FROM sessions
-        WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2
-        GROUP BY project ORDER BY SUM(total_cost) DESC",
+        WHERE (?1 = 'all' OR provider = ?1) AND COALESCE({}, datetime('now')) >= ?2
+        GROUP BY project ORDER BY COALESCE(SUM(known_cost), 0) DESC, project ASC",
         history_timestamp_expr()
     );
     let mut stmt = match conn.prepare(&sql) {
@@ -1221,9 +1702,20 @@ pub fn get_project_stats(days: Option<i64>) -> Vec<ProjectStat> {
         Err(_) => return vec![],
     };
     stmt.query_map(params![provider, cutoff], |row| {
+        let session_count = row.get::<_, i64>(1)?;
+        let coverage = coverage_from_sql(
+            session_count,
+            row.get(9)?,
+            row.get(10)?,
+            row.get(11)?,
+            row.get(12)?,
+        );
         Ok(ProjectStat {
             project: row.get(0)?,
-            session_count: row.get(1)?,
+            session_count,
+            priced_sessions: coverage.priced_sessions as i64,
+            cost_basis: coverage.cost_basis,
+            cost_sources: coverage.cost_sources,
             total_cost: row.get(2)?,
             total_tokens: row.get(3)?,
             avg_session_cost: row.get(4)?,
@@ -1239,15 +1731,26 @@ pub fn get_project_stats(days: Option<i64>) -> Vec<ProjectStat> {
 }
 
 pub fn get_hourly_activity(days: Option<i64>) -> Vec<HourlyActivity> {
+    get_hourly_activity_scoped(None, days)
+}
+
+pub fn get_hourly_activity_scoped(
+    provider: Option<&str>,
+    days: Option<i64>,
+) -> Vec<HourlyActivity> {
     let Ok(conn) = db().lock() else { return vec![] };
-    let provider = active_provider_slug().to_string();
+    let provider = analytics_provider_scope(provider);
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
+    query_hourly_activity(&conn, &provider, &cutoff)
+}
+
+fn query_hourly_activity(conn: &Connection, provider: &str, cutoff: &str) -> Vec<HourlyActivity> {
     let sql = format!(
         "SELECT CAST(strftime('%H', COALESCE({}, ''), 'localtime') AS INTEGER) as hour,
-            COUNT(*), COALESCE(SUM(total_cost), 0)
+            COUNT(*), COALESCE(SUM(known_cost), 0), {COST_COVERAGE_SQL}
         FROM sessions
-        WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2
+        WHERE (?1 = 'all' OR provider = ?1) AND COALESCE({}, datetime('now')) >= ?2
         GROUP BY hour ORDER BY hour",
         history_timestamp_expr(),
         history_timestamp_expr()
@@ -1257,9 +1760,20 @@ pub fn get_hourly_activity(days: Option<i64>) -> Vec<HourlyActivity> {
         Err(_) => return vec![],
     };
     stmt.query_map(params![provider, cutoff], |row| {
+        let session_count = row.get::<_, i64>(1)?;
+        let coverage = coverage_from_sql(
+            session_count,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+        );
         Ok(HourlyActivity {
             hour: row.get(0)?,
-            session_count: row.get(1)?,
+            session_count,
+            priced_sessions: coverage.priced_sessions as i64,
+            cost_basis: coverage.cost_basis,
+            cost_sources: coverage.cost_sources,
             total_cost: row.get(2)?,
         })
     })
@@ -1269,7 +1783,15 @@ pub fn get_hourly_activity(days: Option<i64>) -> Vec<HourlyActivity> {
 }
 
 pub fn get_top_sessions(limit: Option<i64>, days: Option<i64>) -> Vec<HistoricalSession> {
-    get_session_history(days, None, limit)
+    get_top_sessions_scoped(None, limit, days)
+}
+
+pub fn get_top_sessions_scoped(
+    provider: Option<&str>,
+    limit: Option<i64>,
+    days: Option<i64>,
+) -> Vec<HistoricalSession> {
+    get_session_history_scoped(provider, days, None, limit)
         .into_iter()
         .collect::<Vec<_>>()
         .into_iter()
@@ -1277,18 +1799,11 @@ pub fn get_top_sessions(limit: Option<i64>, days: Option<i64>) -> Vec<Historical
         .collect()
 }
 
-pub fn get_cost_forecast() -> CostForecast {
-    let Ok(conn) = db().lock() else {
-        return CostForecast {
-            spent_this_month: 0.0,
-            days_elapsed: 0,
-            days_in_month: 30,
-            projected_monthly: 0.0,
-            daily_average: 0.0,
-        };
-    };
-    let provider = active_provider_slug().to_string();
-    let now = Utc::now();
+fn cost_forecast_from_connection(
+    conn: &Connection,
+    provider: &str,
+    now: chrono::DateTime<Utc>,
+) -> CostForecast {
     let month_start = now.format("%Y-%m-01T00:00:00+00:00").to_string();
     let days_elapsed = now.day() as i64;
     let days_in_month = {
@@ -1302,16 +1817,56 @@ pub fn get_cost_forecast() -> CostForecast {
         .map(|d| d.day() as i64)
         .unwrap_or(30)
     };
-    let spent: f64 = conn
-        .query_row(
-            &format!(
-                "SELECT COALESCE(SUM(total_cost), 0) FROM sessions WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2",
-                history_timestamp_expr()
-            ),
-            params![provider, month_start],
-            |r| r.get(0),
-        )
-        .unwrap_or(0.0);
+    let sql = format!(
+        "SELECT cost_status, cost_source, known_cost, provider, model, model_id,
+                input_tokens, output_tokens, cache_write_tokens, cache_read_tokens
+         FROM sessions
+         WHERE (?1 = 'all' OR provider = ?1) AND COALESCE({}, datetime('now')) >= ?2",
+        history_timestamp_expr()
+    );
+    let observations = conn
+        .prepare(&sql)
+        .and_then(|mut stmt| {
+            stmt.query_map(params![provider, month_start], |row| {
+                let status: String = row.get(0)?;
+                let mut source: String = row.get(1)?;
+                let stored_known: Option<f64> = row.get(2)?;
+                let mut basis = CostBasis::from_storage(&status, &source, stored_known);
+                let mut known_cost = stored_known;
+                // Reconstruct API-equivalent spend for unpriced subscription
+                // sessions so month-to-date spend and the projection are not
+                // permanently blank.
+                if basis == CostBasis::Unavailable && stored_known.is_none() {
+                    let row_provider: String = row.get(3)?;
+                    let model: String = row.get(5).or_else(|_| row.get::<_, String>(4))?;
+                    if let Some(est) = estimate_api_equivalent_cost(
+                        &row_provider,
+                        &model,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ) {
+                        basis = CostBasis::Estimated;
+                        source = "api_equivalent".to_string();
+                        known_cost = Some(est.total);
+                    }
+                }
+                Ok((basis, source, known_cost))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap_or_default();
+    let coverage = summarize_cost_provenance(
+        observations
+            .iter()
+            .map(|(basis, source, known_cost)| (*basis, source.as_str(), *known_cost)),
+    );
+    let spent = observations
+        .iter()
+        .filter_map(|(_, _, known_cost)| *known_cost)
+        .filter(|c| c.is_finite() && *c >= 0.0)
+        .sum::<f64>();
     let daily_avg = if days_elapsed > 0 {
         spent / days_elapsed as f64
     } else {
@@ -1323,11 +1878,41 @@ pub fn get_cost_forecast() -> CostForecast {
         days_in_month,
         projected_monthly: daily_avg * days_in_month as f64,
         daily_average: daily_avg,
+        cost_basis: coverage.cost_basis,
+        cost_sources: coverage.cost_sources,
+        sessions: coverage.sessions,
+        priced_sessions: coverage.priced_sessions,
     }
 }
 
+pub fn get_cost_forecast() -> CostForecast {
+    get_cost_forecast_scoped(None)
+}
+
+pub fn get_cost_forecast_scoped(provider: Option<&str>) -> CostForecast {
+    let Ok(conn) = db().lock() else {
+        return CostForecast {
+            spent_this_month: 0.0,
+            days_elapsed: 0,
+            days_in_month: 30,
+            projected_monthly: 0.0,
+            daily_average: 0.0,
+            cost_basis: CostBasis::Unavailable,
+            cost_sources: Vec::new(),
+            sessions: 0,
+            priced_sessions: 0,
+        };
+    };
+    let provider = analytics_provider_scope(provider);
+    cost_forecast_from_connection(&conn, &provider, Utc::now())
+}
+
 pub fn get_budget_status() -> BudgetStatus {
-    let forecast = get_cost_forecast();
+    get_budget_status_scoped(None)
+}
+
+pub fn get_budget_status_scoped(provider: Option<&str>) -> BudgetStatus {
+    let forecast = get_cost_forecast_scoped(provider);
     let Ok(conn) = db().lock() else {
         return BudgetStatus {
             monthly_budget: 0.0,
@@ -1336,6 +1921,10 @@ pub fn get_budget_status() -> BudgetStatus {
             pct_used: 0.0,
             projected_monthly: forecast.projected_monthly,
             over_budget: false,
+            cost_basis: forecast.cost_basis,
+            cost_sources: forecast.cost_sources,
+            sessions: forecast.sessions,
+            priced_sessions: forecast.priced_sessions,
         };
     };
     let (budget, threshold): (f64, f64) = conn
@@ -1357,30 +1946,46 @@ pub fn get_budget_status() -> BudgetStatus {
         pct_used: pct,
         projected_monthly: forecast.projected_monthly,
         over_budget: budget > 0.0 && forecast.projected_monthly > budget,
+        cost_basis: forecast.cost_basis,
+        cost_sources: forecast.cost_sources,
+        sessions: forecast.sessions,
+        priced_sessions: forecast.priced_sessions,
     }
 }
 
-pub fn set_budget(monthly_budget: f64, alert_threshold_pct: Option<f64>) {
-    let Ok(conn) = db().lock() else { return };
+pub fn set_budget(monthly_budget: f64, alert_threshold_pct: Option<f64>) -> Result<(), String> {
+    let conn = db()
+        .lock()
+        .map_err(|_| "analytics database lock poisoned".to_string())?;
     let threshold = alert_threshold_pct.unwrap_or(80.0);
     let now = Utc::now().to_rfc3339();
-    let _ = conn.execute(
+    conn.execute(
         "INSERT INTO budget_config (id, monthly_budget, alert_threshold_pct, updated_at)
          VALUES (1, ?1, ?2, ?3)
          ON CONFLICT(id) DO UPDATE SET monthly_budget=?1, alert_threshold_pct=?2, updated_at=?3",
         params![monthly_budget, threshold, now],
-    );
+    )
+    .map_err(|error| format!("failed to persist budget: {error}"))?;
+    Ok(())
 }
 
-pub fn get_model_distribution(days: Option<i64>) -> Vec<(String, i64, f64)> {
+pub fn get_model_distribution(days: Option<i64>) -> Vec<ModelStat> {
+    get_model_distribution_scoped(None, days)
+}
+
+pub fn get_model_distribution_scoped(provider: Option<&str>, days: Option<i64>) -> Vec<ModelStat> {
     let Ok(conn) = db().lock() else { return vec![] };
-    let provider = active_provider_slug().to_string();
+    let provider = analytics_provider_scope(provider);
     let d = days.unwrap_or(30);
     let cutoff = (Utc::now() - chrono::Duration::days(d)).to_rfc3339();
+    query_model_distribution(&conn, &provider, &cutoff)
+}
+
+fn query_model_distribution(conn: &Connection, provider: &str, cutoff: &str) -> Vec<ModelStat> {
     let sql = format!(
-        "SELECT model, COUNT(*), COALESCE(SUM(total_cost), 0)
+        "SELECT model, COUNT(*), COALESCE(SUM(known_cost), 0), {COST_COVERAGE_SQL}
         FROM sessions
-        WHERE provider = ?1 AND COALESCE({}, datetime('now')) >= ?2
+        WHERE (?1 = 'all' OR provider = ?1) AND COALESCE({}, datetime('now')) >= ?2
         GROUP BY model ORDER BY COUNT(*) DESC",
         history_timestamp_expr()
     );
@@ -1389,11 +1994,22 @@ pub fn get_model_distribution(days: Option<i64>) -> Vec<(String, i64, f64)> {
         Err(_) => return vec![],
     };
     stmt.query_map(params![provider, cutoff], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, f64>(2)?,
-        ))
+        let session_count = row.get::<_, i64>(1)?;
+        let coverage = coverage_from_sql(
+            session_count,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+        );
+        Ok(ModelStat {
+            model: row.get(0)?,
+            session_count,
+            priced_sessions: coverage.priced_sessions as i64,
+            cost_basis: coverage.cost_basis,
+            cost_sources: coverage.cost_sources,
+            total_cost: row.get(2)?,
+        })
     })
     .ok()
     .map(|r| r.filter_map(|x| x.ok()).collect())
@@ -1406,6 +2022,9 @@ pub struct DailyCostRow {
     pub date: String,
     pub cost: f64,
     pub sessions: i64,
+    pub priced_sessions: i64,
+    pub cost_basis: CostBasis,
+    pub cost_sources: Vec<String>,
 }
 
 /// Window-wide daily spend, aggregated in SQL.
@@ -1420,8 +2039,16 @@ pub struct DailyCostRow {
 /// boundary day whole instead of cutting it at the rolling `now - days`
 /// instant, which is what made the timeline disagree with its own totals.
 pub fn get_daily_costs(from_date: &str, project: Option<&str>) -> Vec<DailyCostRow> {
+    get_daily_costs_scoped(None, from_date, project)
+}
+
+pub fn get_daily_costs_scoped(
+    provider: Option<&str>,
+    from_date: &str,
+    project: Option<&str>,
+) -> Vec<DailyCostRow> {
     let Ok(conn) = db().lock() else { return vec![] };
-    let provider = active_provider_slug().to_string();
+    let provider = analytics_provider_scope(provider);
     query_daily_costs(&conn, &provider, from_date, project)
 }
 
@@ -1431,14 +2058,19 @@ fn query_daily_costs(
     from_date: &str,
     project: Option<&str>,
 ) -> Vec<DailyCostRow> {
+    // Aggregate from the estimation-aware session reader instead of a raw
+    // SUM(known_cost). A pure-SQL sum only sees provider-billed rows, so the
+    // cost timeline went blank for subscription usage; grouping the same
+    // API-equivalent sessions the rest of the app uses keeps one source of
+    // truth for cost.
     let history_ts = history_timestamp_expr();
-    // Sessions with no usable timestamp cannot be placed on a calendar day;
-    // dropping them here mirrors the frontend contract rather than inventing a
-    // spike on today.
+    let day_expr = format!("substr({history_ts}, 1, 10)");
     let mut sql = format!(
-        "SELECT substr({history_ts}, 1, 10) AS day, COALESCE(SUM(total_cost), 0), COUNT(*)
+        "SELECT id, provider, project, model, model_id, {day_expr} AS day, COALESCE(known_cost, 0),
+                cost_status, cost_source, known_cost,
+                input_tokens, output_tokens, cache_write_tokens, cache_read_tokens
          FROM sessions
-         WHERE provider = ?1 AND {history_ts} IS NOT NULL AND substr({history_ts}, 1, 10) >= ?2"
+         WHERE (?1 = 'all' OR provider = ?1) AND {history_ts} IS NOT NULL AND {day_expr} >= ?2"
     );
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
         Box::new(provider.to_string()),
@@ -1448,7 +2080,6 @@ fn query_daily_costs(
         sql.push_str(" AND project = ?3");
         params_vec.push(Box::new(project.to_string()));
     }
-    sql.push_str(" GROUP BY day ORDER BY day ASC");
 
     let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
     let mut stmt = match conn.prepare(&sql) {
@@ -1458,16 +2089,80 @@ fn query_daily_costs(
             return vec![];
         }
     };
-    stmt.query_map(refs.as_slice(), |row| {
-        Ok(DailyCostRow {
-            date: row.get(0)?,
-            cost: row.get(1)?,
-            sessions: row.get(2)?,
+
+    struct DailyRowObs {
+        day: String,
+        basis: CostBasis,
+        source: String,
+        known_cost: Option<f64>,
+    }
+
+    let observations = stmt
+        .query_map(refs.as_slice(), |row| {
+            let day: String = row.get(5)?;
+            let stored_known: Option<f64> = row.get(9)?;
+            let mut basis = CostBasis::from_storage(
+                row.get::<_, String>(7)?.as_str(),
+                row.get::<_, String>(8)?.as_str(),
+                stored_known,
+            );
+            let mut source: String = row.get(8)?;
+            let mut known_cost = stored_known;
+            if basis == CostBasis::Unavailable && stored_known.is_none() {
+                let provider: String = row.get(1)?;
+                let model: String = row.get(4).or_else(|_| row.get::<_, String>(3))?;
+                if let Some(est) = estimate_api_equivalent_cost(
+                    &provider,
+                    &model,
+                    row.get(10)?,
+                    row.get(11)?,
+                    row.get(12)?,
+                    row.get(13)?,
+                ) {
+                    basis = CostBasis::Estimated;
+                    source = "api_equivalent".to_string();
+                    known_cost = Some(est.total);
+                }
+            }
+            Ok(DailyRowObs {
+                day,
+                basis,
+                source,
+                known_cost,
+            })
         })
-    })
-    .ok()
-    .map(|rows| rows.filter_map(|row| row.ok()).collect())
-    .unwrap_or_default()
+        .ok()
+        .map(|rows| rows.filter_map(|row| row.ok()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let mut by_day: std::collections::BTreeMap<String, Vec<DailyRowObs>> =
+        std::collections::BTreeMap::new();
+    for obs in observations {
+        by_day.entry(obs.day.clone()).or_default().push(obs);
+    }
+
+    by_day
+        .into_iter()
+        .map(|(day, rows)| {
+            let cost: f64 = rows
+                .iter()
+                .filter_map(|r| r.known_cost)
+                .filter(|c| c.is_finite() && *c >= 0.0)
+                .sum();
+            let coverage = summarize_cost_provenance(
+                rows.iter()
+                    .map(|r| (r.basis, r.source.as_str(), r.known_cost)),
+            );
+            DailyCostRow {
+                date: day,
+                cost,
+                sessions: rows.len() as i64,
+                priced_sessions: coverage.priced_sessions as i64,
+                cost_basis: coverage.cost_basis,
+                cost_sources: coverage.cost_sources,
+            }
+        })
+        .collect()
 }
 
 pub fn export_all_data() -> serde_json::Value {
@@ -1482,26 +2177,34 @@ pub fn export_all_data() -> serde_json::Value {
     })
 }
 
-pub fn clear_history() -> i64 {
-    let Ok(conn) = db().lock() else { return 0 };
-    let provider = active_provider_slug().to_string();
-    let deleted: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sessions WHERE provider = ?1",
-            params![provider.clone()],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    let _ = conn.execute(
-        "DELETE FROM sessions_fts
-         WHERE rowid IN (SELECT rowid FROM sessions WHERE provider = ?1)",
-        params![provider.clone()],
-    );
-    let _ = conn.execute(
-        "DELETE FROM sessions WHERE provider = ?1",
+fn clear_history_from_connection(conn: &mut Connection, provider: &str) -> Result<i64> {
+    let transaction = conn.transaction()?;
+    let deleted: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM sessions WHERE (?1 = 'all' OR provider = ?1)",
         params![provider],
-    );
-    deleted
+        |row| row.get(0),
+    )?;
+    transaction.execute(
+        "DELETE FROM sessions_fts
+         WHERE rowid IN (
+             SELECT rowid FROM sessions WHERE (?1 = 'all' OR provider = ?1)
+         )",
+        params![provider],
+    )?;
+    transaction.execute(
+        "DELETE FROM sessions WHERE (?1 = 'all' OR provider = ?1)",
+        params![provider],
+    )?;
+    transaction.commit()?;
+    Ok(deleted)
+}
+
+pub fn clear_history_scoped(provider: Option<&str>) -> Result<i64> {
+    let provider = analytics_provider_scope(provider);
+    let mut conn = db()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("analytics database lock is poisoned"))?;
+    clear_history_from_connection(&mut conn, &provider)
 }
 
 pub fn get_db_size_bytes() -> u64 {
@@ -1511,7 +2214,29 @@ pub fn get_db_size_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn api_equivalent_estimate_reconstructs_claude_and_codex_from_real_rates() {
+        // Claude Opus 5 ($5 in / $25 out per 1M): 1M pure input + 1M output.
+        let claude =
+            estimate_api_equivalent_cost("claude", "claude-opus-5", 1_000_000, 1_000_000, 0, 0)
+                .expect("claude opus 5 has published API rates");
+        assert!((claude.total - 30.0).abs() < 0.01, "got {}", claude.total);
+
+        // Codex GPT-5.6 Sol ($5 in / $30 out per 1M): 1M pure input + 1M output.
+        let codex =
+            estimate_api_equivalent_cost("codex", "gpt-5.6-sol", 1_000_000, 1_000_000, 0, 0)
+                .expect("gpt-5.6-sol has catalog API pricing");
+        assert!((codex.total - 35.0).abs() < 0.01, "got {}", codex.total);
+    }
+
+    #[test]
+    fn api_equivalent_estimate_never_invents_without_tokens_or_model() {
+        assert!(estimate_api_equivalent_cost("codex", "gpt-5.6-sol", 0, 0, 0, 0).is_none());
+        assert!(estimate_api_equivalent_cost("claude", "", 1_000_000, 1_000_000, 0, 0).is_none());
+    }
 
     fn temporary_database_path(test_name: &str) -> PathBuf {
         let nonce = SystemTime::now()
@@ -1624,6 +2349,198 @@ mod tests {
         conn
     }
 
+    #[test]
+    fn provider_history_inventory_counts_local_sessions_independently_from_cost() {
+        let conn = test_conn();
+        let timestamp = Utc::now().to_rfc3339();
+        for (id, provider) in [
+            ("codex:inventory", "codex"),
+            ("claude:inventory-1", "claude"),
+            ("claude:inventory-2", "claude"),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, created_at, updated_at,
+                    cost_status, cost_source, known_cost, total_tokens
+                 ) VALUES (?1, ?2, 'inventory-repo', 'inventory-model', ?3, ?3, ?3,
+                    'unavailable', 'unknown', NULL, 100)",
+                params![id, provider, timestamp],
+            )
+            .expect("insert inventory session");
+        }
+
+        let inventory = provider_history_inventory(&conn, None);
+        assert_eq!(inventory.get("codex"), Some(&1));
+        assert_eq!(inventory.get("claude"), Some(&2));
+        assert_eq!(inventory.get("openai"), None);
+    }
+
+    #[test]
+    fn provider_scope_never_leaks_cross_provider_sessions_or_cost() {
+        let conn = test_conn();
+        let started_at = Utc::now().to_rfc3339();
+        for (id, provider, cost) in [
+            ("codex:scope", "codex", 2.0),
+            ("claude:scope", "claude", 7.0),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, created_at, updated_at,
+                    total_cost, cost_status, cost_source, known_cost, total_tokens
+                 ) VALUES (?1, ?2, 'scope-repo', 'scope-model', ?3, ?3, ?3,
+                    ?4, 'exact', 'session-calculated', ?4, 100)",
+                params![id, provider, started_at, cost],
+            )
+            .expect("insert scoped fixture");
+        }
+
+        let codex = query_sessions(
+            &conn,
+            "codex",
+            Some(7),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let claude = query_sessions(
+            &conn,
+            "claude",
+            Some(7),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let all = query_sessions(
+            &conn,
+            "all",
+            Some(7),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            codex
+                .iter()
+                .map(|session| session.provider.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex"]
+        );
+        assert_eq!(
+            claude
+                .iter()
+                .map(|session| session.provider.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude"]
+        );
+        assert_eq!(all.len(), 2);
+
+        let codex_summary = analytics_summary_from_connection(&conn, "codex");
+        let claude_summary = analytics_summary_from_connection(&conn, "claude");
+        let all_summary = analytics_summary_from_connection(&conn, "all");
+        assert_eq!(codex_summary.total_sessions, 1);
+        assert_eq!(codex_summary.total_cost, 2.0);
+        assert_eq!(claude_summary.total_sessions, 1);
+        assert_eq!(claude_summary.total_cost, 7.0);
+        assert_eq!(all_summary.total_sessions, 2);
+        assert_eq!(all_summary.total_cost, 9.0);
+
+        let cutoff_date = (Utc::now() - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let cutoff_time = (Utc::now() - chrono::Duration::days(1)).to_rfc3339();
+        let codex_daily = query_daily_stats(&conn, "codex", &cutoff_date);
+        let claude_daily = query_daily_stats(&conn, "claude", &cutoff_date);
+        let all_daily = query_daily_stats(&conn, "all", &cutoff_date);
+        assert_eq!(
+            codex_daily.iter().map(|row| row.session_count).sum::<i64>(),
+            1
+        );
+        assert_eq!(
+            claude_daily
+                .iter()
+                .map(|row| row.session_count)
+                .sum::<i64>(),
+            1
+        );
+        assert_eq!(
+            all_daily.iter().map(|row| row.session_count).sum::<i64>(),
+            2
+        );
+        assert_eq!(all_daily.iter().map(|row| row.total_cost).sum::<f64>(), 9.0);
+
+        let codex_projects = query_project_stats(&conn, "codex", &cutoff_time);
+        let claude_projects = query_project_stats(&conn, "claude", &cutoff_time);
+        let all_projects = query_project_stats(&conn, "all", &cutoff_time);
+        assert_eq!(codex_projects[0].session_count, 1);
+        assert_eq!(claude_projects[0].session_count, 1);
+        assert_eq!(all_projects[0].session_count, 2);
+        assert_eq!(all_projects[0].total_cost, 9.0);
+
+        let now = Utc::now();
+        let codex_forecast = cost_forecast_from_connection(&conn, "codex", now);
+        let claude_forecast = cost_forecast_from_connection(&conn, "claude", now);
+        let all_forecast = cost_forecast_from_connection(&conn, "all", now);
+        assert_eq!(codex_forecast.spent_this_month, 2.0);
+        assert_eq!(claude_forecast.spent_this_month, 7.0);
+        assert_eq!(all_forecast.spent_this_month, 9.0);
+    }
+
+    #[test]
+    fn clear_history_is_scoped_and_keeps_fts_in_sync() {
+        let mut conn = test_conn();
+        let timestamp = Utc::now().to_rfc3339();
+        for (id, provider) in [("codex:clear", "codex"), ("claude:keep", "claude")] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, created_at, updated_at,
+                    cost_status, cost_source, total_tokens
+                 ) VALUES (?1, ?2, 'clear-repo', 'clear-model', ?3, ?3, ?3,
+                    'unavailable', 'unknown', 100)",
+                params![id, provider, timestamp],
+            )
+            .expect("insert scoped clear fixture");
+        }
+
+        assert_eq!(
+            clear_history_from_connection(&mut conn, "codex").expect("clear codex history"),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM sessions WHERE provider = 'claude'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("count retained history"),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM sessions_fts", [], |row| row
+                .get::<_, i64>(0))
+                .expect("count retained search rows"),
+            1
+        );
+    }
+
     fn sample_session_info(
         context_window: &str,
         model_id: &str,
@@ -1640,6 +2557,8 @@ mod tests {
             model_id: model_id.into(),
             context_window: context_window.into(),
             cost: 0.0,
+            cost_available: true,
+            cost_basis: "exact".into(),
             tokens,
             input_tokens,
             output_tokens: 0,
@@ -1789,6 +2708,261 @@ mod tests {
         assert_eq!(rows[0].id, "session-a");
     }
 
+    #[test]
+    fn seven_day_history_includes_six_days_ago_and_excludes_eight_days_ago() {
+        let conn = test_conn();
+        let provider = FIXTURE_PROVIDER;
+        let now = Utc::now();
+        for (id, timestamp) in [
+            ("inside", now - chrono::Duration::days(6)),
+            ("outside", now - chrono::Duration::days(8)),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (id, provider, project, model, started_at, updated_at)
+                 VALUES (?1, ?2, 'repo', 'model', ?3, ?3)",
+                params![id, provider, timestamp.to_rfc3339()],
+            )
+            .expect("insert dated session");
+        }
+
+        let rows = query_sessions(
+            &conn,
+            provider,
+            Some(7),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec!["inside"]
+        );
+    }
+
+    #[test]
+    fn historical_session_round_trips_stored_cost_provenance() {
+        let conn = test_conn();
+        let now = Utc::now().to_rfc3339();
+        for (id, status, source, known_cost) in [
+            ("exact", "exact", "session-calculated", Some(1.25)),
+            ("partial", "partial", "session-calculated", Some(0.75)),
+            ("billed", "exact", "provider_billed", Some(2.5)),
+            ("missing", "unavailable", "unknown", None),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, updated_at,
+                    total_cost, cost_status, cost_source, known_cost
+                 ) VALUES (?1, ?2, 'repo', 'model', ?3, ?3, 99, ?4, ?5, ?6)",
+                params![id, FIXTURE_PROVIDER, now, status, source, known_cost],
+            )
+            .expect("insert provenance row");
+        }
+
+        let rows = query_sessions(
+            &conn,
+            FIXTURE_PROVIDER,
+            Some(7),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let by_id = rows
+            .into_iter()
+            .map(|row| (row.id.clone(), row))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(by_id["exact"].cost_basis, CostBasis::Exact);
+        assert_eq!(by_id["partial"].cost_basis, CostBasis::Partial);
+        assert_eq!(by_id["billed"].cost_basis, CostBasis::Exact);
+        assert_eq!(by_id["missing"].cost_basis, CostBasis::Unavailable);
+        assert_eq!(by_id["exact"].known_cost, Some(1.25));
+        assert_eq!(by_id["missing"].known_cost, None);
+        assert_eq!(by_id["billed"].cost_source, "provider_billed");
+    }
+
+    #[test]
+    fn collected_codex_jsonl_persists_into_current_history_and_forecast() {
+        let root = tempfile::TempDir::new().expect("session root");
+        let session_file = root.path().join("current.jsonl");
+        let now = Utc::now();
+        let lines = [
+            serde_json::json!({
+                "timestamp": now.to_rfc3339(),
+                "type": "session_meta",
+                "payload": {
+                    "id": "current-codex",
+                    "cwd": root.path(),
+                    "originator": "codex_cli_rs"
+                }
+            }),
+            serde_json::json!({
+                "timestamp": now.to_rfc3339(),
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": 1200,
+                            "cached_input_tokens": 400,
+                            "output_tokens": 200,
+                            "total_tokens": 1400
+                        }
+                    }
+                }
+            }),
+        ]
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(&session_file, lines).expect("write current JSONL");
+
+        let mut git = cc_discord_presence::codex::session::GitBranchCache::new(
+            std::time::Duration::from_secs(30),
+        );
+        let mut parse = cc_discord_presence::codex::session::SessionParseCache::default();
+        let config = cc_discord_presence::codex::config::PresenceConfig::default();
+        let snapshots = cc_discord_presence::codex::session::collect_active_sessions_multi(
+            &[root.path().to_path_buf()],
+            std::time::Duration::from_secs(120),
+            std::time::Duration::from_secs(120),
+            &mut git,
+            &mut parse,
+            &config.pricing,
+        )
+        .expect("collect current Codex session");
+        let infos = crate::commands::build_codex_session_infos(
+            &snapshots,
+            &config,
+            cc_discord_presence::codex::config::PresenceSurface::Cli,
+        );
+        let conn = test_conn();
+        for info in &infos {
+            upsert_session_into(&conn, info, &now.to_rfc3339()).expect("persist snapshot");
+        }
+
+        let history = query_sessions(
+            &conn,
+            "codex",
+            Some(7),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let forecast = cost_forecast_from_connection(&conn, "codex", now);
+
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, "codex:current-codex");
+        assert_eq!(history[0].total_tokens, 1400);
+        assert_eq!(forecast.sessions, 1);
+    }
+
+    #[test]
+    fn cost_forecast_reports_partial_coverage_without_promoting_raw_totals() {
+        let conn = test_conn();
+        let now = Utc
+            .with_ymd_and_hms(2026, 8, 15, 12, 0, 0)
+            .single()
+            .expect("fixed date");
+        for (id, status, source, known_cost, raw_cost) in [
+            ("exact", "exact", "session-calculated", Some(2.5), 2.5),
+            ("missing", "unavailable", "unknown", None, 99.0),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, updated_at,
+                    total_cost, cost_status, cost_source, known_cost
+                 ) VALUES (?1, 'codex', 'repo', 'model', ?2, ?2, ?3, ?4, ?5, ?6)",
+                params![id, now.to_rfc3339(), raw_cost, status, source, known_cost],
+            )
+            .expect("insert forecast row");
+        }
+
+        let forecast = cost_forecast_from_connection(&conn, "codex", now);
+
+        assert_eq!(forecast.cost_basis, CostBasis::Partial);
+        assert_eq!(forecast.sessions, 2);
+        assert_eq!(forecast.priced_sessions, 1);
+        assert_eq!(forecast.spent_this_month, 2.5);
+        assert_eq!(
+            forecast.cost_sources,
+            vec!["session-calculated".to_string()]
+        );
+    }
+
+    #[test]
+    fn aggregate_views_exclude_unavailable_raw_cost_and_report_partial_coverage() {
+        let conn = test_conn();
+        let now = Utc
+            .with_ymd_and_hms(2026, 8, 3, 12, 0, 0)
+            .single()
+            .expect("fixed date");
+        for (id, status, source, known_cost, raw_cost) in [
+            ("priced", "exact", "session-calculated", Some(2.5), 2.5),
+            ("unpriced", "unavailable", "unknown", None, 99.0),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, updated_at,
+                    total_cost, cost_status, cost_source, known_cost, duration_secs
+                 ) VALUES (?1, 'codex', 'repo', 'gpt-5.6', ?2, ?2, ?3, ?4, ?5, ?6, 60)",
+                params![id, now.to_rfc3339(), raw_cost, status, source, known_cost],
+            )
+            .expect("insert aggregate row");
+        }
+
+        let daily = query_daily_stats(&conn, "codex", "2026-08-01");
+        let projects = query_project_stats(&conn, "codex", "2026-08-01T00:00:00+00:00");
+        let hourly = query_hourly_activity(&conn, "codex", "2026-08-01T00:00:00+00:00");
+        let timeline = query_daily_costs(&conn, "codex", "2026-08-01", None);
+        let summary = analytics_summary_from_connection(&conn, "codex");
+        let models = query_model_distribution(&conn, "codex", "2026-08-01T00:00:00+00:00");
+
+        assert_eq!(daily[0].total_cost, 2.5);
+        assert_eq!(daily[0].priced_sessions, 1);
+        assert_eq!(daily[0].cost_basis, CostBasis::Partial);
+        assert_eq!(projects[0].total_cost, 2.5);
+        assert_eq!(projects[0].avg_session_cost, 2.5);
+        assert_eq!(projects[0].priced_sessions, 1);
+        assert_eq!(projects[0].cost_basis, CostBasis::Partial);
+        assert_eq!(hourly[0].total_cost, 2.5);
+        assert_eq!(hourly[0].priced_sessions, 1);
+        assert_eq!(hourly[0].cost_basis, CostBasis::Partial);
+        assert_eq!(timeline[0].cost, 2.5);
+        assert_eq!(timeline[0].priced_sessions, 1);
+        assert_eq!(timeline[0].cost_basis, CostBasis::Partial);
+        assert_eq!(summary.total_cost, 2.5);
+        assert_eq!(summary.avg_cost_per_session, 2.5);
+        assert_eq!(summary.priced_sessions, 1);
+        assert_eq!(summary.cost_basis, CostBasis::Partial);
+        assert_eq!(summary.top_project, "repo");
+        assert_eq!(models[0].model, "gpt-5.6");
+        assert_eq!(models[0].session_count, 2);
+        assert_eq!(models[0].priced_sessions, 1);
+        assert_eq!(models[0].cost_basis, CostBasis::Partial);
+        assert_eq!(models[0].total_cost, 2.5);
+    }
+
     /// Provider slug used by the daily-aggregation fixtures. Pinned rather than
     /// read from the global active provider, which another test can switch
     /// between the insert and the query.
@@ -1800,9 +2974,19 @@ mod tests {
         let provider = FIXTURE_PROVIDER.to_string();
         let started = format!("{day}T12:00:00+00:00");
         conn.execute(
-            "INSERT INTO sessions (id, provider, project, model, started_at, updated_at, total_cost)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, provider, project, "Claude Opus 5", started, started, cost],
+            "INSERT INTO sessions (
+                id, provider, project, model, started_at, updated_at, total_cost,
+                cost_status, cost_source, known_cost
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'exact', 'fixture', ?7)",
+            params![
+                id,
+                provider,
+                project,
+                "Claude Opus 5",
+                started,
+                started,
+                cost
+            ],
         )
         .expect("insert dated session");
     }
@@ -2374,7 +3558,34 @@ mod tests {
     }
 
     #[test]
-    fn session_upsert_persists_known_live_provenance_without_claiming_codex_exactness() {
+    fn session_upsert_supports_legacy_non_nullable_raw_window_tokens() {
+        let conn = test_conn();
+        conn.execute_batch(
+            "CREATE TRIGGER sessions_raw_window_tokens_not_null
+             BEFORE INSERT ON sessions
+             WHEN NEW.raw_window_tokens IS NULL
+             BEGIN
+                 SELECT RAISE(ABORT, 'raw_window_tokens may not be NULL');
+             END;",
+        )
+        .expect("enforce the legacy v4/v5 column invariant");
+
+        let session = sample_session_info("258.4K", "gpt-5.6-sol", 1_000, 1_500);
+        upsert_session_into(&conn, &session, "2026-08-03T09:30:36+00:00")
+            .expect("persist against the installed schema invariant");
+
+        let raw_window_tokens: i64 = conn
+            .query_row(
+                "SELECT raw_window_tokens FROM sessions WHERE id = 'claude:session'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read persisted raw window tokens");
+        assert_eq!(raw_window_tokens, 0);
+    }
+
+    #[test]
+    fn session_upsert_persists_known_live_provenance_as_exact_only_when_flagged() {
         let conn = test_conn();
         let mut session = sample_session_info("353.4K", "gpt-5.6-sol", 1_000, 1_500);
         session.provider = "codex".into();
@@ -2437,19 +3648,21 @@ mod tests {
                 "fast".into(),
                 "session".into(),
                 1,
-                "partial".into(),
-                "session-subtotal".into(),
+                "exact".into(),
+                "session-calculated".into(),
                 Some(13.0),
                 None,
                 "session".into(),
                 "unknown".into(),
-                None,
+                Some(0),
                 None,
             )
         );
 
         session.session_id = "unpriced".into();
         session.cost = 0.0;
+        session.cost_available = false;
+        session.cost_basis = "unavailable".into();
         upsert_session_into(&conn, &session, "2026-07-10T12:02:00+00:00")
             .expect("insert unpriced live session");
         let unpriced: (String, Option<f64>) = conn
@@ -2460,5 +3673,49 @@ mod tests {
             )
             .expect("read unpriced session");
         assert_eq!(unpriced, ("unavailable".into(), None));
+
+        session.session_id = "partial".into();
+        session.cost = 4.0;
+        session.cost_available = true;
+        session.cost_basis = "partial".into();
+        upsert_session_into(&conn, &session, "2026-07-10T12:03:00+00:00")
+            .expect("insert partial live session");
+
+        session.session_id = "billed".into();
+        session.cost = 7.0;
+        session.cost_basis = "provider_billed".into();
+        upsert_session_into(&conn, &session, "2026-07-10T12:04:00+00:00")
+            .expect("insert provider-billed live session");
+
+        let read_provenance = |id: &str| {
+            conn.query_row(
+                "SELECT cost_status, cost_source, known_cost FROM sessions WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<f64>>(2)?,
+                    ))
+                },
+            )
+            .expect("read stored cost provenance")
+        };
+        assert_eq!(
+            read_provenance("codex:partial"),
+            (
+                "partial".to_string(),
+                "session-calculated".to_string(),
+                Some(4.0)
+            )
+        );
+        assert_eq!(
+            read_provenance("codex:billed"),
+            (
+                "exact".to_string(),
+                "provider_billed".to_string(),
+                Some(7.0)
+            )
+        );
     }
 }

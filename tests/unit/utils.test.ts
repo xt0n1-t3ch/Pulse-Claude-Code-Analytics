@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   fmtTokens,
   fmtCost,
+  fmtExactCost,
   fmtDuration,
   fmtTps,
   fmtPct,
@@ -13,6 +14,11 @@ import {
 } from "@/lib/utils";
 
 describe("fmtTokens", () => {
+  it("uses billions instead of rendering four-digit millions", () => {
+    expect(fmtTokens(11_330_800_000)).toBe("11.3B");
+    expect(fmtTokens(1_245_400_000)).toBe("1.2B");
+  });
+
   it("formats millions, thousands, and units", () => {
     expect(fmtTokens(2_500_000)).toBe("2.5M");
     expect(fmtTokens(1_500)).toBe("1.5K");
@@ -24,6 +30,18 @@ describe("fmtCost", () => {
   it("renders a two-decimal dollar amount", () => {
     expect(fmtCost(3)).toBe("$3.00");
     expect(fmtCost(12.345)).toBe("$12.35");
+  });
+});
+
+describe("fmtExactCost", () => {
+  it("keeps a measured zero distinct from an unavailable estimate", () => {
+    expect(fmtExactCost(0, true)).toBe("$0.00");
+    expect(fmtExactCost(0, false)).toBe("—");
+  });
+
+  it("never emits lower-bound or approximate cost notation", () => {
+    expect(fmtExactCost(0.454, true)).toBe("$0.45");
+    expect(fmtExactCost(0.454, false)).not.toMatch(/[>=~]/);
   });
 });
 

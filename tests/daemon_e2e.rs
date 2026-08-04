@@ -349,7 +349,7 @@ fn resolved_pro_plan() -> ResolvedPlan {
         tier: DetectedPlanTier::Pro20x,
         source: DetectedPlanSource::Telemetry,
         observed_at: None,
-        raw_plan_type: Some("pro".to_string()),
+        raw_plan_type: Some("pro_20x".to_string()),
     }
 }
 

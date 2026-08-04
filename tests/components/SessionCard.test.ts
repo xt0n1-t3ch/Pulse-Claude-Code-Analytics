@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/svelte";
+import { fireEvent, render } from "@testing-library/svelte";
 import SessionCard from "@/components/SessionCard.svelte";
 import type { SessionInfo } from "@/lib/api";
 
@@ -13,6 +13,8 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
     provider: "claude",
     context_window: "200K",
     cost: 1.23,
+    cost_available: true,
+    cost_basis: "exact",
     tokens: 1000,
     input_tokens: 500,
     output_tokens: 300,
@@ -201,5 +203,17 @@ describe("SessionCard", () => {
       },
     });
     expect(queryByText("Intro Pricing")).toBeNull();
+  });
+
+  it("fails missing pricing proof closed in both summary and expanded details", async () => {
+    const { container, getByText } = render(SessionCard, {
+      props: {
+        session: makeSession({ cost_available: undefined, cost_basis: undefined }),
+      },
+    });
+
+    expect(container.textContent).not.toContain("$1.23");
+    await fireEvent.click(container.querySelector(".session-card")!);
+    expect(getByText("Exact cost is unavailable for this session.")).toBeTruthy();
   });
 });

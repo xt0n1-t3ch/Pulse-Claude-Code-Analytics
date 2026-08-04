@@ -644,19 +644,25 @@ fn render_limits_to_state(
     api_usage: Option<&UsageData>,
 ) {
     if let Some(usage) = api_usage {
-        let five_hr_remaining = (100.0 - usage.five_hour.utilization).max(0.0);
-        parts.push(format!("5h {:.0}%", five_hr_remaining));
-        let seven_day_remaining = (100.0 - usage.seven_day.utilization).max(0.0);
-        parts.push(format!("7d {:.0}%", seven_day_remaining));
+        let five_hr_used = usage.five_hour.utilization.clamp(0.0, 100.0);
+        parts.push(format!("5h {:.0}% used", five_hr_used));
+        let seven_day_used = usage.seven_day.utilization.clamp(0.0, 100.0);
+        parts.push(format!("7d {:.0}% used", seven_day_used));
         return;
     }
 
     if let Some(limits) = effective_limits {
         if let Some(primary) = &limits.primary {
-            parts.push(format!("5h {:.0}%", primary.remaining_percent));
+            parts.push(format!(
+                "5h {:.0}% used",
+                (100.0 - primary.remaining_percent).clamp(0.0, 100.0)
+            ));
         }
         if let Some(secondary) = &limits.secondary {
-            parts.push(format!("7d {:.0}%", secondary.remaining_percent));
+            parts.push(format!(
+                "7d {:.0}% used",
+                (100.0 - secondary.remaining_percent).clamp(0.0, 100.0)
+            ));
         }
     }
 }
@@ -1098,6 +1104,7 @@ mod tests {
             five_hour: test_usage_window(five_hr_util),
             seven_day: test_usage_window(seven_day_util),
             sonnet_free: None,
+            limits: Vec::new(),
             extra_usage: extra,
         }
     }
@@ -1108,8 +1115,8 @@ mod tests {
         let usage = test_usage_data(40.0, 20.0, None);
         render_limits_to_state(&mut parts, None, Some(&usage));
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0], "5h 60%");
-        assert_eq!(parts[1], "7d 80%");
+        assert_eq!(parts[0], "5h 40% used");
+        assert_eq!(parts[1], "7d 20% used");
     }
 
     #[test]

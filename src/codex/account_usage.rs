@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
@@ -7,14 +6,14 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, TimeZone, Utc};
+use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
 use codex_presence_core::{
-    CreditBalance, EffectiveLimitSelection, RateLimitEnvelope, RateLimits, UsageSnapshot,
-    UsageWindow, classify_limit_scope, select_session_envelope_global_first,
-    usage_snapshot_from_envelopes,
+    ACCOUNT_RATE_LIMITS_METHOD, AccountRateLimitsRead, EffectiveLimitSelection,
+    IndividualSpendLimit, RateLimitEnvelope, RateLimitResetCreditsSummary, UsageSignal,
+    UsageSnapshot, UsageSource, UsageStream, parse_account_rate_limits_response,
+    select_session_envelope_global_first, snapshot_from_stream_with_provenance,
 };
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::codex::util::silent_command;
@@ -29,12 +28,21 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 #[derive(Clone, Debug)]
 pub struct AccountUsageReading {
     pub envelopes: Vec<RateLimitEnvelope>,
+    pub individual_limits: Vec<IndividualSpendLimit>,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
     pub observed_at: DateTime<Utc>,
 }
 
 impl AccountUsageReading {
     pub fn usage_snapshot(&self) -> UsageSnapshot {
-        usage_snapshot_from_envelopes("codex", "Codex account API", &self.envelopes)
+        let stream = UsageStream::new(
+            UsageSource::new(
+                "codex-subscription:default",
+                [UsageSignal::CodexSubscriptionUsage],
+            ),
+            self.envelopes.clone(),
+        );
+        snapshot_from_stream_with_provenance(&stream, "Codex account API")
     }
 
     pub fn effective_limits(&self) -> Option<EffectiveLimitSelection> {
@@ -158,7 +166,7 @@ fn query_account_usage(timeout: Duration) -> Result<AccountUsageReading> {
         )?;
         write_json_line(
             &mut stdin,
-            &serde_json::json!({ "id": 2, "method": "account/rateLimits/read", "params": null }),
+            &serde_json::json!({ "id": 2, "method": ACCOUNT_RATE_LIMITS_METHOD, "params": null }),
         )?;
         let response = read_response(&rx, 2, timeout)?;
         parse_rate_limits_response(&response.to_string(), Utc::now())
@@ -202,6 +210,11 @@ fn windows_codex_cli_path() -> Option<PathBuf> {
 
     let script = r#"
 $paths = [System.Collections.Generic.List[string]]::new()
+$localRoot = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin'
+if (Test-Path -LiteralPath $localRoot) {
+  Get-ChildItem -LiteralPath $localRoot -Recurse -Filter 'codex.exe' -File -ErrorAction SilentlyContinue |
+    ForEach-Object { [void]$paths.Add($_.FullName) }
+}
 $package = Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($null -ne $package) {
   [void]$paths.Add((Join-Path $package.InstallLocation 'app\resources\codex.exe'))
@@ -228,12 +241,57 @@ $paths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Obje
 
 #[cfg(windows)]
 fn select_existing_codex_path(output: &str) -> Option<PathBuf> {
-    output
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    select_existing_codex_path_for_local_root(output, local_app_data.as_deref())
+}
+
+#[cfg(windows)]
+fn select_existing_codex_path_for_local_root(
+    output: &str,
+    local_app_data: Option<&Path>,
+) -> Option<PathBuf> {
+    let candidates = output
         .lines()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .find(|path| is_bundled_codex_cli(path))
+        .collect::<Vec<_>>();
+
+    // Pulse is unpackaged on Windows. Prefer the user-local CLI that Codex
+    // exposes to sibling processes before falling back to the package path,
+    // whose ACL can deny CreateProcess outside the AppX container.
+    candidates
+        .iter()
+        .find(|path| local_app_data.is_some_and(|root| is_user_local_codex_cli(path, root)))
+        .cloned()
+        .or_else(|| {
+            candidates
+                .into_iter()
+                .find(|path| is_bundled_codex_cli(path))
+        })
+}
+
+#[cfg(windows)]
+fn is_user_local_codex_cli(path: &Path, local_app_data: &Path) -> bool {
+    if !is_codex_executable(path) {
+        return false;
+    }
+    let expected_root = local_app_data.join("OpenAI").join("Codex").join("bin");
+    path.parent()
+        .is_some_and(|parent| path_starts_with_case_insensitive(parent, &expected_root))
+}
+
+#[cfg(windows)]
+fn path_starts_with_case_insensitive(path: &Path, root: &Path) -> bool {
+    let mut path_components = path.components();
+    root.components().all(|expected| {
+        path_components.next().is_some_and(|actual| {
+            actual
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&expected.as_os_str().to_string_lossy())
+        })
+    })
 }
 
 #[cfg(windows)]
@@ -287,174 +345,29 @@ fn stop_owned_child(child: &mut Child) {
     let _ = child.wait();
 }
 
-#[derive(Deserialize)]
-struct RpcResponse {
-    result: Option<AccountRateLimitsResult>,
-    error: Option<Value>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountRateLimitsResult {
-    rate_limits: WireRateLimitSnapshot,
-    rate_limits_by_limit_id: Option<BTreeMap<String, WireRateLimitSnapshot>>,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WireRateLimitSnapshot {
-    limit_id: Option<String>,
-    limit_name: Option<String>,
-    plan_type: Option<String>,
-    primary: Option<WireUsageWindow>,
-    secondary: Option<WireUsageWindow>,
-    credits: Option<WireCredits>,
-    individual_limit: Option<WireSpendControlLimit>,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WireUsageWindow {
-    used_percent: f64,
-    window_duration_mins: Option<u64>,
-    resets_at: Option<i64>,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WireCredits {
-    balance: Option<String>,
-    has_credits: bool,
-    unlimited: bool,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WireSpendControlLimit {
-    limit: String,
-    used: String,
-    remaining_percent: f64,
-    resets_at: i64,
-}
-
 pub fn parse_rate_limits_response(
     response: &str,
     observed_at: DateTime<Utc>,
 ) -> Result<AccountUsageReading> {
-    let rpc: RpcResponse =
-        serde_json::from_str(response).context("failed to decode Codex account quota response")?;
-    if let Some(error) = rpc.error {
-        return Err(anyhow!("Codex account quota request failed: {error}"));
-    }
-    let result = rpc
-        .result
-        .context("Codex account quota response has no result")?;
-    let snapshots: Vec<WireRateLimitSnapshot> = match result.rate_limits_by_limit_id {
-        Some(by_id) if !by_id.is_empty() => by_id
-            .into_iter()
-            .map(|(limit_id, mut snapshot)| {
-                snapshot.limit_id.get_or_insert(limit_id);
-                snapshot
-            })
-            .collect(),
-        _ => vec![result.rate_limits],
-    };
-
-    let envelopes: Vec<RateLimitEnvelope> = snapshots
-        .into_iter()
-        .flat_map(|snapshot| wire_envelopes(snapshot, observed_at))
-        .collect();
-    if !envelopes.iter().any(|item| {
-        item.limits.primary.is_some() || item.limits.secondary.is_some() || item.credits.is_some()
-    }) {
-        bail!("Codex account quota response contains no quota windows or credits");
-    }
-
+    let AccountRateLimitsRead {
+        envelopes,
+        individual_limits,
+        rate_limit_reset_credits,
+        observed_at,
+    } = parse_account_rate_limits_response(response, observed_at)
+        .map_err(|error| anyhow::anyhow!(error))?;
     Ok(AccountUsageReading {
         envelopes,
+        individual_limits,
+        rate_limit_reset_credits,
         observed_at,
-    })
-}
-
-fn wire_envelopes(
-    snapshot: WireRateLimitSnapshot,
-    observed_at: DateTime<Utc>,
-) -> Vec<RateLimitEnvelope> {
-    let scope = classify_limit_scope(snapshot.limit_id.as_deref());
-    let base_limit_id = snapshot.limit_id.clone();
-    let primary = snapshot.primary.and_then(wire_window);
-    let secondary = snapshot.secondary.and_then(wire_window);
-    let credits = snapshot.credits.map(|item| CreditBalance {
-        balance: item.balance,
-        has_credits: item.has_credits,
-        unlimited: item.unlimited,
-    });
-    let mut envelopes = Vec::new();
-    if primary.is_some() || secondary.is_some() || credits.is_some() {
-        envelopes.push(RateLimitEnvelope {
-            scope,
-            limit_id: base_limit_id.clone(),
-            limit_name: snapshot.limit_name.clone(),
-            plan_type: snapshot.plan_type.clone(),
-            observed_at: Some(observed_at),
-            limits: RateLimits { primary, secondary },
-            credits,
-        });
-    }
-
-    if let Some(individual) = snapshot.individual_limit
-        && individual.remaining_percent.is_finite()
-    {
-        let remaining = individual.remaining_percent.clamp(0.0, 100.0);
-        envelopes.push(RateLimitEnvelope {
-            scope,
-            limit_id: Some(format!(
-                "{}:individual",
-                base_limit_id.as_deref().unwrap_or("account")
-            )),
-            limit_name: Some(format!(
-                "Individual spend limit ({} of {})",
-                individual.used, individual.limit
-            )),
-            plan_type: snapshot.plan_type,
-            observed_at: Some(observed_at),
-            limits: RateLimits {
-                primary: Some(UsageWindow {
-                    used_percent: 100.0 - remaining,
-                    remaining_percent: remaining,
-                    window_minutes: 0,
-                    resets_at: Utc.timestamp_opt(individual.resets_at, 0).single(),
-                }),
-                secondary: None,
-            },
-            credits: None,
-        });
-    }
-
-    envelopes
-}
-
-fn wire_window(window: WireUsageWindow) -> Option<UsageWindow> {
-    if !window.used_percent.is_finite() {
-        return None;
-    }
-    // The app-server schema allows an unknown duration while still reporting
-    // an authoritative percentage. Zero is the core model's unknown sentinel.
-    let window_minutes = window.window_duration_mins.unwrap_or(0);
-    let used_percent = window.used_percent.clamp(0.0, 100.0);
-    Some(UsageWindow {
-        used_percent,
-        remaining_percent: (100.0 - used_percent).clamp(0.0, 100.0),
-        window_minutes,
-        resets_at: window
-            .resets_at
-            .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single()),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn freshness_filter_drops_yesterdays_jsonl_quota() {
@@ -484,6 +397,23 @@ mod tests {
         assert!(debug.contains("stdio"));
     }
 
+    #[test]
+    fn windows_provider_probes_use_the_hidden_launcher() {
+        let source = include_str!("account_usage.rs");
+        assert!(
+            source.contains("silent_command(\"powershell\")"),
+            "the Windows subscription probe must inherit CREATE_NO_WINDOW"
+        );
+        assert!(
+            source.contains("silent_command(\"cmd.exe\")"),
+            "the Windows app-server fallback must inherit CREATE_NO_WINDOW"
+        );
+        assert!(
+            !source.contains("Command::new(\"powershell\")"),
+            "provider probes must not bypass the shared hidden launcher"
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn bundled_cli_resolution_rejects_the_desktop_gui_executable() {
@@ -497,5 +427,41 @@ mod tests {
         let output = format!("{}\n{}\n", gui.display(), expected.display());
 
         assert_eq!(select_existing_codex_path(&output), Some(expected));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_cli_resolution_prefers_the_user_local_cli_over_packaged_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let packaged = dir
+            .path()
+            .join("WindowsApps")
+            .join("OpenAI.Codex_26.727.6591.0_x64__fixture")
+            .join("app")
+            .join("resources")
+            .join("codex.exe");
+        let user_local = dir
+            .path()
+            .join("AppData")
+            .join("Local")
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("fixture")
+            .join("codex.exe");
+        std::fs::create_dir_all(packaged.parent().expect("packaged parent"))
+            .expect("packaged directory");
+        std::fs::create_dir_all(user_local.parent().expect("user-local parent"))
+            .expect("user-local directory");
+        std::fs::write(&packaged, b"packaged fixture").expect("packaged fixture");
+        std::fs::write(&user_local, b"user-local fixture").expect("user-local fixture");
+        let output = format!("{}\n{}\n", packaged.display(), user_local.display());
+        let local_app_data = dir.path().join("AppData").join("Local");
+
+        assert_eq!(
+            select_existing_codex_path_for_local_root(&output, Some(&local_app_data)),
+            Some(user_local),
+            "an unpackaged Pulse process must not select the inaccessible WindowsApps CLI"
+        );
     }
 }

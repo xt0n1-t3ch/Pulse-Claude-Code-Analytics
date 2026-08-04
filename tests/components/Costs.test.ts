@@ -11,6 +11,7 @@ function hist(id: string, project: string, parts: { input: number; output: numbe
   const total = parts.input + parts.output + parts.cacheW + parts.cacheR;
   return {
     id,
+    provider: "claude",
     session_name: null,
     project,
     model: "Claude Opus 4.8",
@@ -22,6 +23,9 @@ function hist(id: string, project: string, parts: { input: number; output: numbe
     ended_at: "2026-05-20T10:30:00Z",
     duration_secs: 1800,
     total_cost: total,
+    cost_basis: "exact",
+    cost_source: "anthropic_api_equivalent",
+    known_cost: total,
     input_tokens: 50_000,
     output_tokens: 20_000,
     cache_write_tokens: 10_000,
@@ -49,6 +53,10 @@ const forecast: CostForecast = {
   days_in_month: 31,
   projected_monthly: 93,
   daily_average: 3,
+  cost_basis: "exact",
+  cost_sources: ["anthropic_api_equivalent"],
+  sessions: 2,
+  priced_sessions: 2,
 };
 
 const budget: BudgetStatus = {
@@ -58,6 +66,10 @@ const budget: BudgetStatus = {
   pct_used: 30,
   projected_monthly: 93,
   over_budget: false,
+  cost_basis: "exact",
+  cost_sources: ["anthropic_api_equivalent"],
+  sessions: 2,
+  priced_sessions: 2,
 };
 
 const getSessionHistory = vi.fn(async () => histList);
@@ -76,8 +88,14 @@ const totals: CostTotals = {
   cache_write_cost: histList.reduce((s, h) => s + h.cache_write_cost, 0),
   cache_read_cost: histList.reduce((s, h) => s + h.cache_read_cost, 0),
   total_tokens: histList.reduce((s, h) => s + h.total_tokens, 0),
+  input_tokens: histList.reduce((s, h) => s + h.input_tokens, 0),
+  output_tokens: histList.reduce((s, h) => s + h.output_tokens, 0),
+  cache_write_tokens: histList.reduce((s, h) => s + h.cache_write_tokens, 0),
   cache_read_tokens: histList.reduce((s, h) => s + h.cache_read_tokens, 0),
   pure_input_tokens: 40_000,
+  cost_basis: "exact",
+  cost_sources: ["anthropic_api_equivalent"],
+  priced_sessions: histList.length,
   by_model: [{ label: "Claude Opus 4.8", cost: histList.reduce((s, h) => s + h.total_cost, 0), sessions: 2 }],
   by_project: [
     { label: "pulse", cost: 10, sessions: 1 },
@@ -110,22 +128,36 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 describe("Costs.svelte", () => {
   beforeEach(async () => {
-    getSessionHistory.mockClear();
-    getCostForecast.mockClear();
-    getCostTotals.mockClear();
-    getBudgetStatus.mockClear();
-    const { sessions } = await import("@/lib/stores");
+    getSessionHistory.mockReset();
+    getSessionHistory.mockResolvedValue(histList);
+    getCostForecast.mockReset();
+    getCostForecast.mockResolvedValue(forecast);
+    getCostTotals.mockReset();
+    getCostTotals.mockImplementation(async (_days?: number, project?: string) =>
+      project ? projectTotals : totals
+    );
+    getBudgetStatus.mockReset();
+    getBudgetStatus.mockResolvedValue(budget);
+    setBudget.mockReset();
+    setBudget.mockResolvedValue(undefined);
+    const { sessions, selectedAnalyticsProviderScope } = await import("@/lib/stores");
     sessions.set([]);
+    selectedAnalyticsProviderScope.set("all");
   });
 
-  it("leads with the budget cockpit and supporting inline figures", async () => {
+  it("leads with the value ledger and keeps the budget cockpit for known spend", async () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container } = render(Costs);
     await tick();
 
     await waitFor(() => expect(getSessionHistory).toHaveBeenCalled());
-    // The gauge is the hero, not a row of equal-weight tiles.
+    // Usage value is the hero; the spend gauge remains available below it.
+    await waitFor(() => expect(container.querySelector(".value-ledger")).not.toBeNull());
     await waitFor(() => expect(container.querySelector(".cockpit")).not.toBeNull());
+    const ledger = container.querySelector(".value-ledger") as HTMLElement;
+    const cockpit = container.querySelector(".cockpit") as HTMLElement;
+    expect(ledger.compareDocumentPosition(cockpit) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
 
     const labels = [...container.querySelectorAll(".is-label")].map((e) => e.textContent?.trim());
     expect(labels).toEqual([
@@ -174,7 +206,7 @@ describe("Costs.svelte", () => {
     const legendTotal = inputCost + outputCost + cacheWCost + cacheRCost;
     const rowsTotal = histList.reduce((s, h) => s + h.total_cost, 0);
     expect(legendTotal).toBeCloseTo(rowsTotal, 5);
-    expect(getByText("Session Details")).toBeTruthy();
+    expect(getByText("Session details")).toBeTruthy();
   });
 
   it("plots spend, projection and cap on the cockpit gauge", async () => {
@@ -231,6 +263,172 @@ describe("Costs.svelte", () => {
     await waitFor(() =>
       expect(getCostTotals.mock.calls.length).toBeGreaterThan(initialCalls),
     );
+  });
+
+  it("does not render the active database row twice beside its live snapshot", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const duplicate = { ...histList[0], is_active: true };
+    getSessionHistory.mockResolvedValueOnce([duplicate, histList[1]]);
+    sessions.set([{
+      session_id: "runtime-pulse",
+      project: "pulse",
+      model: "Claude Opus 4.8",
+      branch: null,
+      cost: 10,
+      tokens: 180_000,
+      input_tokens: 50_000,
+      output_tokens: 20_000,
+      cache_write_tokens: 10_000,
+      cache_read_tokens: 100_000,
+      input_cost: 3,
+      output_cost: 4,
+      cache_write_cost: 2,
+      cache_read_cost: 1,
+      is_idle: false,
+    } as any]);
+
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { container } = render(Costs);
+    await waitFor(() => expect(container.querySelectorAll(".dt-row").length).toBeGreaterThan(0));
+
+    const pulseRows = [...container.querySelectorAll(".dt-row")]
+      .filter((row) => row.textContent?.includes("pulse"));
+    expect(pulseRows).toHaveLength(1);
+  });
+
+  it("keeps ambiguous structurally matching active history rows visible", async () => {
+    const { sessions } = await import("@/lib/stores");
+    const first = { ...histList[0], id: "db-active-1", is_active: true };
+    const second = { ...histList[0], id: "db-active-2", is_active: true };
+    getSessionHistory.mockResolvedValueOnce([first, second]);
+    sessions.set([{
+      session_id: "runtime-pulse",
+      project: "pulse",
+      model: "Claude Opus 4.8",
+      branch: null,
+      cost: 10,
+      tokens: 180_000,
+      input_tokens: 50_000,
+      output_tokens: 20_000,
+      cache_write_tokens: 10_000,
+      cache_read_tokens: 100_000,
+      input_cost: 3,
+      output_cost: 4,
+      cache_write_cost: 2,
+      cache_read_cost: 1,
+      is_idle: false,
+    } as any]);
+
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { container } = render(Costs);
+    await waitFor(() => {
+      const pulseRows = [...container.querySelectorAll(".dt-row")]
+        .filter((row) => row.textContent?.includes("pulse"));
+      expect(pulseRows).toHaveLength(3);
+    });
+  });
+
+  it("fails closed when the cost backend is unavailable instead of rendering fake zeroes", async () => {
+    getCostForecast.mockRejectedValueOnce(new Error("database unavailable"));
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { findByRole, queryByText } = render(Costs);
+
+    const alert = await findByRole("alert");
+    expect(alert.textContent).toContain("Cost data unavailable");
+    expect(alert.textContent).toContain("Retry");
+    expect(queryByText("Spent this month")).toBeNull();
+  });
+
+  it("explains a real zero month beside a non-zero rolling 30-day ledger", async () => {
+    getCostForecast.mockResolvedValueOnce({
+      ...forecast,
+      spent_this_month: 0,
+      projected_monthly: 0,
+      daily_average: 0,
+      days_elapsed: 3,
+    });
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { findByText } = render(Costs);
+
+    expect(await findByText("No spend recorded this month yet.")).toBeTruthy();
+    expect(await findByText(/previous 30 days include/i)).toBeTruthy();
+  });
+
+  it("labels partial cost coverage instead of presenting an incomplete ledger as exact", async () => {
+    getCostTotals.mockResolvedValue({
+      ...totals,
+      cost_basis: "partial",
+      cost_sources: ["codex_api_equivalent"],
+      priced_sessions: 1,
+      sessions: 2,
+    } as CostTotals);
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { findByText } = render(Costs);
+
+    expect(await findByText("Partial cost coverage")).toBeTruthy();
+    expect(await findByText(/1 of 2 sessions have a known cost/i)).toBeTruthy();
+  });
+
+  it("turns unavailable spend into a useful subscription value ledger", async () => {
+    getSessionHistory.mockResolvedValueOnce(histList.map((session) => ({
+      ...session,
+      total_cost: 0,
+      known_cost: null,
+      cost_basis: "unavailable" as const,
+      cost_source: "unknown",
+      input_cost: 0,
+      output_cost: 0,
+      cache_write_cost: 0,
+      cache_read_cost: 0,
+    })));
+    getCostForecast.mockResolvedValueOnce({
+      ...forecast,
+      spent_this_month: 0,
+      projected_monthly: 0,
+      daily_average: 0,
+      cost_basis: "unavailable",
+      cost_sources: [],
+      priced_sessions: 0,
+    });
+    getBudgetStatus.mockResolvedValueOnce({
+      ...budget,
+      spent_this_month: 0,
+      projected_monthly: 0,
+      pct_used: 0,
+      cost_basis: "unavailable",
+      cost_sources: [],
+      priced_sessions: 0,
+    });
+    getCostTotals.mockResolvedValue({
+      ...totals,
+      total_cost: 0,
+      input_cost: 0,
+      output_cost: 0,
+      cache_write_cost: 0,
+      cache_read_cost: 0,
+      cost_basis: "unavailable",
+      cost_sources: [],
+      priced_sessions: 0,
+      by_model: [],
+      by_project: [],
+    });
+
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { container, findByText, findAllByText, getAllByText, queryByText } = render(Costs);
+
+    expect(await findByText("Subscription value ledger")).toBeTruthy();
+    expect((await findAllByText("Cost not reported by provider")).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      const values = [...container.querySelectorAll(".ledger-value")]
+        .map((element) => element.textContent?.trim());
+      expect(values).toContain("360.0K");
+      expect(values).toContain("2");
+      expect(values).toContain("0 / 2");
+    });
+    expect(getAllByText("Not reported").length).toBeGreaterThan(0);
+    expect(container.querySelector(".cockpit")).toBeNull();
+    expect(container.querySelector(".usage-token-mix")).not.toBeNull();
+    expect(queryByText("No spend recorded this month yet.")).toBeNull();
   });
 });
 

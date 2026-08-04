@@ -759,16 +759,16 @@ fn context_state_part(session: &CodexSessionSnapshot) -> Option<String> {
 
 fn limits_state_part(limits: &RateLimits) -> Option<String> {
     let mut parts = Vec::new();
-    if let Some(primary) = &limits.primary {
+    if let Some(primary) = limits.primary() {
         parts.push(format!(
-            "{} {:.0}%",
+            "{} {:.0}% remaining",
             format_window_label(primary.window_minutes),
             primary.remaining_percent
         ));
     }
-    if let Some(secondary) = &limits.secondary {
+    if let Some(secondary) = limits.secondary() {
         parts.push(format!(
-            "{} {:.0}%",
+            "{} {:.0}% remaining",
             format_window_label(secondary.window_minutes),
             secondary.remaining_percent
         ));
@@ -989,7 +989,7 @@ mod tests {
             tier: DetectedPlanTier::Pro20x,
             source: DetectedPlanSource::Telemetry,
             observed_at: None,
-            raw_plan_type: Some("pro".to_string()),
+            raw_plan_type: Some("pro_20x".to_string()),
         }
     }
 
@@ -1038,20 +1038,20 @@ mod tests {
                 source: ContextWindowSource::Event,
                 raw_source: ContextWindowSource::Event,
             }),
-            limits: RateLimits {
-                primary: Some(UsageWindow {
+            limits: RateLimits::new(vec![
+                UsageWindow {
                     used_percent: 36.0,
                     remaining_percent: 64.0,
                     window_minutes: 300,
                     resets_at: None,
-                }),
-                secondary: Some(UsageWindow {
+                },
+                UsageWindow {
                     used_percent: 82.0,
                     remaining_percent: 18.0,
                     window_minutes: 10080,
                     resets_at: None,
-                }),
-            },
+                },
+            ]),
             rate_limit_envelopes: Vec::new(),
             started_at: None,
             last_token_event_at: None,
@@ -1215,28 +1215,47 @@ mod tests {
         assert!(state.contains(format_cost(session.total_cost_usd).as_str()));
         assert!(state.contains("30.0K tok"));
         assert!(state.contains("Ctx 6% used"));
-        assert!(state.contains("5h 64%"));
-        assert!(state.contains("7d 18%"));
+        assert!(state.contains("5h 64% remaining"));
+        assert!(state.contains("7d 18% remaining"));
+    }
+
+    #[test]
+    fn partial_cost_is_omitted_from_the_same_presence_composer_used_by_preview_and_live() {
+        let mut session = sample_session();
+        session.known_cost_usd = Some(0.454);
+        session.total_cost_usd = 0.454;
+        session.pricing_status = PricingStatus::Partial;
+        let config = PresenceConfig::default();
+        let plan = resolved_plan_pro();
+        let service_tier = resolved_service_tier(false);
+
+        let (_details, state) = presence_lines(
+            &session,
+            Some(&session.limits),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert!(!state.contains(">="));
+        assert!(!state.contains("$0.454"));
     }
 
     #[test]
     fn weekly_only_presence_never_invents_five_hour_and_shows_credits() {
         let mut session = sample_session();
-        session.limits = RateLimits {
-            primary: Some(UsageWindow {
-                used_percent: 4.0,
-                remaining_percent: 96.0,
-                window_minutes: 10_080,
-                resets_at: None,
-            }),
-            secondary: None,
-        };
+        session.limits = RateLimits::new(vec![UsageWindow {
+            used_percent: 4.0,
+            remaining_percent: 96.0,
+            window_minutes: 10_080,
+            resets_at: None,
+        }]);
         session.rate_limit_envelopes = vec![RateLimitEnvelope {
             limit_id: Some("codex".to_string()),
             limit_name: None,
-            plan_type: Some("pro".to_string()),
+            plan_type: Some("pro_20x".to_string()),
             observed_at: None,
-            scope: RateLimitScope::GlobalCodex,
+            scope: RateLimitScope::GlobalAccount,
             limits: session.limits.clone(),
             credits: Some(CreditBalance {
                 balance: Some("2500".to_string()),
@@ -1253,7 +1272,7 @@ mod tests {
             &PresenceConfig::default(),
         );
 
-        assert!(state.contains("7d 96%"), "{state}");
+        assert!(state.contains("7d 96% remaining"), "{state}");
         assert!(state.contains("Credits 2,500"), "{state}");
         assert!(!state.contains("5h"), "{state}");
     }

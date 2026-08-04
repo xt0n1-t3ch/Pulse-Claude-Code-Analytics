@@ -1,175 +1,135 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import StatCard from "../components/StatCard.svelte";
-  import ProgressBar from "../components/ProgressBar.svelte";
-  import Sparkline from "../components/Sparkline.svelte";
   import Heatmap from "../components/Heatmap.svelte";
-  import { health, metrics, sessions, rateLimits, planInfo } from "../lib/stores";
-  import { providerProfile } from "../lib/provider";
-  import { fmtTokens, fmtCost, fmtDuration, fmtPct, fmtTps, formatResetDateTime } from "../lib/utils";
+  import AllowanceRail from "../components/AllowanceRail.svelte";
+  import {
+    backendConnection,
+    health,
+    sessions,
+    selectedAccessRoutes,
+    selectedAnalyticsProviderScope,
+  } from "../lib/stores";
+  import { providerMatchesAnalyticsScope } from "../lib/access";
+  import { fmtTokens, fmtCost, fmtExactCost, fmtDuration, fmtPct, fmtTps } from "../lib/utils";
   import {
     getAnalyticsSummary, getSessionHistory, getCostForecast,
-    getHourlyActivity, getDailyStats, getProjectStats, refreshUsage,
+    getHourlyActivity,
   } from "../lib/api";
-  import { addToast } from "../lib/stores";
-  import type { AnalyticsSummary, HistoricalSession, CostForecast, HourlyActivity, DailyStat, ProjectStat } from "../lib/api";
+  import type { AnalyticsSummary, HistoricalSession, CostForecast, HourlyActivity } from "../lib/api";
 
   let summary = $state<AnalyticsSummary | null>(null);
   let histSessions = $state<HistoricalSession[]>([]);
   let forecast = $state<CostForecast | null>(null);
   let hourlyData = $state<HourlyActivity[]>([]);
-  let dailyStats = $state<DailyStat[]>([]);
-  let projectStats = $state<ProjectStat[]>([]);
-  let refreshing = $state(false);
   let selectedFocusId = $state<string | null>(null);
+  let analyticsLoading = $state(true);
+  let analyticsError = $state<string | null>(null);
 
-  function isFreshObservation(value: string | null): boolean {
-    if (!value) return false;
-    const age = Date.now() - new Date(value).getTime();
-    return Number.isFinite(age) && age >= 0 && age <= 2 * 60 * 1000;
-  }
-
-  function windowLabel(minutes: number): string {
-    if (minutes === 300) return "5h";
-    if (minutes === 1440) return "24h";
-    if (minutes === 10080) return "7d";
-    if (minutes > 0 && minutes % 1440 === 0) return `${minutes / 1440}d`;
-    if (minutes > 0 && minutes % 60 === 0) return `${minutes / 60}h`;
-    return `${minutes}m`;
-  }
-
-  function limitLabel(minutes: number): string {
-    if (minutes <= 0) return "Account limit";
-    if (minutes === 300) return "5h Limit";
-    if (minutes === 10080) return "Weekly Limit";
-    return `${windowLabel(minutes)} Limit`;
-  }
-
-  function limitContext(name: string | null, id: string | null, kind: string): string {
-    if (kind === "global") return "All models";
-    if (name) return name;
-    if (id) return id.replace(/^codex_/, "").replaceAll("_", "-");
-    if (kind === "model") return "Model-specific";
-    return "Account usage";
-  }
-
-  /**
-   * Humanises the provenance string the backend observed. The backend already
-   * emits a real label for the network path ("OAuth · Max"); these are the
-   * remaining raw keys for the local fallbacks, which previously leaked as
-   * bare lowercase tokens.
-   */
-  const SOURCE_LABELS: Record<string, string> = {
-    jsonl: "Local transcripts",
-    statusline: "Statusline",
-    session: "Live session telemetry",
-    cached: "Cached reading",
-  };
-
-  function sourceLabel(source: string): string {
-    if (source.startsWith("Codex account API")) return "Codex account quota · live";
-    if (source.startsWith("Codex JSONL")) return "Codex local telemetry";
-    return SOURCE_LABELS[source.trim().toLowerCase()] ?? source;
-  }
-
-  function creditsDisplay(balance: string | null, unlimited: boolean): string {
-    if (unlimited) return "Unlimited";
-    if (balance == null) return "Unavailable";
-    const numeric = Number(balance);
-    return Number.isFinite(numeric) ? numeric.toLocaleString() : balance;
-  }
-
-  async function handleRefresh(): Promise<void> {
-    if (refreshing) return;
-    refreshing = true;
+  let analyticsRequest = 0;
+  async function refresh(provider: typeof $selectedAnalyticsProviderScope): Promise<void> {
+    const request = ++analyticsRequest;
+    analyticsLoading = true;
+    analyticsError = null;
+    summary = null;
+    histSessions = [];
+    forecast = null;
+    hourlyData = [];
     try {
-      await refreshUsage();
-      addToast(
-        $providerProfile.id === "claude"
-          ? "Refreshing Claude usage from Anthropic..."
-          : "Refreshing Codex account quota...",
-        "info",
-        2500,
-      );
-      setTimeout(() => { refreshing = false; }, 5500);
-    } catch (err) {
-      addToast(`Refresh failed: ${String(err)}`, "danger", 3500);
-      refreshing = false;
+      const [nextSummary, nextSessions, nextForecast, nextHourlyData] = await Promise.all([
+        getAnalyticsSummary(provider),
+        getSessionHistory(30, undefined, 50, provider),
+        getCostForecast(provider),
+        getHourlyActivity(30, provider),
+      ]);
+      if (request !== analyticsRequest) return;
+      summary = nextSummary;
+      histSessions = nextSessions;
+      forecast = nextForecast;
+      hourlyData = nextHourlyData;
+    } catch (error) {
+      if (request !== analyticsRequest) return;
+      summary = null;
+      histSessions = [];
+      forecast = null;
+      hourlyData = [];
+      analyticsError = error instanceof Error ? error.message : "Historical analytics could not be loaded.";
+    } finally {
+      if (request === analyticsRequest) analyticsLoading = false;
     }
   }
 
-  async function refresh(): Promise<void> {
-    [summary, histSessions, forecast, hourlyData, dailyStats, projectStats] = await Promise.all([
-      getAnalyticsSummary(),
-      getSessionHistory(30, undefined, 50),
-      getCostForecast(),
-      getHourlyActivity(30),
-      getDailyStats(14),
-      getProjectStats(30),
-    ]);
-  }
-
-  onMount(() => { void refresh(); });
-
-  let hasSessions = $derived(($metrics?.session_count ?? 0) > 0);
-  let totalCost = $derived(hasSessions ? $metrics!.total_cost : (summary?.total_cost ?? 0));
-  let totalTokens = $derived(hasSessions ? $metrics!.total_tokens : (summary?.total_tokens ?? 0));
-  let sessionCount = $derived(hasSessions ? $metrics!.session_count : (summary?.total_sessions ?? 0));
-
-  let avgTps = $derived.by(() => {
-    if (!$sessions.length) return 0;
-    return $sessions.reduce((sum, s) => sum + s.tokens_per_sec, 0) / $sessions.length;
+  $effect(() => {
+    void refresh($selectedAnalyticsProviderScope);
   });
 
-  let totalInput = $derived($metrics?.pure_input_tokens ?? 0);
-  let totalOutput = $derived($metrics?.output_tokens ?? 0);
-  let totalCacheW = $derived($metrics?.cache_write_tokens ?? 0);
-  let totalCacheR = $derived($metrics?.cache_read_tokens ?? 0);
-  let tokenTotal = $derived(totalInput + totalOutput + totalCacheW + totalCacheR);
+  let scopedSessions = $derived(
+    $sessions.filter((session) =>
+      providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
+    ),
+  );
+  let hasSessions = $derived(scopedSessions.length > 0);
+  let totalCost = $derived(
+    hasSessions
+      ? scopedSessions.reduce(
+          (sum, session) => sum + (session.cost_available === true ? session.cost : 0),
+          0,
+        )
+      : (summary?.total_cost ?? 0),
+  );
+  let totalCostAvailable = $derived(
+    hasSessions
+      ? scopedSessions.every((session) => session.cost_available === true)
+      : Boolean(summary && summary.priced_sessions > 0 && summary.cost_basis !== "unavailable"),
+  );
+  let totalTokens = $derived(
+    hasSessions
+      ? scopedSessions.reduce((sum, session) => sum + session.tokens, 0)
+      : (summary?.total_tokens ?? 0),
+  );
+  let sessionCount = $derived(hasSessions ? scopedSessions.length : (summary?.total_sessions ?? 0));
+
+  let totalInput = $derived(
+    scopedSessions.reduce(
+      (sum, session) =>
+        sum + Math.max(0, session.input_tokens - session.cache_write_tokens - session.cache_read_tokens),
+      0,
+    ),
+  );
+  let totalCacheR = $derived(
+    scopedSessions.reduce((sum, session) => sum + session.cache_read_tokens, 0),
+  );
 
   let histInput = $derived(histSessions.reduce((s, h) => s + Math.max(0, h.input_tokens - h.cache_write_tokens - h.cache_read_tokens), 0));
-  let histOutput = $derived(histSessions.reduce((s, h) => s + h.output_tokens, 0));
-  let histCacheW = $derived(histSessions.reduce((s, h) => s + h.cache_write_tokens, 0));
   let histCacheR = $derived(histSessions.reduce((s, h) => s + h.cache_read_tokens, 0));
-  let histTokenTotal = $derived(histInput + histOutput + histCacheW + histCacheR);
 
   let showInput = $derived(hasSessions ? totalInput : histInput);
-  let showOutput = $derived(hasSessions ? totalOutput : histOutput);
-  let showCacheW = $derived(hasSessions ? totalCacheW : histCacheW);
   let showCacheR = $derived(hasSessions ? totalCacheR : histCacheR);
-  let showTokenTotal = $derived(hasSessions ? tokenTotal : histTokenTotal);
-
-  let showInputCost = $derived(hasSessions ? ($metrics?.input_cost ?? 0) : histSessions.reduce((s, h) => s + h.input_cost, 0));
-  let showOutputCost = $derived(hasSessions ? ($metrics?.output_cost ?? 0) : histSessions.reduce((s, h) => s + h.output_cost, 0));
-  let showCacheWCost = $derived(hasSessions ? ($metrics?.cache_write_cost ?? 0) : histSessions.reduce((s, h) => s + h.cache_write_cost, 0));
-  let showCacheRCost = $derived(hasSessions ? ($metrics?.cache_read_cost ?? 0) : histSessions.reduce((s, h) => s + h.cache_read_cost, 0));
-  let showCostTotal = $derived(showInputCost + showOutputCost + showCacheWCost + showCacheRCost);
-  let showCacheHit = $derived(hasSessions ? ($metrics?.cache_hit_ratio ?? 0) : (showCacheR + showInput > 0 ? showCacheR / (showCacheR + showInput) * 100 : 0));
+  let showCacheHit = $derived(showCacheR + showInput > 0 ? showCacheR / (showCacheR + showInput) * 100 : 0);
 
   let modelGroups = $derived.by(() => {
-    if (hasSessions && $metrics?.models.length) return $metrics.models;
+    if (hasSessions) {
+      const liveMap: Record<string, { sessions: number; cost: number; tokens: number }> = {};
+      scopedSessions.forEach((session) => {
+        const entry = liveMap[session.model] ?? { sessions: 0, cost: 0, tokens: 0 };
+        entry.sessions++;
+        entry.cost += session.cost_available === true ? session.cost : 0;
+        entry.tokens += session.tokens;
+        liveMap[session.model] = entry;
+      });
+      return Object.entries(liveMap)
+        .map(([model, value]) => ({ model, ...value }))
+        .sort((a, b) => b.sessions - a.sessions || b.tokens - a.tokens);
+    }
     const map: Record<string, { sessions: number; cost: number; tokens: number }> = {};
     histSessions.forEach((h) => {
       const e = map[h.model] ?? { sessions: 0, cost: 0, tokens: 0 };
       e.sessions++;
-      e.cost += h.total_cost;
+      e.cost += h.known_cost ?? 0;
       e.tokens += h.total_tokens;
       map[h.model] = e;
     });
-    return Object.entries(map).map(([model, v]) => ({ model, ...v })).sort((a, b) => b.cost - a.cost);
-  });
-
-  let dailyCostTrend = $derived(dailyStats
-    .reduce<Record<string, number>>((acc, d) => { acc[d.date] = (acc[d.date] ?? 0) + d.total_cost; return acc; }, {})
-  );
-  let sparkCost = $derived(Object.entries(dailyCostTrend).sort(([a], [b]) => a.localeCompare(b)).map(([_, v]) => v));
-  let sparkTokens = $derived.by(() => {
-    const agg = dailyStats.reduce<Record<string, number>>((acc, d) => { acc[d.date] = (acc[d.date] ?? 0) + d.total_tokens; return acc; }, {});
-    return Object.entries(agg).sort(([a], [b]) => a.localeCompare(b)).map(([_, v]) => v);
-  });
-  let sparkSessions = $derived.by(() => {
-    const agg = dailyStats.reduce<Record<string, number>>((acc, d) => { acc[d.date] = (acc[d.date] ?? 0) + d.session_count; return acc; }, {});
-    return Object.entries(agg).sort(([a], [b]) => a.localeCompare(b)).map(([_, v]) => v);
+    return Object.entries(map)
+      .map(([model, v]) => ({ model, ...v }))
+      .sort((a, b) => b.sessions - a.sessions || b.tokens - a.tokens);
   });
 
   let cacheGrade = $derived.by(() => {
@@ -191,13 +151,20 @@
     const pct = total > 0 ? (top.sessions / total) * 100 : 0;
     return { name: top.model, pct, sessions: top.sessions };
   });
+  let hasOperationalSummary = $derived(
+    showCacheR + showInput > 0
+      || Boolean(forecast && forecast.spent_this_month > 0)
+      || Boolean(topModel && topModel.pct > 60)
+      || hourlyData.length > 0,
+  );
 
-  let liveInstances = $derived($sessions.filter((session) => !session.is_idle));
-  let visibleInstances = $derived(liveInstances.length > 0 ? liveInstances : $sessions);
+  let liveInstances = $derived(scopedSessions.filter((session) => !session.is_idle));
+  let visibleInstances = $derived(liveInstances.length > 0 ? liveInstances : scopedSessions);
   $effect(() => {
     const instances = visibleInstances;
     if (!instances.some((session) => session.session_id === selectedFocusId)) {
-      selectedFocusId = instances[0]?.session_id ?? null;
+      const nextFocusId = instances[0]?.session_id ?? null;
+      if (selectedFocusId !== nextFocusId) selectedFocusId = nextFocusId;
     }
   });
 
@@ -209,7 +176,9 @@
       ?? null,
   );
   let focusHistory = $derived(histSessions[0] ?? null);
-  let focusHistoryFallback = $derived(focusSession ? null : focusHistory);
+  let focusHistoryFallback = $derived(
+    focusSession ? null : focusHistory,
+  );
   let focusName = $derived(
     focusSession?.session_name
       ?? focusSession?.project
@@ -217,12 +186,47 @@
       ?? focusHistoryFallback?.project
       ?? "No active session",
   );
-  let focusProject = $derived(focusSession?.project ?? focusHistoryFallback?.project ?? "Waiting for telemetry");
-  let focusModel = $derived(focusSession?.model ?? focusHistoryFallback?.model ?? $providerProfile.productName);
+  let focusProject = $derived(focusSession?.project ?? focusHistoryFallback?.project ?? "Waiting for session");
+  let focusModel = $derived(focusSession?.model ?? focusHistoryFallback?.model ?? "No live model");
   let focusBranch = $derived(focusSession?.branch ?? focusHistoryFallback?.branch ?? "—");
   let focusDuration = $derived(focusSession?.duration_secs ?? focusHistoryFallback?.duration_secs ?? 0);
-  let focusCost = $derived(focusSession?.cost ?? focusHistoryFallback?.total_cost ?? totalCost);
-  let focusTokens = $derived(focusSession?.tokens ?? focusHistoryFallback?.total_tokens ?? totalTokens);
+  let focusCost = $derived(
+    focusSession?.cost_available === true
+      ? focusSession.cost
+      : focusHistoryFallback
+        ? focusHistoryFallback.known_cost ?? 0
+        : totalCost,
+  );
+  let focusCostAvailable = $derived(
+    focusSession
+      ? focusSession.cost_available === true
+      : focusHistoryFallback
+        ? focusHistoryFallback.known_cost !== null
+        : totalCostAvailable,
+  );
+  let focusCostBasis = $derived(
+    focusSession
+      ? focusSession.cost_basis
+      : focusHistoryFallback
+        ? focusHistoryFallback.cost_basis
+        : summary?.cost_basis ?? "unavailable",
+  );
+  let focusCostNote = $derived.by(() => {
+    if (focusCostBasis === "partial") {
+      const priced = summary?.priced_sessions ?? 0;
+      const sessions = summary?.total_sessions ?? 0;
+      return priced > 0 && sessions > priced
+        ? `Known subtotal · ${priced}/${sessions} sessions priced`
+        : "Known subtotal · incomplete provider coverage";
+    }
+    if (focusCostBasis === "exact") return "Exact total";
+    return "Exact total not reported";
+  });
+  let focusTokens = $derived(
+    focusSession?.tokens
+      ?? focusHistoryFallback?.total_tokens
+      ?? totalTokens,
+  );
   let focusContextPct = $derived.by(() => {
     const used = focusSession?.context_used_tokens ?? 0;
     const window = focusSession?.context_window_tokens ?? 0;
@@ -247,16 +251,52 @@
     { label: "Cache read", value: focusSession.cache_read_tokens, color: "var(--token-cache-read)" },
   ] : []);
   let burnRate = $derived(focusDuration > 0 ? focusCost / (focusDuration / 3600) : 0);
+  let hasAllowanceRoutes = $derived($selectedAccessRoutes.length > 0);
 </script>
 
-<div class="dashboard" data-dashboard-layout="signal-ledger">
+<div class="dashboard app-view" data-dashboard-layout="direction-two">
+  <div class="home-grid" class:without-allowances={!hasAllowanceRoutes}>
+    {#if hasAllowanceRoutes}
+      <AllowanceRail />
+    {/if}
+    <section class="work-now">
+      <header class="work-now-head">
+        <div>
+          <h2>Live workspace</h2>
+          <p>Your current session — context, spend, and throughput.</p>
+        </div>
+        {#if $backendConnection !== "live"}
+          <div class="home-status" aria-label="Connection status">
+            <span class="status-chip" class:warn={$backendConnection === "disconnected"}>
+              <i></i>
+              {$backendConnection === "disconnected" ? "Reconnecting…" : "Connecting…"}
+            </span>
+          </div>
+        {/if}
+      </header>
+
+      {#if analyticsError}
+        <div class="analytics-alert" role="alert">
+          <div>
+            <strong>Historical analytics unavailable</strong>
+            <span>{analyticsError}</span>
+          </div>
+          <button
+            type="button"
+            onclick={() => void refresh($selectedAnalyticsProviderScope)}
+            disabled={analyticsLoading}
+          >
+            {analyticsLoading ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      {/if}
+
   {#if liveInstances.length > 1}
-    <section class="instance-tray surface-matte" aria-label="Live instances">
+    <section class="instance-tray" aria-label="Active sessions">
       <div class="instance-tray-head">
-        <span class="instance-count">{liveInstances.length} live instances</span>
-        <span class="instance-sync"><span></span>Backend live</span>
+        <span class="instance-count">{liveInstances.length} active sessions</span>
       </div>
-      <div class="instance-grid" role="tablist" aria-label="Live session instances">
+      <div class="instance-grid" role="tablist" aria-label="Active sessions">
         {#each liveInstances as session (session.session_id)}
           {@const instanceUsed = session.context_used_tokens ?? 0}
           {@const instanceWindow = session.context_window_tokens ?? 0}
@@ -288,7 +328,7 @@
   {/if}
 
   <div class="signal-grid">
-    <section class="focus-panel surface-panel" data-session-focus>
+    <section class="focus-panel" data-session-focus>
       <div class="focus-head">
         <div>
           <div class="view-kicker">
@@ -311,14 +351,17 @@
       <div class="focus-values">
         <div>
           <span class="focus-label">Current cost</span>
-          <strong>{fmtCost(focusCost)}</strong>
+          <strong>{fmtExactCost(focusCost, focusCostAvailable)}</strong>
+          {#if focusCostBasis !== "exact"}
+            <span class="focus-note">{focusCostNote}</span>
+          {/if}
         </div>
         <div>
           <span class="focus-label">Burn rate</span>
-          <strong>{burnRate > 0 ? `${fmtCost(burnRate)}/hr` : "—"}</strong>
+          <strong>{focusCostAvailable && burnRate > 0 ? `${fmtCost(burnRate)}/hr` : "—"}</strong>
         </div>
         <div>
-          <span class="focus-label">Session tokens</span>
+          <span class="focus-label">Cumulative tokens</span>
           <strong>{fmtTokens(focusTokens)}</strong>
         </div>
       </div>
@@ -326,8 +369,8 @@
       <div class="focus-chart" aria-label="Session token composition">
         {#if focusSession && focusTokenTotal > 0}
           <div class="focus-chart-head">
-            <strong>{focusIsLive ? "Live token mix" : "Recent token mix"}</strong>
-            <span>{fmtTokens(focusTokenTotal)} observed · backend session counters</span>
+            <strong>{focusIsLive ? "Cumulative token mix" : "Recent token mix"}</strong>
+            <span>{fmtTokens(focusTokenTotal)} tokens this session</span>
           </div>
           <div class="mix-track" aria-hidden="true">
             {#each focusTokenMix as item}
@@ -341,8 +384,8 @@
           </div>
         {:else}
           <div class="focus-empty">
-            <strong>Waiting for live counters</strong>
-            <span>Pulse will render the provider-reported session mix here.</span>
+            <strong>No live counters yet</strong>
+            <span>The token breakdown appears here once a session starts reporting.</span>
           </div>
         {/if}
       </div>
@@ -351,7 +394,7 @@
     <aside class="telemetry-ledger" data-telemetry-ledger>
       <div class="ledger-head">
         <div>
-          <span class="view-kicker">Current session</span>
+          <span class="view-kicker">This session</span>
           <h2>Session status</h2>
         </div>
         <span class="ledger-date">Today</span>
@@ -400,45 +443,33 @@
           <span>Discord presence</span>
           <strong class:connected={$health?.discord_status === "Connected"}>{$health?.discord_status ?? "Detecting"}</strong>
         </div>
-        <span class="ledger-note">Backend IPC status</span>
+        <span class="ledger-note">Rich Presence connection</span>
       </section>
     </aside>
   </div>
 
-  <div class="stats-row metric-strip">
-    <StatCard label="Total Cost (Live)" value={fmtCost(totalCost)}>
-      {#snippet extra()}<Sparkline data={sparkCost} color="var(--accent)" />{/snippet}
-    </StatCard>
-    <StatCard label="Total Tokens" value={fmtTokens(totalTokens)}>
-      {#snippet extra()}<Sparkline data={sparkTokens} color="var(--info)" />{/snippet}
-    </StatCard>
-    <StatCard label="Sessions" value={String(sessionCount)}>
-      {#snippet extra()}<Sparkline data={sparkSessions} color="var(--success)" />{/snippet}
-    </StatCard>
-    <StatCard label="Avg Duration" value={summary ? fmtDuration(summary.avg_duration_secs) : "—"}>
-      {#snippet extra()}
-        {#if summary && summary.avg_cost_per_session > 0}
-          <span class="stat-sub">{fmtCost(summary.avg_cost_per_session)}/session</span>
-        {/if}
-      {/snippet}
-    </StatCard>
-  </div>
-
-  <div class="insight-row">
-    <div class="card insight-card">
+  {#if hasOperationalSummary}
+  <section class="glance-section">
+    <div class="glance-head">
+      <span class="view-kicker">At a glance</span>
+    </div>
+    <div class="insight-row">
+    {#if showCacheR + showInput > 0}
+    <div class="insight-card">
       <div class="cache-grade" style="color:{cacheGrade.color}">
         <span class="grade-letter">{cacheGrade.letter}</span>
         <div class="grade-info">
-          <span class="grade-title">Cache Health</span>
+          <span class="grade-title">Cache health</span>
           <span class="grade-ratio">{fmtPct(showCacheHit)} hit ratio</span>
         </div>
       </div>
     </div>
+    {/if}
 
     {#if forecast && forecast.spent_this_month > 0}
-      <div class="card insight-card">
+      <div class="insight-card">
         <div class="forecast-info">
-          <span class="forecast-label">Monthly Projection</span>
+          <span class="forecast-label">Monthly projection</span>
           <span class="forecast-value">{fmtCost(forecast.projected_monthly)}</span>
           <span class="forecast-meta">
             {fmtCost(forecast.spent_this_month)} spent
@@ -449,9 +480,9 @@
     {/if}
 
     {#if topModel && topModel.pct > 60}
-      <div class="card insight-card">
+      <div class="insight-card">
         <div class="routing-info">
-          <span class="routing-label">Model Focus</span>
+          <span class="routing-label">Model focus</span>
           <span class="routing-value">{fmtPct(topModel.pct)} {topModel.name}</span>
           <span class="routing-meta">{topModel.sessions} of {sessionCount} sessions</span>
         </div>
@@ -459,263 +490,139 @@
     {/if}
 
     {#if hourlyData.length > 0}
-      <div class="card insight-card heatmap-card">
-        <span class="heatmap-title">Activity by Hour</span>
+      <div class="insight-card heatmap-card">
+        <span class="heatmap-title">Activity by hour</span>
         <Heatmap data={hourlyData} />
       </div>
     {/if}
-  </div>
-
-  <div class="charts-row">
-    <div class="card surface-matte quota-card">
-      <div class="usage-header">
-        <div>
-          <h3 class="card-title">Account quota</h3>
-          <span class="card-context">{$planInfo?.plan_name ?? $providerProfile.productName}</span>
-        </div>
-        <button
-          class="refresh-btn"
-          class:spinning={refreshing}
-          onclick={handleRefresh}
-          title={$providerProfile.id === "claude" ? "Refresh usage from Anthropic API" : "Refresh Codex telemetry"}
-        >
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
-        </button>
-      </div>
-      {#if $rateLimits?.usage && ($rateLimits.usage.scopes.length > 0 || $rateLimits.usage.credits)}
-        <div class="quota-list">
-          {#each $rateLimits.usage.scopes as scope (`${scope.kind}:${scope.id ?? scope.name ?? "default"}`)}
-            {#each scope.windows as window, windowIndex (`${windowIndex}:${window.window_minutes}:${window.resets_at ?? "none"}`)}
-              <section class="quota-row">
-                <ProgressBar
-                  label={limitLabel(window.window_minutes)}
-                  sublabel={limitContext(scope.name, scope.id, scope.kind)}
-                  pct={window.used_percent}
-                  remainingPct={window.remaining_percent}
-                  meta={window.resets_at ? `Resets ${formatResetDateTime(window.resets_at)}` : "Reset time unavailable"}
-                />
-              </section>
-            {/each}
-          {/each}
-          {#if $rateLimits.usage.credits}
-            <section class="credits-row">
-              <div class="credits-copy">
-                <span class="credits-title">Credits Available</span>
-                <span class="credits-meta">{#if $rateLimits.usage.credits.unlimited}No metered balance{:else if $rateLimits.usage.credits.has_credits}Available beyond plan limits{:else}Explicit account balance{/if}</span>
-              </div>
-              <strong class="credits-value">{creditsDisplay($rateLimits.usage.credits.balance, $rateLimits.usage.credits.unlimited)}</strong>
-            </section>
-          {/if}
-        </div>
-        <div class="usage-footer">
-          <span class="source-dot" class:fresh={isFreshObservation($rateLimits.usage.observed_at)} aria-hidden="true"></span>
-          <span>{sourceLabel($rateLimits.usage.source)}</span>
-          {#if $rateLimits.usage.observed_at}
-            <span class="source-separator" aria-hidden="true">·</span>
-            <span>{isFreshObservation($rateLimits.usage.observed_at) ? "Live" : "Last observed"} {new Date($rateLimits.usage.observed_at).toLocaleString()}</span>
-          {/if}
-        </div>
-      {:else}
-        <div class="empty-hint">{$rateLimits?.source ?? "Waiting for usage data..."}</div>
-      {/if}
-      {#if $rateLimits && $providerProfile.supportsExtraUsage}
-        <div class="extra-usage">
-          <div class="extra-header">
-            <span class="extra-title">Extra usage</span>
-            <span class="extra-badge" class:on={$rateLimits.extra_enabled}>
-              <span class="extra-dot"></span>
-              {$rateLimits.extra_enabled ? "On" : "Off"}
-            </span>
-          </div>
-          {#if $rateLimits.extra_used != null || $rateLimits.extra_limit != null}
-            <div class="extra-grid">
-              {#if $rateLimits.extra_used != null}
-                <div class="extra-cell">
-                  <span class="extra-cell-label">Spent</span>
-                  <span class="extra-cell-val">{fmtCost($rateLimits.extra_used)}</span>
-                  {#if $rateLimits.extra_pct != null}
-                    <span class="extra-cell-meta">{fmtPct($rateLimits.extra_pct)} used</span>
-                  {/if}
-                </div>
-              {/if}
-              {#if $rateLimits.extra_limit != null}
-                <div class="extra-cell">
-                  <span class="extra-cell-label">Monthly cap</span>
-                  <span class="extra-cell-val">{fmtCost($rateLimits.extra_limit)}</span>
-                  <span class="extra-cell-meta">Spend limit</span>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/if}
     </div>
-
-    <div class="card surface-matte breakdown-card">
-      <div class="section-headline">
-        <div><h3 class="card-title">Cost Breakdown</h3><span class="card-context">Observed session ledger</span></div>
-        {#if showCostTotal > 0}<strong>{fmtCost(showCostTotal)}</strong>{/if}
-      </div>
-      {#if showCostTotal > 0}
-        <div class="breakdown-table">
-          <div class="bd-row"><span class="bd-dot" style="background:var(--info)"></span><span class="bd-label">Input</span><span class="bd-val">{fmtCost(showInputCost)}</span></div>
-          <div class="bd-row"><span class="bd-dot" style="background:var(--token-output)"></span><span class="bd-label">Output</span><span class="bd-val">{fmtCost(showOutputCost)}</span></div>
-          <div class="bd-row"><span class="bd-dot" style="background:var(--token-cache-write)"></span><span class="bd-label">Cache Write</span><span class="bd-val">{fmtCost(showCacheWCost)}</span></div>
-          <div class="bd-row"><span class="bd-dot" style="background:var(--token-cache-read)"></span><span class="bd-label">Cache Read</span><span class="bd-val">{fmtCost(showCacheRCost)}</span></div>
-          <div class="bd-divider"></div>
-          <div class="bd-row total"><span class="bd-dot" style="background:transparent"></span><span class="bd-label">Estimated Total</span><span class="bd-val">{fmtCost(showCostTotal)}</span></div>
-        </div>
-        <div class="bd-metrics">
-          <span>Cache Hit Ratio: <strong>{fmtPct(showCacheHit)}</strong></span>
-          {#if avgTps > 0}
-            <span>Output Speed: <strong>{fmtTps(avgTps)}</strong></span>
-          {/if}
-          {#if !hasSessions}
-            <span class="bd-source">From historical data</span>
-          {/if}
-        </div>
-      {:else}
-        <div class="empty-hint">No cost data yet</div>
-      {/if}
-    </div>
-  </div>
-
-  <div class="charts-row">
-    <div class="card surface-matte">
-      <div class="section-headline">
-        <div><h3 class="card-title">Token Consumption</h3><span class="card-context">Input, output, and cache paths</span></div>
-        {#if showTokenTotal > 0}<strong>{fmtTokens(showTokenTotal)}</strong>{/if}
-      </div>
-      {#if showTokenTotal > 0}
-        <div class="consumption-grid">
-          <div class="cons-row">
-            <span class="cons-label"><span class="cons-dot" style="background:var(--info)"></span>Input</span>
-            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showInput / showTokenTotal) * 100}%; background:var(--info)"></div></div>
-            <span class="cons-val">{fmtTokens(showInput)}</span>
-          </div>
-          <div class="cons-row">
-            <span class="cons-label"><span class="cons-dot" style="background:var(--token-output)"></span>Output</span>
-            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showOutput / showTokenTotal) * 100}%; background:var(--token-output)"></div></div>
-            <span class="cons-val">{fmtTokens(showOutput)}</span>
-          </div>
-          <div class="cons-row">
-            <span class="cons-label"><span class="cons-dot" style="background:var(--token-cache-write)"></span>Cache Write</span>
-            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showCacheW / showTokenTotal) * 100}%; background:var(--token-cache-write)"></div></div>
-            <span class="cons-val">{fmtTokens(showCacheW)}</span>
-          </div>
-          <div class="cons-row">
-            <span class="cons-label"><span class="cons-dot" style="background:var(--token-cache-read)"></span>Cache Read</span>
-            <div class="cons-bar-track"><div class="cons-bar-fill" style="width:{(showCacheR / showTokenTotal) * 100}%; background:var(--token-cache-read)"></div></div>
-            <span class="cons-val">{fmtTokens(showCacheR)}</span>
-          </div>
-        </div>
-        <div class="cons-total">Total: {fmtTokens(showTokenTotal)}{#if !hasSessions} <small>(historical)</small>{/if}</div>
-      {:else}
-        <div class="empty-hint">No token data yet</div>
-      {/if}
-    </div>
-
-    <div class="card surface-matte">
-      <div class="section-headline"><div><h3 class="card-title">Model Distribution</h3><span class="card-context">Sessions and attributed cost</span></div></div>
-      <div class="model-list">
-        {#if modelGroups.length}
-          {#each modelGroups as m}
-            <div class="model-row">
-              <div class="model-info">
-                <span class="model-name">{m.model}</span>
-                <span class="model-meta">{m.sessions} session{m.sessions !== 1 ? "s" : ""} · {fmtTokens(m.tokens)}</span>
-              </div>
-              <span class="model-cost">{fmtCost(m.cost)}</span>
-            </div>
-          {/each}
-        {:else}
-          <div class="empty-hint">No model data yet</div>
-        {/if}
-      </div>
-    </div>
-  </div>
-
-  {#if projectStats.length > 1}
-    <div class="card surface-matte data-card">
-      <div class="section-headline"><div><h3 class="card-title">Projects</h3><span class="card-context">30-day durable ledger · {projectStats.length} projects</span></div></div>
-      <div class="project-table">
-        <div class="pt-header">
-          <span class="pt-col name">Project</span>
-          <span class="pt-col">Sessions</span>
-          <span class="pt-col">Tokens</span>
-          <span class="pt-col">Avg Cost</span>
-          <span class="pt-col cost">Total Cost</span>
-        </div>
-        {#each projectStats.slice(0, 10) as p}
-          <div class="pt-row">
-            <span class="pt-col name">{p.project}</span>
-            <span class="pt-col">{p.session_count}</span>
-            <span class="pt-col">{fmtTokens(p.total_tokens)}</span>
-            <span class="pt-col">{fmtCost(p.avg_session_cost)}</span>
-            <span class="pt-col cost">{fmtCost(p.total_cost)}</span>
-          </div>
-        {/each}
-      </div>
-    </div>
+  </section>
   {/if}
 
-  {#if $sessions.length === 0}
-    <div class="card surface-matte data-card">
-      <div class="section-headline">
-        <div>
-          <h3 class="card-title">Recent Sessions</h3>
-          <span class="card-context">Durable analytics history</span>
-        </div>
-      </div>
-      <div class="session-list">
-        {#if histSessions.length > 0}
-        <div class="recent-hint">No live sessions detected — showing recent history</div>
-        <div class="recent-table">
-          <div class="rt-header">
-            <span class="rt-col project">Project</span>
-            <span class="rt-col model">Model</span>
-            <span class="rt-col">Tokens</span>
-            <span class="rt-col">Duration</span>
-            <span class="rt-col cost">Cost</span>
-          </div>
-          {#each histSessions.slice(0, 5) as h (h.id)}
-            <div class="rt-row">
-              <span class="rt-col project">{h.project}</span>
-              <span class="rt-col model">{h.model}</span>
-              <span class="rt-col">{fmtTokens(h.total_tokens)}</span>
-              <span class="rt-col">{h.duration_secs > 0 ? fmtDuration(h.duration_secs) : "—"}</span>
-              <span class="rt-col cost">{fmtCost(h.total_cost)}</span>
-            </div>
-          {/each}
-        </div>
-        {:else}
-        <div class="empty-state">
-          <div class="empty-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.35"/><path d="M12 8v4l2.5 2.5"/></svg>
-          </div>
-          <div class="empty-text">No sessions yet</div>
-          <div class="empty-sub">Start a {$providerProfile.productName} session to see data</div>
-        </div>
-        {/if}
-      </div>
-    </div>
-  {/if}
+    </section>
+  </div>
 </div>
 
 <style>
-  .dashboard { display: flex; flex-direction: column; gap: 16px; max-width: var(--content-max); margin: 0 auto; }
-  .instance-tray { padding: 0; overflow: hidden; }
+  .dashboard {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .home-status { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+  .status-chip {
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px;
+    color: var(--text-muted);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    font-size: 9px;
+    white-space: nowrap;
+  }
+  .status-chip i { width: 6px; height: 6px; background: var(--text-placeholder); border-radius: 50%; }
+  .status-chip.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
+  .status-chip.warn i { background: var(--warning); }
+  .home-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: clamp(280px, 23vw, 360px) minmax(0, 1fr);
+    gap: 0;
+    align-items: stretch;
+    min-height: 100%;
+    /* One unified surface: the grid itself is the card. Its two columns
+       (Provider limits + Live workspace) share this matte panel and are separated by
+       a single interior divider, never two floating cards. */
+    position: relative;
+    background: var(--panel-sheen), var(--surface-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-1);
+    overflow: hidden;
+  }
+  .home-grid::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: var(--panel-edge);
+    z-index: 1;
+    pointer-events: none;
+  }
+  /* An unproved quota source must not reserve a permanent empty column. Session
+   * telemetry remains useful and expands into the reclaimed workspace. */
+  .home-grid.without-allowances { grid-template-columns: minmax(0, 1fr); }
+  .work-now {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    /* Column of the shared home-grid card, divided from Provider limits by one
+       interior hairline instead of its own border/shadow. */
+    border-left: 1px solid var(--divider);
+  }
+  .home-grid.without-allowances .work-now { border-left: 0; }
+  .work-now-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 20px 22px 17px;
+  }
+  .work-now-head h2 { font-size: 19px; letter-spacing: -0.03em; }
+  .work-now-head p { margin-top: 5px; color: var(--text-muted); font-size: 11px; }
+  .analytics-alert {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin: 0 14px 2px;
+    padding: 11px 12px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--danger) 7%, var(--surface-panel-soft));
+    border: 1px solid color-mix(in srgb, var(--danger) 24%, var(--divider));
+    border-radius: var(--radius-md);
+  }
+  .analytics-alert > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .analytics-alert strong { color: var(--text-primary); font-size: var(--fs-sm); }
+  .analytics-alert span { overflow: hidden; color: var(--text-muted); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+  .analytics-alert button {
+    min-height: 30px;
+    flex: 0 0 auto;
+    padding: 5px 11px;
+    color: var(--text-primary);
+    background: var(--bg-card);
+    border: 1px solid var(--border-hover);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font: 650 var(--fs-xs) var(--font-sans);
+  }
+  .analytics-alert button:disabled { cursor: wait; opacity: 0.6; }
+  .instance-tray {
+    margin: 0 14px 2px;
+    overflow: hidden;
+    background: var(--surface-panel-soft);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-md);
+  }
   .instance-tray-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 10px 14px;
+    padding: 9px 12px 7px;
     border-bottom: 1px solid var(--divider);
   }
-  .instance-count { color: var(--text-primary); font-size: 12px; font-weight: 650; }
-  .instance-sync { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font: 600 10px var(--font-mono); }
-  .instance-sync > span { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-dim); }
+  .instance-count {
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: var(--letter-wider);
+    text-transform: uppercase;
+  }
   .instance-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .instance-tab {
     position: relative;
@@ -723,7 +630,7 @@
     flex-direction: column;
     gap: 8px;
     min-width: 0;
-    padding: 12px 14px 13px;
+    padding: 11px 12px 12px;
     color: var(--text-secondary);
     background: transparent;
     border: 0;
@@ -734,10 +641,10 @@
     transition: background 0.15s var(--ease), color 0.15s var(--ease);
   }
   .instance-tab:last-child { border-right: 0; }
-  .instance-tab::after { content: ""; position: absolute; inset: auto 14px 0; height: 2px; background: transparent; }
+  .instance-tab::after { content: ""; position: absolute; inset: auto 12px 0; height: 2px; background: transparent; }
   .instance-tab:hover { background: var(--surface-panel-soft); color: var(--text-primary); }
-  .instance-tab.selected { color: var(--text-primary); }
-  .instance-tab.selected::after { background: var(--info); }
+  .instance-tab.selected { color: var(--text-primary); background: var(--bg-card); }
+  .instance-tab.selected::after { background: var(--provider-accent); }
   .instance-main, .instance-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
   .instance-main strong { overflow: hidden; color: inherit; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
   .instance-main > span { flex-shrink: 0; overflow: hidden; max-width: 44%; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
@@ -746,24 +653,36 @@
   .instance-meta b { flex-shrink: 0; color: var(--text-secondary); font-weight: 600; }
   .instance-meter { height: 2px; overflow: hidden; background: var(--meter-track); }
   .instance-meter i { display: block; height: 100%; background: var(--info); }
-  .signal-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 0.82fr); gap: 18px; align-items: start; }
-  .focus-panel, .telemetry-ledger { min-width: 0; padding: 20px; }
-  .focus-panel { display: flex; flex-direction: column; gap: 18px; }
+  .signal-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(250px, 0.78fr);
+    align-items: stretch;
+    margin-top: 2px;
+  }
+  .focus-panel, .telemetry-ledger { min-width: 0; padding: 22px; }
+  .focus-panel { display: flex; flex-direction: column; gap: 20px; }
   .focus-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-  .focus-head h1 { margin-top: 7px; font-size: clamp(24px, 2.5vw, 34px); font-weight: 600; line-height: 1.05; letter-spacing: var(--letter-tighter); }
+  .focus-head h1 { margin-top: 7px; font-size: clamp(26px, 2.65vw, 38px); font-weight: 620; line-height: 1.05; letter-spacing: var(--letter-tighter); }
   .focus-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-placeholder); }
   .focus-dot.live { background: var(--success); box-shadow: 0 0 0 3px var(--success-dim); }
   .focus-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; color: var(--text-muted); font-size: var(--fs-sm); }
   .focus-meta span:not(:first-child)::before { content: "·"; margin-right: 16px; color: var(--border-hover); }
-  .focus-state { max-width: 180px; padding: 5px 10px; overflow: hidden; color: var(--text-muted); background: var(--surface-panel-soft); border: 1px solid var(--border); border-radius: var(--radius-full); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
+  .focus-state { max-width: 180px; flex: 0 0 auto; padding: 5px 10px; overflow: hidden; color: var(--text-muted); background: var(--surface-panel-soft); border: 1px solid var(--border); border-radius: var(--radius-full); font-size: var(--fs-xs); text-overflow: ellipsis; white-space: nowrap; }
   .focus-state.live { color: var(--success); background: var(--success-dim); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
-  .focus-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--divider); }
-  .focus-values > div { display: flex; flex-direction: column; gap: 4px; padding: 14px 18px; border-right: 1px solid var(--divider); }
-  .focus-values > div:first-child { padding-left: 0; }
+  .focus-values {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 4px 0;
+    background: var(--surface-panel-soft);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-md);
+  }
+  .focus-values > div { display: flex; flex-direction: column; gap: 4px; padding: 13px 16px; border-right: 1px solid var(--divider); }
   .focus-values > div:last-child { border-right: 0; }
   .focus-label { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 700; letter-spacing: var(--letter-wider); text-transform: uppercase; }
   .focus-values strong { color: var(--text-primary); font-size: clamp(19px, 2vw, 27px); font-variant-numeric: tabular-nums; letter-spacing: var(--letter-tight); }
-  .focus-chart { display: flex; flex-direction: column; gap: 12px; min-height: 96px; overflow: hidden; }
+  .focus-note { color: var(--text-muted); font-size: 11px; }
+  .focus-chart { display: flex; flex-direction: column; gap: 12px; min-height: 82px; overflow: hidden; }
   .focus-chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   .focus-chart-head strong { font-size: 12px; font-weight: 650; }
   .focus-chart-head span { color: var(--text-muted); font: 500 10px var(--font-mono); text-align: right; }
@@ -775,11 +694,17 @@
   .mix-legend span { overflow: hidden; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
   .mix-legend strong { color: var(--text-secondary); font: 600 11px var(--font-mono); }
 
-  .focus-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 96px; color: var(--text-muted); text-align: center; }
+  .focus-empty { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 5px; min-height: 76px; color: var(--text-muted); text-align: left; }
   .focus-empty strong { color: var(--text-secondary); font-size: var(--fs-sm); }
   .focus-empty span { font-size: var(--fs-xs); }
 
-  .telemetry-ledger { display: flex; flex-direction: column; align-self: start; padding: 4px 0 4px 20px; border-left: 1px solid var(--divider); }
+  .telemetry-ledger {
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+    background: color-mix(in srgb, var(--bg-elevated) 52%, transparent);
+    border-left: 1px solid var(--divider);
+  }
   .ledger-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--divider); }
   .ledger-head h2 { margin-top: 4px; font-size: var(--fs-lg); font-weight: 650; letter-spacing: var(--letter-tight); }
   .ledger-date { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-xs); }
@@ -801,13 +726,20 @@
   .ledger-section.split strong { overflow: hidden; color: var(--text-secondary); font-size: var(--fs-sm); text-overflow: ellipsis; white-space: nowrap; }
   .ledger-row strong.connected { color: var(--success); }
 
-  .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; }
-  .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-
-  .stat-sub { font-size: 10px; color: var(--text-muted); font-weight: 500; }
-
-  .insight-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-  .insight-card { padding: 16px; display: flex; flex-direction: column; }
+  .glance-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0 14px 14px;
+    padding: 14px 16px 15px;
+    background: var(--surface-panel-soft);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-md);
+  }
+  .glance-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; }
+  .insight-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }
+  .insight-card { min-width: 0; padding: 4px 16px; display: flex; flex-direction: column; border-left: 1px solid var(--divider); }
+  .insight-card:first-child { padding-left: 0; border-left: 0; }
   .heatmap-card { min-width: 260px; }
   .heatmap-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 10px; }
 
@@ -823,200 +755,6 @@
   .forecast-meta, .routing-meta { font-size: 11px; color: var(--text-muted); }
   .routing-value { font-size: 14px; font-weight: 700; color: var(--text-primary); }
 
-  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; transition: border-color 0.2s var(--ease); }
-  .card:hover { border-color: var(--border-hover); }
-  .card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-  .card-title::before { content: ""; width: 3px; height: 14px; background: var(--accent); border-radius: 2px; }
-  .card-context { display: block; margin-top: 4px; color: var(--text-muted); font-size: 10px; }
-  .section-headline { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-  .section-headline .card-title { margin-bottom: 0; }
-  .section-headline > strong { color: var(--text-primary); font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: var(--letter-tight); }
-
-  .usage-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-  .usage-header .card-title { margin-bottom: 0; }
-  .refresh-btn {
-    width: 28px;
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-md);
-    color: var(--text-muted);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    cursor: pointer;
-    transition: all 0.15s var(--ease);
-  }
-  .refresh-btn:hover {
-    color: var(--accent);
-    border-color: var(--accent);
-    background: var(--accent-dim);
-  }
-  .refresh-btn.spinning svg {
-    animation: spin 0.9s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .usage-footer {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border);
-    font-size: 10px;
-    color: var(--text-muted);
-    text-align: center;
-    letter-spacing: 0.01em;
-  }
-  .source-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 3px var(--warning-dim); }
-  .source-dot.fresh { background: var(--success); box-shadow: 0 0 0 3px var(--success-dim); }
-  .source-separator { color: var(--border-hover); }
-  .quota-list {
-    display: flex;
-    flex-direction: column;
-  }
-  .quota-row {
-    min-width: 0;
-    padding: 8px 2px 13px;
-    border-bottom: 1px solid var(--border);
-  }
-  .quota-row:first-child { padding-top: 0; }
-  .credits-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    padding: 14px 2px 5px;
-  }
-  .credits-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .credits-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-  .credits-value {
-    flex-shrink: 0;
-    font-size: clamp(22px, 3vw, 28px);
-    line-height: 1;
-    letter-spacing: var(--letter-tighter);
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-  }
-  .credits-meta { color: var(--text-muted); font-size: var(--fs-sm); }
-
-  .extra-usage {
-    margin-top: 16px;
-    padding: 14px;
-    background: var(--bg-elevated);
-    border-radius: var(--radius-md);
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .extra-header { display: flex; justify-content: space-between; align-items: center; }
-  .extra-title {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .extra-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    padding: 3px 9px;
-    border-radius: 99px;
-  }
-  .extra-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
-  .extra-badge.on { color: var(--success); background: var(--success-dim); border-color: transparent; }
-  .extra-badge.on .extra-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-glow); }
-
-  .extra-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .extra-cell { display: flex; flex-direction: column; gap: 2px; }
-  .extra-cell-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-  .extra-cell-val {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-  }
-  .extra-cell-meta { font-size: 11px; color: var(--text-muted); }
-
-  .breakdown-table { display: flex; flex-direction: column; gap: 8px; }
-  .bd-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-  .bd-row.total { font-weight: 700; padding-top: 4px; }
-  .bd-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .bd-label { flex: 1; color: var(--text-secondary); }
-  .bd-row.total .bd-label { color: var(--text-primary); }
-  .bd-val { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; min-width: 60px; text-align: right; }
-  .bd-divider { height: 1px; background: var(--border); margin: 4px 0; }
-  .bd-metrics { display: flex; gap: 20px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
-  .bd-metrics strong { color: var(--text-primary); }
-  .bd-source { font-style: italic; color: var(--text-muted); }
-
-  .consumption-grid { display: flex; flex-direction: column; gap: 12px; }
-  .cons-row { display: flex; align-items: center; gap: 10px; }
-  .cons-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--text-secondary); min-width: 90px; }
-  .cons-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .cons-bar-track { flex: 1; height: 10px; background: var(--bg-elevated); border-radius: 99px; overflow: hidden; }
-  .cons-bar-fill { height: 100%; border-radius: 99px; transition: width 0.5s var(--ease); }
-  .cons-val { font-size: 12px; font-weight: 700; color: var(--text-primary); min-width: 55px; text-align: right; font-variant-numeric: tabular-nums; }
-  .cons-total { margin-top: 10px; font-size: 12px; color: var(--text-muted); text-align: right; font-weight: 600; }
-
-  .model-list { display: flex; flex-direction: column; gap: 4px; }
-  .model-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: var(--radius-sm); transition: background 0.15s var(--ease); }
-  .model-row:hover { background: var(--bg-elevated); }
-  .model-info { display: flex; flex-direction: column; gap: 2px; }
-  .model-name { font-weight: 600; font-size: 13px; }
-  .model-meta { font-size: 11px; color: var(--text-muted); }
-  .model-cost { font-weight: 700; font-size: 14px; color: var(--accent); font-variant-numeric: tabular-nums; }
-
-  .project-table { font-size: 12px; --pt-cols: 2fr 80px 90px 90px 90px; }
-  .pt-header { display: grid; grid-template-columns: var(--pt-cols); gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
-  .pt-row { display: grid; grid-template-columns: var(--pt-cols); gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); transition: background 0.15s var(--ease); }
-  .pt-row:hover { background: var(--bg-elevated); }
-  .pt-col { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pt-col.name { text-align: left; font-weight: 500; color: var(--text-primary); }
-  .pt-col.cost { font-weight: 700; color: var(--accent); }
-
-  .session-list { display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; }
-  .empty-state { text-align: center; padding: 44px 20px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-  .empty-icon {
-    width: 48px; height: 48px;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--text-muted);
-    background: var(--bg-elevated);
-    border-radius: 50%;
-    margin-bottom: 6px;
-  }
-  .empty-text { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
-  .empty-sub { font-size: 12px; color: var(--text-muted); }
-  .empty-hint { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
-
-  .recent-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; font-style: italic; }
-  .recent-table { font-size: 12px; --rt-cols: 2fr 1.5fr 90px 80px 80px; }
-  .rt-header { display: grid; grid-template-columns: var(--rt-cols); gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
-  .rt-row { display: grid; grid-template-columns: var(--rt-cols); gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); transition: background 0.15s var(--ease); }
-  .rt-row:hover { background: var(--bg-elevated); }
-  .rt-col { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rt-col.project { text-align: left; font-weight: 500; color: var(--text-primary); }
-  .rt-col.model { text-align: left; }
-  .rt-col.cost { font-weight: 700; color: var(--accent); }
-
-  .card { min-width: 0; }
-  .project-table, .recent-table { overflow-x: auto; overscroll-behavior-inline: contain; }
-  .project-table > *, .recent-table > * { min-width: 610px; }
-
   /* Give each live instance enough room before the rest of the dashboard collapses. */
   @media (max-width: 1180px) {
     .instance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1024,30 +762,35 @@
     .instance-tab:nth-child(n + 3) { border-top: 1px solid var(--divider); }
   }
 
-  @media (max-width: 1050px) {
+  @media (max-width: 920px) {
+    .home-grid { grid-template-columns: 1fr; }
     .signal-grid { grid-template-columns: 1fr; }
-    .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .charts-row { grid-template-columns: 1fr; }
+    .telemetry-ledger { border-top: 1px solid var(--divider); border-left: 0; }
+  }
+
+  @media (max-width: 800px) {
+    .insight-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .heatmap-card { min-width: 0; }
   }
 
   @media (max-width: 620px) {
+    .work-now-head { align-items: flex-start; flex-direction: column; }
+    .analytics-alert { align-items: flex-start; flex-direction: column; }
+    .home-status { justify-content: flex-start; }
     .instance-grid { grid-template-columns: 1fr; }
     .instance-tab { border-right: 0; border-top: 1px solid var(--divider); }
     .instance-tab:first-child { border-top: 0; }
-    .stats-row { grid-template-columns: 1fr; }
-    .focus-panel { padding: 16px; }
-    .telemetry-ledger { padding: 0; border-left: 0; }
+    .focus-panel, .telemetry-ledger { padding: 17px; }
     .focus-head { flex-direction: column; }
     .focus-values { grid-template-columns: 1fr; }
-    .focus-values > div { padding: 12px 0; border-right: 0; border-bottom: 1px solid var(--divider); }
+    .focus-values > div { padding: 12px 14px; border-right: 0; border-bottom: 1px solid var(--divider); }
     .focus-values > div:last-child { border-bottom: 0; }
     .focus-meta span:not(:first-child)::before { display: none; }
     .focus-chart-head { align-items: flex-start; flex-direction: column; }
     .focus-chart-head span { text-align: left; }
     .mix-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .card { padding: 14px; }
     .insight-row { grid-template-columns: 1fr; }
-    .extra-grid { grid-template-columns: 1fr; }
-    .bd-metrics { flex-wrap: wrap; gap: 8px 14px; }
+    .insight-card { padding: 10px 0; border-top: 1px solid var(--divider); border-left: 0; }
+    .insight-card:first-child { border-top: 0; }
   }
 </style>

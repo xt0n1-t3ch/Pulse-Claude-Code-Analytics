@@ -280,11 +280,14 @@
   .tl-read-meta { color: var(--text-secondary); }
 
   .tl-legend {
-    display: inline-flex;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     font-size: var(--fs-sm);
     color: var(--text-secondary);
+    overflow-wrap: anywhere;
   }
   .tl-legend-quiet { color: var(--text-muted); }
   .tl-legend-mark {

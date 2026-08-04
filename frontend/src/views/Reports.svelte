@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import IconCopy from "@tabler/icons-svelte/icons/copy";
+  import IconDownload from "@tabler/icons-svelte/icons/download";
   import {
     getReportsBundle,
     copyFixPrompt,
@@ -16,11 +18,19 @@
     type ProviderCapabilities,
     type Severity,
   } from "../lib/api";
-  import { addToast } from "../lib/stores";
+  import { addToast, selectedAnalyticsProviderScope } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
   import { fmtCost } from "../lib/utils";
   import CostTimeline from "../components/CostTimeline.svelte";
   import type { DailyCostPoint } from "../lib/api";
+  import SegmentedControl from "../components/SegmentedControl.svelte";
+
+  const windowOptions = [
+    { value: "7", label: "7d" },
+    { value: "30", label: "30d" },
+    { value: "90", label: "90d" },
+    { value: "365", label: "1y" },
+  ];
 
   let cache = $state<CacheHealthReport | null>(null);
   let recs = $state<Recommendation[]>([]);
@@ -36,23 +46,41 @@
     extra_usage: false,
   });
   let dailyCosts = $state<DailyCostPoint[]>([]);
+  let totalSessions = $state(0);
   let loading = $state(true);
   let hasLoaded = $state(false);
+  let loadError = $state<string | null>(null);
   let days = $state(30);
   let severityFilter = $state<"all" | Severity>("all");
-  let inFlight = false;
-  let pendingDays: number | null = null;
+  let reportRequest = 0;
+
+  function clearReportData(): void {
+    cache = null;
+    recs = [];
+    inflections = [];
+    routing = null;
+    tools = null;
+    prompts = null;
+    health = null;
+    trace = null;
+    dailyCosts = [];
+    totalSessions = 0;
+  }
 
   async function loadReports(): Promise<void> {
-    if (inFlight) {
-      pendingDays = days;
-      return;
-    }
-    inFlight = true;
+    const request = ++reportRequest;
     loading = true;
+    loadError = null;
+    clearReportData();
     const requestedDays = days;
+    const requestedProvider = $selectedAnalyticsProviderScope;
     try {
-      const bundle = await getReportsBundle(requestedDays);
+      const bundle = await getReportsBundle(requestedDays, undefined, requestedProvider);
+      if (
+        request !== reportRequest
+        || requestedDays !== days
+        || requestedProvider !== $selectedAnalyticsProviderScope
+      ) return;
       capabilities = bundle.capabilities;
       cache = bundle.cache_health;
       recs = bundle.recommendations;
@@ -63,27 +91,30 @@
       health = bundle.session_health;
       trace = bundle.trace_overview;
       dailyCosts = bundle.daily_costs ?? [];
+      totalSessions = bundle.total_sessions;
     } catch (err) {
-      console.warn("reports_bundle failed:", err);
+      if (
+        request !== reportRequest
+        || requestedDays !== days
+        || requestedProvider !== $selectedAnalyticsProviderScope
+      ) return;
+      const windowLabel = requestedDays === 365 ? "1-year" : `${requestedDays}-day`;
+      loadError = err instanceof Error && err.message
+        ? `${windowLabel} report unavailable. ${err.message}`
+        : `${windowLabel} report unavailable. Pulse could not build the report.`;
     } finally {
-      loading = false;
-      hasLoaded = true;
-      inFlight = false;
-      if (pendingDays !== null && pendingDays !== requestedDays) {
-        pendingDays = null;
-        loadReports();
-      } else {
-        pendingDays = null;
+      if (request === reportRequest) {
+        loading = false;
+        hasLoaded = true;
       }
     }
   }
 
-  onMount(loadReports);
-
-  let lastDays = $state<number | undefined>(undefined);
+  let lastReloadKey = $state("");
   $effect(() => {
-    if (days !== lastDays) {
-      lastDays = days;
+    const key = `${days}:${$selectedAnalyticsProviderScope}`;
+    if (key !== lastReloadKey) {
+      lastReloadKey = key;
       loadReports();
     }
   });
@@ -103,7 +134,7 @@
       return;
     }
     try {
-      const prompt = await copyFixPrompt(rec.id);
+      const prompt = await copyFixPrompt(rec.id, days, $selectedAnalyticsProviderScope);
       await navigator.clipboard.writeText(prompt || rec.fix_prompt);
       addToast(`Fix prompt copied — paste into ${$providerProfile.productName}.`, "success", 3500);
     } catch (err) {
@@ -113,7 +144,7 @@
 
   async function handleCopyMarkdown(): Promise<void> {
     try {
-      const md = await generateMarkdownReport(days);
+      const md = await generateMarkdownReport(days, undefined, $selectedAnalyticsProviderScope);
       await navigator.clipboard.writeText(md);
       addToast("Markdown report copied to clipboard.", "success", 3000);
     } catch (err) {
@@ -123,7 +154,7 @@
 
   async function handleDownloadHtml(): Promise<void> {
     try {
-      const html = await generateHtmlReport(days);
+      const html = await generateHtmlReport(days, undefined, $selectedAnalyticsProviderScope);
       const stamp = new Date().toISOString().slice(0, 10);
       const defaultName = `pulse-report-${stamp}.html`;
 
@@ -187,32 +218,49 @@
   let inflectionShare = $derived(
     dailyCosts.length === 0 ? 0 : (inflectionDayCount / dailyCosts.length) * 100,
   );
+  let windowHasSessions = $derived(
+    totalSessions > 0 || dailyCosts.some((point) => point.sessions > 0),
+  );
+  let timelineSessions = $derived(
+    dailyCosts.reduce((sum, point) => sum + point.sessions, 0),
+  );
+  let timelinePricedSessions = $derived(
+    dailyCosts.reduce((sum, point) => sum + point.priced_sessions, 0),
+  );
+  let timelineCostBasis = $derived.by(() => {
+    const activePoints = dailyCosts.filter((point) => point.sessions > 0);
+    if (activePoints.length === 0 || timelinePricedSessions === 0) return "unavailable";
+    if (
+      timelinePricedSessions < timelineSessions
+      || activePoints.some((point) => point.cost_basis === "partial")
+    ) return "partial";
+    if (activePoints.some((point) => point.cost_basis === "estimated")) return "estimated";
+    return "exact";
+  });
+  let timelineCostSources = $derived(
+    [...new Set(dailyCosts.flatMap((point) => point.cost_sources))],
+  );
 </script>
 
-<div class="reports-view">
+<div class="reports-view app-view">
   <header class="view-header">
     <div class="view-title-group">
       <h2 class="view-title">Reports</h2>
       <p class="view-sub">{days === 365 ? "1 year" : `${days} days`} · selected analysis window</p>
     </div>
     <div class="controls">
-      <div class="segmented">
-        {#each [7, 30, 90, 365] as d}
-          <button
-            class="seg-btn"
-            class:active={days === d}
-            onclick={() => (days = d)}
-          >
-            {d === 365 ? "1y" : `${d}d`}
-          </button>
-        {/each}
-      </div>
-      <button class="btn-secondary" onclick={handleCopyMarkdown}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+      <SegmentedControl
+        options={windowOptions}
+        value={String(days)}
+        onchange={(value) => (days = Number(value))}
+        ariaLabel="Analysis window"
+      />
+      <button class="btn-secondary" onclick={handleCopyMarkdown} disabled={loading || !!loadError}>
+        <IconCopy size={14} stroke={1.8} aria-hidden="true" />
         Copy Markdown
       </button>
-      <button class="btn-primary" onclick={handleDownloadHtml}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <button class="btn-primary" onclick={handleDownloadHtml} disabled={loading || !!loadError}>
+        <IconDownload size={14} stroke={1.8} aria-hidden="true" />
         Download HTML
       </button>
     </div>
@@ -225,6 +273,12 @@
       <div class="skeleton row"></div>
       <div class="skeleton row short"></div>
     </div>
+  {:else if loadError}
+    <section class="report-error" role="alert">
+      <strong>{days === 365 ? "1-year" : `${days}-day`} report unavailable</strong>
+      <span>{loadError.replace(/^[^.]+\.\s*/, "")}</span>
+      <button type="button" onclick={loadReports}>Retry</button>
+    </section>
   {:else}
     {#if loading && hasLoaded}
       <div class="reload-banner" role="status">
@@ -233,31 +287,59 @@
       </div>
     {/if}
     <div class="report-body" class:reloading={loading && hasLoaded}>
+    {#if !windowHasSessions}
+      <section class="report-empty">
+        <strong>No sessions in this {days === 365 ? "1-year" : `${days}-day`} window.</strong>
+        <span>No saved sessions fall inside the selected dates. Pick a wider window to see more.</span>
+      </section>
+    {:else}
     <section class="timeline-hero">
       <div class="th-head">
         <div class="th-titles">
-          <h3 class="th-title">Cost Timeline</h3>
+          <h3 class="th-title">Cost timeline</h3>
           <p class="th-sub">Daily spend across the selected window, with cost inflections marked on the curve.</p>
+        </div>
+        <div class="cost-coverage" data-basis={timelineCostBasis}>
+          <strong>
+            {timelineCostBasis === "unavailable"
+              ? "Cost unavailable"
+              : timelineCostBasis === "partial"
+                ? "Known-cost coverage"
+                : timelineCostBasis === "estimated"
+                  ? "API-equivalent estimate"
+                  : "Complete coverage"}
+          </strong>
+          <span>
+            {timelinePricedSessions} of {timelineSessions} sessions priced
+            {timelineCostSources.length > 0 ? ` · ${timelineCostSources.join(", ")}` : ""}
+          </span>
         </div>
       </div>
 
-      <CostTimeline points={dailyCosts} {inflections} />
+      {#if timelineCostBasis === "unavailable"}
+        <div class="cost-unavailable">
+          <strong>No verified monetary total for this window</strong>
+          <span>Session and workflow analysis remain available below; Pulse will not turn unknown cost into $0.00.</span>
+        </div>
+      {:else}
+        <CostTimeline points={dailyCosts} {inflections} />
+      {/if}
 
       <div class="th-stats">
         <div class="th-stat">
-          <span class="ths-label">Total cost</span>
-          <span class="ths-value">{fmtCost(totalCost)}</span>
+          <span class="ths-label">{timelineCostBasis === "partial" ? "Known cost" : timelineCostBasis === "estimated" ? "Estimated cost" : "Total cost"}</span>
+          <span class="ths-value">{timelineCostBasis === "unavailable" ? "—" : fmtCost(totalCost)}</span>
           <span class="ths-meta">{dailyCosts.length} days analysed</span>
         </div>
         <div class="th-stat">
           <span class="ths-label">Avg active day</span>
-          <span class="ths-value">{fmtCost(avgDailyCost)}</span>
+          <span class="ths-value">{timelineCostBasis === "unavailable" ? "—" : fmtCost(avgDailyCost)}</span>
           <span class="ths-meta">{activeDays} {activeDays === 1 ? "day" : "days"} with sessions</span>
         </div>
         <div class="th-stat">
           <span class="ths-label">Peak day</span>
-          <span class="ths-value">{peakDay ? fmtCost(peakDay.cost) : "—"}</span>
-          <span class="ths-meta">{peakDay && peakDay.cost > 0 ? peakDay.date : "no spend yet"}</span>
+          <span class="ths-value">{timelineCostBasis !== "unavailable" && peakDay ? fmtCost(peakDay.cost) : "—"}</span>
+          <span class="ths-meta">{timelineCostBasis !== "unavailable" && peakDay && peakDay.cost > 0 ? peakDay.date : "not reported"}</span>
         </div>
         <div class="th-stat">
           <span class="ths-label">Inflection days</span>
@@ -272,7 +354,7 @@
         <div class="hero-left">
           <div
             class="grade-letter"
-            style="color: {cache.color}; text-shadow: 0 0 48px {cache.color}44;"
+            style="color: {cache.color}; text-shadow: 0 0 24px {cache.color}22;"
           >
             {cache.grade}
           </div>
@@ -311,8 +393,11 @@
     <div class="two-col" class:single={!(capabilities.model_routing && routing)}>
       {#if routing && capabilities.model_routing}
         <section class="card">
-          <h3 class="card-title">Model Routing</h3>
+          <h3 class="card-title">Model routing</h3>
           <p class="card-sub">{routing.diagnosis}</p>
+          <p class="routing-coverage">
+            {routing.priced_sessions} of {routing.total_sessions} sessions priced · {routing.cost_basis.replace("_", " ")}
+          </p>
           <div class="routing-bars">
             {#each [
               { label: "Opus", stats: routing.opus, color: "var(--accent)" },
@@ -341,17 +426,19 @@
               {/if}
             {/each}
           </div>
-          {#if routing.estimated_savings_if_rerouted > 0}
+          {#if routing.savings_estimate_available && routing.estimated_savings_if_rerouted > 0}
             <div class="savings-hint">
-              <span>Potential savings if ~30% of Opus moves to Sonnet</span>
+              <span>Estimated rerouting opportunity from priced sessions</span>
               <strong>{fmtCost(routing.estimated_savings_if_rerouted)}</strong>
             </div>
+          {:else if !routing.savings_estimate_available}
+            <p class="routing-coverage">Savings are withheld until cost coverage is exact.</p>
           {/if}
         </section>
       {/if}
 
       <section class="card">
-        <h3 class="card-title">Inflection Detail</h3>
+        <h3 class="card-title">Inflection detail</h3>
         <p class="card-sub">
           The days marked on the timeline, with what moved on each one.
         </p>
@@ -389,7 +476,7 @@
       <section class="card trace-card">
         <header class="trace-head">
           <div>
-            <h3 class="card-title">Session Topology</h3>
+            <h3 class="card-title">Session topology</h3>
             <p class="card-sub">
               Telemetry shape across {trace.total_sessions} session{trace.total_sessions === 1 ? "" : "s"} in the last {days}d
               · {trace.provider_display} · {trace.instruction_file}
@@ -433,7 +520,7 @@
       <div class="grid-2" class:single={!(healthOn && toolsOn)}>
         {#if health && health.available}
           <section class="card">
-            <h3 class="card-title">Session Health</h3>
+            <h3 class="card-title">Session health</h3>
             <div class="health-hero">
               <div class="health-grade grade-{health.grade.toLowerCase()}">{health.grade}</div>
               <div class="health-score">{health.health_score}<span class="health-score-sub">/100</span></div>
@@ -452,7 +539,7 @@
 
         {#if tools && tools.available}
           <section class="card">
-            <h3 class="card-title">Tool Frequency</h3>
+            <h3 class="card-title">Tool frequency</h3>
             <p class="card-sub">{tools.diagnosis}</p>
             <div class="mini-grid">
               <div class="mini-kv"><span>Total calls</span><strong>{tools.total_tool_calls.toLocaleString()}</strong></div>
@@ -480,7 +567,7 @@
 
     {#if prompts && prompts.available}
       <section class="card">
-        <h3 class="card-title">Prompt Complexity</h3>
+        <h3 class="card-title">Prompt complexity</h3>
         <p class="card-sub">{prompts.diagnosis}</p>
         <div class="mini-grid four">
           <div class="mini-kv"><span>Prompts analyzed</span><strong>{prompts.prompts_analyzed.toLocaleString()}</strong></div>
@@ -510,9 +597,10 @@
         <div>
           <h3 class="card-title">Recommendations</h3>
           <p class="card-sub">
-            Actionable findings from the current {days === 365 ? "1-year" : `${days}-day`} saved-session window. No-action duplicates are omitted.
+            Things worth acting on from your last {days === 365 ? "year" : `${days} days`} of sessions.
           </p>
         </div>
+        {#if actionableRecs.length > 0}
         <div class="severity-tabs">
           {#each severityTabs as t}
             <button
@@ -529,13 +617,16 @@
             </button>
           {/each}
         </div>
+        {/if}
       </header>
 
       {#if !hasLoaded}
         <div class="empty-inline">Loading…</div>
       {:else if actionableRecs.length === 0}
-        <div class="empty-inline">
-          No actionable findings in this window.
+        <div class="empty-good">
+          <span class="eg-check" aria-hidden="true">✓</span>
+          <strong>You're all set</strong>
+          <span>Nothing needs attention in this window.</span>
         </div>
       {:else if sortedRecs.length === 0}
         <div class="empty-inline">No items match this filter.</div>
@@ -566,7 +657,7 @@
               {#if rec.fix_prompt}
                 <div class="rec-footer">
                   <button class="btn-fix" onclick={() => handleFix(rec)}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                    <IconCopy size={13} stroke={2.2} aria-hidden="true" />
                     Fix with {$providerProfile.productName}
                   </button>
                 </div>
@@ -576,6 +667,7 @@
         </ul>
       {/if}
     </section>
+    {/if}
     </div>
   {/if}
 </div>
@@ -584,7 +676,7 @@
   .reports-view {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: var(--page-gap);
   }
 
   .view-header {
@@ -613,39 +705,6 @@
     display: flex;
     gap: 8px;
     align-items: center;
-  }
-
-  .segmented {
-    display: inline-flex;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 2px;
-    gap: 2px;
-  }
-
-  .seg-btn {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    padding: 4px 12px;
-    border-radius: calc(var(--radius-md) - 2px);
-    background: transparent;
-    border: 1px solid transparent;
-    cursor: pointer;
-    transition: all 0.15s var(--ease);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .seg-btn:hover {
-    color: var(--text-primary);
-  }
-
-  .seg-btn.active {
-    color: var(--accent);
-    background: var(--accent-dim);
   }
 
   .count-pill {
@@ -690,6 +749,12 @@
   .btn-secondary:hover {
     color: var(--accent);
     border-color: var(--accent);
+  }
+  .btn-primary:disabled,
+  .btn-secondary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: none;
   }
 
   .card {
@@ -788,6 +853,29 @@
     text-align: center;
   }
 
+  .empty-good {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 32px 18px;
+    text-align: center;
+  }
+  .empty-good .eg-check {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    margin-bottom: 4px;
+    border-radius: var(--radius-full);
+    color: var(--success);
+    background: var(--success-dim);
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .empty-good strong { color: var(--text-primary); font-size: var(--fs-md); }
+  .empty-good span { color: var(--text-muted); font-size: var(--fs-sm); }
+
   .two-col {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -804,13 +892,35 @@
     }
   }
 
+  @media (max-width: 700px) {
+    .view-header { flex-direction: column; }
+    .controls { width: 100%; flex-wrap: wrap; align-items: stretch; }
+    .btn-primary, .btn-secondary { flex: 1; justify-content: center; }
+  }
+
   .hero-card {
     display: grid;
     grid-template-columns: 260px 1fr;
     gap: 24px;
     align-items: center;
     padding: 24px;
-    background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
+    /* Matte hero surface with a subtle sheen, not a two-stop gray gradient. */
+    position: relative;
+    background:
+      var(--panel-sheen-strong),
+      var(--surface-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-2);
+  }
+  .hero-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: var(--panel-edge);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    pointer-events: none;
   }
 
   @media (max-width: 820px) {
@@ -1249,7 +1359,7 @@
   .prompt-preview { font-size: 11px; color: var(--text-secondary); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
 
   /* Session Topology (trace) */
-  .trace-card { background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%); }
+  .trace-card { background: var(--panel-sheen), var(--surface-panel); box-shadow: var(--elev-1); }
   .trace-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
   .trace-badge { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; padding: 8px 14px; background: var(--accent-dim); border: 1px solid var(--accent); border-radius: var(--radius-md); }
   .trace-badge-num { font-size: 20px; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -0.01em; }
@@ -1264,4 +1374,52 @@
   .trace-tool-bar-wrap { background: var(--bg-primary); height: 6px; border-radius: 99px; overflow: hidden; }
   .trace-tool-bar { background: var(--accent); height: 100%; border-radius: 99px; opacity: 0.85; }
   .trace-tool-count { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 11px; font-weight: 600; }
+
+  @media (max-width: 620px) {
+    .hero-stats,
+    .mini-grid,
+    .mini-grid.four {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  .report-error {
+    min-height: 220px;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 9px;
+    padding: 32px;
+    text-align: center;
+    border-block: 1px solid var(--border);
+  }
+  .report-error strong { color: var(--danger); font-size: var(--fs-lg); }
+  .report-error span {
+    max-width: 560px;
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    line-height: 1.55;
+  }
+  .report-error button {
+    margin-top: 6px;
+    padding: 7px 14px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .report-empty {
+    min-height: min(430px, 48vh);
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 8px;
+    padding: 34px;
+    color: var(--text-muted);
+    text-align: center;
+    border-block: 1px solid var(--border);
+  }
+  .report-empty strong { color: var(--text-primary); font-size: var(--fs-lg); }
+  .report-empty span { max-width: 580px; font-size: var(--fs-sm); line-height: 1.55; }
 </style>
