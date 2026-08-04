@@ -17,11 +17,12 @@ fn known_session_cost(session: &db::HistoricalSession) -> Option<f64> {
 }
 
 fn merge_cost_basis(current: db::CostBasis, next: db::CostBasis) -> db::CostBasis {
-    use db::CostBasis::{Exact, Partial, Unavailable};
+    use db::CostBasis::{Estimated, Exact, Partial, Unavailable};
     match (current, next) {
         (Unavailable, basis) => basis,
         (basis, Unavailable) => basis,
         (Exact, Exact) => Exact,
+        (Estimated, Estimated) => Estimated,
         _ => Partial,
     }
 }
@@ -1796,6 +1797,18 @@ mod tests {
         assert!(!fragment.contains("https://evil.example"));
         assert!(fragment.contains("&lt;script&gt;"));
         assert!(fragment.contains("hxxps://evil.example"));
+    }
+
+    #[test]
+    fn homogeneous_estimated_costs_remain_estimated() {
+        assert_eq!(
+            merge_cost_basis(db::CostBasis::Estimated, db::CostBasis::Estimated),
+            db::CostBasis::Estimated
+        );
+        assert_eq!(
+            merge_cost_basis(db::CostBasis::Exact, db::CostBasis::Estimated),
+            db::CostBasis::Partial
+        );
     }
 
     #[test]

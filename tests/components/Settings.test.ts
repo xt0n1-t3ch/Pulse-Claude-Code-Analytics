@@ -40,7 +40,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     setActiveProvider: (provider: string) => setActiveProvider(provider),
     getProviderCopy: () => getProviderCopy(),
     clearHistory: () => clearHistory(),
-    exportAllData: () => exportAllData(),
+    exportAllData: (providerScope?: string) => exportAllData(providerScope),
   };
 });
 
@@ -64,6 +64,7 @@ describe("Settings.svelte", () => {
     setActiveProvider.mockResolvedValue(undefined);
     getProviderCopy.mockResolvedValue(null);
     clearHistory.mockClear();
+    exportAllData.mockClear();
     const { health, rateLimits, planInfo } = await import("@/lib/stores");
     const { provider } = await import("@/lib/provider");
     provider.set("claude");
@@ -98,6 +99,18 @@ describe("Settings.svelte", () => {
     expect(planSelect).toBeTruthy();
     expect(planSelect?.textContent).toContain("Max 20x");
     expect(planSelect?.textContent).not.toContain("Auto-detect");
+  });
+
+  it("exports the selected analytics scope", async () => {
+    const { selectedAnalyticsProviderScope } = await import("@/lib/stores");
+    selectedAnalyticsProviderScope.set("all");
+    const { getByRole } = render((await import("@/views/Settings.svelte")).default);
+    const exportButton = getByRole("button", { name: "Export JSON" });
+    await waitFor(() => expect((exportButton as HTMLButtonElement).disabled).toBe(false));
+
+    await fireEvent.click(exportButton);
+
+    await waitFor(() => expect(exportAllData).toHaveBeenCalledWith("all"));
   });
 
   it("never combines the active provider with a stale plan from another provider", async () => {

@@ -409,30 +409,31 @@ fn dispatch(target: &BridgeTarget) -> Result<String, DispatchError> {
             target.days,
             project.as_deref(),
         )),
-        "export_all_data" => serialize(crate::commands::export_all_data()),
-        "get_cache_health" => {
-            let sessions = crate::commands::analyzer_sessions_for(days);
-            serialize(crate::analyzers::cache_health::analyze_for_provider(
-                crate::commands::analyzer_provider_for_bridge(),
-                &sessions,
-            ))
-        }
-        "get_inflection_points" => {
-            let sessions = crate::commands::analyzer_sessions_for(days);
-            serialize(crate::analyzers::inflection::detect_for_provider(
-                crate::commands::analyzer_provider_for_bridge(),
-                &sessions,
-            ))
-        }
-        "get_model_routing" => {
-            let provider = crate::commands::analyzer_provider_for_bridge();
-            let report = provider.capabilities().model_routing.then(|| {
-                crate::analyzers::model_routing::analyze(&crate::commands::analyzer_sessions_for(
-                    days,
-                ))
-            });
-            serialize(report)
-        }
+        "export_all_data" => serialize(crate::commands::export_all_data(target.provider.clone())),
+        "get_cache_health" => serialize(
+            &crate::commands::reports_bundle_blocking(
+                days,
+                project.clone(),
+                target.provider.clone(),
+            )
+            .cache_health,
+        ),
+        "get_inflection_points" => serialize(
+            &crate::commands::reports_bundle_blocking(
+                days,
+                project.clone(),
+                target.provider.clone(),
+            )
+            .inflection_points,
+        ),
+        "get_model_routing" => serialize(
+            &crate::commands::reports_bundle_blocking(
+                days,
+                project.clone(),
+                target.provider.clone(),
+            )
+            .model_routing,
+        ),
         "get_recommendations" => serialize(
             &crate::commands::reports_bundle_blocking(days, project, target.provider.clone())
                 .recommendations,

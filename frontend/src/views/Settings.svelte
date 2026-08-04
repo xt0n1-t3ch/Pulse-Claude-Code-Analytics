@@ -186,7 +186,7 @@
 
   async function handleExport(): Promise<void> {
     try {
-      const data = await exportAllData();
+      const data = await exportAllData($selectedAnalyticsProviderScope);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

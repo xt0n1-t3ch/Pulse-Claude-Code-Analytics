@@ -504,6 +504,7 @@ fn independently_probe_access(
     codex_usage_latest: &Arc<Mutex<Option<Result<AccountUsageReading, String>>>>,
     api_probe_cache: &mut ApiProbeCache,
     force_refresh: bool,
+    active_provider: Provider,
 ) -> Vec<AccessRouteSnapshot> {
     if force_refresh {
         codex_usage_force.store(true, Ordering::Release);
@@ -512,7 +513,8 @@ fn independently_probe_access(
     // currently owns the UI/presence surface.
     let _ = codex_usage_trigger.try_send(());
 
-    let (claude_route, _, _, _, _) = claude_route_from_probe(usage_mgr, force_refresh);
+    let refresh_claude = force_refresh && active_provider != Provider::Claude;
+    let (claude_route, _, _, _, _) = claude_route_from_probe(usage_mgr, refresh_claude);
     let (codex_route, _, _) = codex_route_from_probe(codex_usage_latest);
     let openai_route = api_probe_route(
         "openai",
@@ -919,6 +921,7 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                 &codex_usage_latest,
                 &mut api_probe_cache,
                 force_refresh,
+                provider,
             );
             if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
                 codex_config = fresh;
@@ -3876,8 +3879,8 @@ pub fn get_model_distribution_v2(
 }
 
 #[tauri::command]
-pub fn export_all_data() -> serde_json::Value {
-    crate::db::export_all_data()
+pub fn export_all_data(provider: Option<String>) -> serde_json::Value {
+    crate::db::export_all_data_scoped(provider.as_deref())
 }
 
 #[tauri::command]
@@ -3926,36 +3929,6 @@ where
     tauri::async_runtime::spawn_blocking(work)
         .await
         .expect("analyzer blocking task panicked")
-}
-
-#[cfg(debug_assertions)]
-fn analyzer_sessions(days: Option<i64>) -> Vec<crate::db::HistoricalSession> {
-    crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
-}
-
-/// Analyzer session page for a fixed window, exposed for the debug-only dev
-/// bridge so it can answer analyzer commands without an async runtime.
-#[cfg(debug_assertions)]
-pub fn analyzer_sessions_for(days: i64) -> Vec<crate::db::HistoricalSession> {
-    analyzer_sessions(Some(days))
-}
-
-/// Active analyzer provider, exposed for the debug-only dev bridge.
-#[cfg(debug_assertions)]
-pub fn analyzer_provider_for_bridge() -> Provider {
-    analyzer_provider()
-}
-
-/// Shared synchronous recommendation builder used by the debug bridge. The
-/// native command wraps the same function in `spawn_blocking`; the bridge is
-/// already off the UI thread and therefore must not invent a second data path.
-#[cfg(debug_assertions)]
-pub fn recommendations_for_bridge(
-    provider: Provider,
-    sessions: &[crate::db::HistoricalSession],
-    traces: &std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace>,
-) -> Vec<crate::analyzers::recommendations::Recommendation> {
-    recommendations_from_traces(provider, sessions, traces)
 }
 
 fn analyzer_roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
@@ -4057,39 +4030,6 @@ pub async fn copy_fix_prompt(
             .unwrap_or_default()
     })
     .await
-}
-
-#[cfg(debug_assertions)]
-fn recommendations_from_traces(
-    provider: Provider,
-    sessions: &[crate::db::HistoricalSession],
-    traces: &std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace>,
-) -> Vec<crate::analyzers::recommendations::Recommendation> {
-    let cache = crate::analyzers::cache_health::analyze_for_provider(provider, sessions);
-    let routing = provider
-        .capabilities()
-        .model_routing
-        .then(|| crate::analyzers::model_routing::analyze(sessions));
-    let inflections = crate::analyzers::inflection::detect_for_provider(provider, sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(sessions, traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(sessions, traces);
-    let session_health = crate::analyzers::session_health::analyze(
-        sessions,
-        traces,
-        &tool_frequency,
-        &prompt_complexity,
-    );
-    let ctx = crate::analyzers::recommendations::AnalysisContext {
-        provider,
-        sessions,
-        cache: &cache,
-        routing: routing.as_ref(),
-        inflections: &inflections,
-        tool_frequency: Some(&tool_frequency),
-        prompt_complexity: Some(&prompt_complexity),
-        session_health: Some(&session_health),
-    };
-    crate::analyzers::recommendations::generate(&ctx)
 }
 
 #[derive(Serialize)]

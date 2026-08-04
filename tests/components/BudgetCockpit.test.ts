@@ -186,6 +186,27 @@ describe("BudgetCockpit.svelte", () => {
     expect(container.querySelector(".ck-track")).toBeNull();
   });
 
+  it("shows known lower-bound spend when forecast coverage is partial", () => {
+    const { container, getByText } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({
+          spent_this_month: 85,
+          projected_monthly: 95,
+          daily_average: 3.5,
+          cost_basis: "partial",
+          sessions: 4,
+          priced_sessions: 3,
+        }),
+        budget: null,
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".ck-figure")?.textContent).toContain("$85");
+    expect(getByText(/Known spend only:/)).toBeTruthy();
+    expect(container.querySelector(".ck-track")).not.toBeNull();
+  });
+
   it("uses no hardcoded colours", async () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");

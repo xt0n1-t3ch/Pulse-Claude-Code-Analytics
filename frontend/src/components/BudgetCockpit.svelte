@@ -30,7 +30,9 @@
   let hasCap = $derived(cap > 0);
   let costAvailable = $derived(
     forecast !== null
-      && (forecast.cost_basis === "exact" || forecast.cost_basis === "estimated")
+      && (forecast.cost_basis === "exact"
+        || forecast.cost_basis === "estimated"
+        || forecast.cost_basis === "partial")
       && forecast.priced_sessions > 0,
   );
 
@@ -82,7 +84,8 @@
       return "No spend recorded this month yet.";
     }
     if (!hasCap) {
-      return `Averaging ${fmtCost(forecast.daily_average)}/day — on course for ${fmtCost(projected)} by month end.`;
+      const prefix = forecast.cost_basis === "partial" ? "Known spend only: " : "";
+      return `${prefix}averaging ${fmtCost(forecast.daily_average)}/day — on course for ${fmtCost(projected)} by month end.`;
     }
     if (status === "over") {
       return `Already ${fmtCost(spent - cap)} over the ${fmtCost(cap)} cap with ${forecast.days_in_month - forecast.days_elapsed} days left.`;

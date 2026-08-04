@@ -718,8 +718,8 @@ export function getModelDistribution(
     return invoke("get_model_distribution_v2", { days: days ?? null, provider: provider ?? null });
 }
 
-export function exportAllData(): Promise<Record<string, unknown>> {
-    return invoke("export_all_data");
+export function exportAllData(provider?: AnalyticsProviderScope): Promise<Record<string, unknown>> {
+    return invoke("export_all_data", { provider: provider ?? null });
 }
 
 export function clearHistory(provider?: AnalyticsProviderScope): Promise<number> {

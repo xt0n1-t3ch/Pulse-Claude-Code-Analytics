@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@testing-library/svelte";
+import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { get } from "svelte/store";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -76,6 +76,31 @@ describe("AccessSourceBar", () => {
     expect(container.textContent).toContain("Subscription");
     expect(container.textContent).toContain("API");
     expect(container.textContent).not.toContain("Anthropic");
+  });
+
+  it("treats a successful API authentication without quota counters as healthy", () => {
+    const api = route("openai-api", "open_ai_api", "authenticated_probe");
+    api.availability = "unavailable";
+    api.freshness = "unknown";
+    accessSnapshot.set({ routes: [api] });
+    backendConnection.set("live");
+
+    const { getByLabelText, getByText } = render(AccessSourceBar);
+
+    expect(getByLabelText("Authenticated")).toBeTruthy();
+    expect(getByText("All sources live")).toBeTruthy();
+  });
+
+  it("switches the active provider when the only source is auto-selected", async () => {
+    provider.set("claude");
+    accessSnapshot.set({ routes: [route("codex-sub", "codex_subscription")] });
+
+    render(AccessSourceBar);
+
+    await waitFor(() => {
+      expect(get(provider)).toBe("codex");
+      expect(get(selectedAccessSourceId)).toBe("codex-sub");
+    });
   });
 
   it("shows an honest empty state when no route has provider proof", () => {

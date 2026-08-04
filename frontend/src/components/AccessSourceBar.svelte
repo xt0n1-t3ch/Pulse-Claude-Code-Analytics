@@ -28,7 +28,7 @@
   $effect(() => {
     if (!$accessSnapshot) return;
     if ($selectedAccessSourceId === "all" && routes.length === 1) {
-      selectedAccessSourceId.set(routes[0].source.id);
+      void selectSource(routes[0]);
     }
     if ($selectedAccessSourceId !== "all" && !routes.some((route) => route.source.id === $selectedAccessSourceId)) {
       selectedAccessSourceId.set(routes.length > 1 ? "all" : routes[0]?.source.id ?? "all");
@@ -56,7 +56,12 @@
       }
       return { state: "waiting", label: "Not configured" };
     }
-    if (route.availability !== "available") return { state: "expired", label: "Unavailable" };
+    if (route.availability !== "available") {
+      if (route.source.proof === "authenticated_probe") {
+        return { state: "live", label: "Authenticated" };
+      }
+      return { state: "expired", label: "Unavailable" };
+    }
     return route.freshness === "fresh"
       ? { state: "live", label: "Live" }
       : { state: "stale", label: "Stale" };
@@ -107,6 +112,7 @@
 
   function diagnosticNeedsAttention(route: AccessRouteSnapshot): boolean {
     if (route.source.proof !== "none") {
+      if (route.source.proof === "authenticated_probe") return false;
       return route.availability !== "available" || route.freshness !== "fresh";
     }
     if (route.local_history?.available) return true;

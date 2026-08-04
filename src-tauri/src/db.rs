@@ -766,18 +766,6 @@ fn query_sessions(
         param_idx += 1;
     }
 
-    if let Some(min_cost) = min_cost {
-        sql.push_str(&format!(" AND known_cost >= ?{param_idx}"));
-        params_vec.push(Box::new(min_cost));
-        param_idx += 1;
-    }
-
-    if let Some(max_cost) = max_cost {
-        sql.push_str(&format!(" AND known_cost <= ?{param_idx}"));
-        params_vec.push(Box::new(max_cost));
-        param_idx += 1;
-    }
-
     if let Some(start_hour) = start_hour {
         sql.push_str(&format!(
             " AND CAST(strftime('%H', COALESCE({history_ts}, ''), 'localtime') AS INTEGER) >= ?{param_idx}"
@@ -802,7 +790,11 @@ fn query_sessions(
     // need. Defaulting it to 100 silently truncated totals: a 299-session
     // window reported the cost of its 100 newest sessions. SQLite treats a
     // negative LIMIT as unlimited.
-    let lim = limit.unwrap_or(-1);
+    let lim = if min_cost.is_some() || max_cost.is_some() {
+        -1
+    } else {
+        limit.unwrap_or(-1)
+    };
     sql.push_str(&format!(" LIMIT ?{param_idx}"));
     params_vec.push(Box::new(lim));
 
@@ -863,6 +855,14 @@ fn query_sessions(
     // from real tokens x published rates so cost views are complete instead of
     // blank. Provider-billed and exact rows are left untouched.
     apply_api_equivalent_estimates(&mut sessions);
+    sessions.retain(|session| {
+        let cost = session.known_cost;
+        min_cost.is_none_or(|minimum| cost.is_some_and(|value| value >= minimum))
+            && max_cost.is_none_or(|maximum| cost.is_some_and(|value| value <= maximum))
+    });
+    if let Some(limit) = limit {
+        sessions.truncate(limit.max(0) as usize);
+    }
     sessions
 }
 
@@ -1371,9 +1371,17 @@ pub fn search_sessions_scoped(
     let Ok(conn) = db().lock() else {
         return vec![];
     };
-
-    let lim = limit.unwrap_or(50);
     let provider = analytics_provider_scope(provider);
+    search_sessions_from_connection(&conn, &provider, query, limit)
+}
+
+fn search_sessions_from_connection(
+    conn: &Connection,
+    provider: &str,
+    query: &str,
+    limit: Option<i64>,
+) -> Vec<HistoricalSession> {
+    let lim = limit.unwrap_or(50);
     let sql = "SELECT s.id, s.provider, s.session_name, s.project, s.model, s.model_id, s.context_window, s.branch, s.effort,
             s.started_at, s.ended_at, s.duration_secs, COALESCE(s.known_cost, 0),
             s.cost_status, s.cost_source, s.known_cost,
@@ -1435,8 +1443,11 @@ pub fn search_sessions_scoped(
         })
         .ok();
 
-    rows.map(|r| r.filter_map(|x| x.ok()).collect())
-        .unwrap_or_default()
+    let mut sessions: Vec<HistoricalSession> = rows
+        .map(|r| r.filter_map(|x| x.ok()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    apply_api_equivalent_estimates(&mut sessions);
+    sessions
 }
 
 fn query_daily_stats(conn: &Connection, provider: &str, cutoff: &str) -> Vec<DailyStat> {
@@ -1524,33 +1535,22 @@ pub fn get_analytics_summary_scoped(provider: Option<&str>) -> AnalyticsSummary 
 }
 
 fn analytics_summary_from_connection(conn: &Connection, provider: &str) -> AnalyticsSummary {
-    let (total_sessions, total_cost, exact, partial, provider_billed, sources): (
-        i64,
-        f64,
-        i64,
-        i64,
-        i64,
-        Option<String>,
-    ) = conn
-        .query_row(
-            &format!(
-                "SELECT COUNT(*), COALESCE(SUM(known_cost), 0), {COST_COVERAGE_SQL}
-                 FROM sessions WHERE (?1 = 'all' OR provider = ?1)"
-            ),
-            params![provider],
-            |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            },
+    let sessions = query_sessions(
+        conn, provider, None, None, None, None, None, None, None, None, None, None,
+    );
+    let total_sessions = sessions.len() as i64;
+    let total_cost = sessions
+        .iter()
+        .filter_map(|session| session.known_cost)
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        .sum();
+    let coverage = summarize_cost_provenance(sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
         )
-        .unwrap_or((0, 0.0, 0, 0, 0, None));
-    let coverage = coverage_from_sql(total_sessions, exact, partial, provider_billed, sources);
+    }));
 
     let total_tokens: i64 = conn
         .query_row(
@@ -1838,7 +1838,12 @@ fn cost_forecast_from_connection(
                 // permanently blank.
                 if basis == CostBasis::Unavailable && stored_known.is_none() {
                     let row_provider: String = row.get(3)?;
-                    let model: String = row.get(5).or_else(|_| row.get::<_, String>(4))?;
+                    let model_id: String = row.get(5)?;
+                    let model = if model_id.trim().is_empty() {
+                        row.get::<_, String>(4)?
+                    } else {
+                        model_id
+                    };
                     if let Some(est) = estimate_api_equivalent_cost(
                         &row_provider,
                         &model,
@@ -2166,9 +2171,13 @@ fn query_daily_costs(
 }
 
 pub fn export_all_data() -> serde_json::Value {
-    let sessions = get_session_history(None, None, Some(10000));
-    let daily = get_daily_stats(Some(365));
-    let summary = get_analytics_summary();
+    export_all_data_scoped(None)
+}
+
+pub fn export_all_data_scoped(provider: Option<&str>) -> serde_json::Value {
+    let sessions = get_session_history_scoped(provider, None, None, Some(10000));
+    let daily = get_daily_stats_scoped(provider, Some(365));
+    let summary = get_analytics_summary_scoped(provider);
     serde_json::json!({
         "exported_at": Utc::now().to_rfc3339(),
         "summary": summary,
@@ -2908,6 +2917,59 @@ mod tests {
             forecast.cost_sources,
             vec!["session-calculated".to_string()]
         );
+    }
+
+    #[test]
+    fn reconstructed_costs_survive_summary_search_filter_and_blank_model_forecast() {
+        let conn = test_conn();
+        let now = Utc
+            .with_ymd_and_hms(2026, 8, 15, 12, 0, 0)
+            .single()
+            .expect("fixed date");
+        conn.execute(
+            "INSERT INTO sessions (
+                id, provider, session_name, project, model, model_id,
+                started_at, updated_at, cost_status, cost_source, known_cost,
+                input_tokens, output_tokens, total_tokens
+             ) VALUES (
+                'estimated', 'codex', 'needle session', 'repo', 'gpt-5.6-sol', '',
+                ?1, ?1, 'unavailable', 'unknown', NULL,
+                1000000, 1000000, 2000000
+             )",
+            params![now.to_rfc3339()],
+        )
+        .expect("insert unpriced subscription session");
+
+        let summary = analytics_summary_from_connection(&conn, "codex");
+        assert_eq!(summary.priced_sessions, 1);
+        assert_eq!(summary.cost_basis, CostBasis::Estimated);
+        assert!(summary.total_cost > 0.0);
+
+        let filtered = query_sessions(
+            &conn,
+            "codex",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(1.0),
+            None,
+            None,
+            None,
+            Some(10),
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].cost_basis, CostBasis::Estimated);
+
+        let searched = search_sessions_from_connection(&conn, "codex", "repo", Some(10));
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].cost_basis, CostBasis::Estimated);
+
+        let forecast = cost_forecast_from_connection(&conn, "codex", now);
+        assert_eq!(forecast.priced_sessions, 1);
+        assert_eq!(forecast.cost_basis, CostBasis::Estimated);
+        assert!(forecast.spent_this_month > 0.0);
     }
 
     #[test]
