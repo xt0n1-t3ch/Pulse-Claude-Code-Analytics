@@ -104,4 +104,39 @@ describe("AllowanceRail", () => {
     expect(getByText("25.00 of 100.00")).toBeTruthy();
     expect(container.querySelector(".window-row")).toBeNull();
   });
+
+  it("renders extra usage alongside authenticated quota windows", async () => {
+    const { accessSnapshot } = await import("@/lib/stores");
+    const route: AccessRouteSnapshot = {
+      ...claudeExpired(),
+      source: {
+        ...claudeExpired().source,
+        proof: "quota_response",
+      },
+      availability: "available",
+      freshness: "fresh",
+      windows: [{
+        key: "five_hour",
+        label: "5-hour",
+        window_minutes: 300,
+        used_percent: 25,
+        remaining_percent: 75,
+        resets_at: null,
+      }],
+      extra_usage: {
+        enabled: true,
+        limit: 100,
+        used: 12.5,
+        utilization: 12.5,
+      },
+    };
+    accessSnapshot.set({ routes: [route] });
+
+    const { container, getByText } = render(AllowanceRail);
+    await tick();
+
+    expect(container.querySelector(".window-row")).not.toBeNull();
+    expect(getByText("Month-to-date usage")).toBeTruthy();
+    expect(getByText("$12.50")).toBeTruthy();
+  });
 });

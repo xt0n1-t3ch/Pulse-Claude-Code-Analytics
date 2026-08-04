@@ -486,8 +486,8 @@ impl CostBasis {
         if known_cost.is_none() {
             return Self::Unavailable;
         }
-        let _ = source;
         match status {
+            "exact" if source.eq_ignore_ascii_case("api_equivalent") => Self::Estimated,
             "exact" => Self::Exact,
             "partial" => Self::Partial,
             _ => Self::Unavailable,
@@ -1031,14 +1031,17 @@ fn coverage_from_sql(
     exact: i64,
     partial: i64,
     provider_billed: i64,
+    estimated: i64,
     sources: Option<String>,
 ) -> CostCoverage {
-    let priced_sessions = (exact + partial + provider_billed).max(0) as usize;
+    let priced_sessions = (exact + partial + provider_billed + estimated).max(0) as usize;
     let sessions = sessions.max(0) as usize;
     let cost_basis = if priced_sessions == 0 {
         CostBasis::Unavailable
     } else if priced_sessions != sessions || partial > 0 {
         CostBasis::Partial
+    } else if estimated > 0 {
+        CostBasis::Estimated
     } else if (exact + provider_billed) as usize == priced_sessions {
         CostBasis::Exact
     } else {
@@ -1065,7 +1068,7 @@ const COST_COVERAGE_SQL: &str = "
     COALESCE(SUM(CASE
         WHEN known_cost IS NOT NULL
          AND cost_status = 'exact'
-         AND lower(replace(cost_source, '-', '_')) != 'provider_billed'
+         AND lower(replace(cost_source, '-', '_')) NOT IN ('provider_billed', 'api_equivalent')
         THEN 1 ELSE 0 END), 0),
     COALESCE(SUM(CASE
         WHEN known_cost IS NOT NULL AND cost_status = 'partial'
@@ -1074,6 +1077,11 @@ const COST_COVERAGE_SQL: &str = "
         WHEN known_cost IS NOT NULL
          AND cost_status = 'exact'
          AND lower(replace(cost_source, '-', '_')) = 'provider_billed'
+        THEN 1 ELSE 0 END), 0),
+    COALESCE(SUM(CASE
+        WHEN known_cost IS NOT NULL
+         AND cost_status = 'exact'
+         AND lower(replace(cost_source, '-', '_')) = 'api_equivalent'
         THEN 1 ELSE 0 END), 0),
     GROUP_CONCAT(DISTINCT CASE
         WHEN known_cost IS NOT NULL
@@ -1090,6 +1098,7 @@ fn session_cost_provenance(
     let cost = nonnegative_finite(session.cost);
     match session.cost_basis.as_str() {
         "exact" => ("exact", "session-calculated", Some(cost)),
+        "estimated" => ("exact", "api_equivalent", Some(cost)),
         "partial" => ("partial", "session-calculated", Some(cost)),
         "provider_billed" => ("exact", "provider_billed", Some(cost)),
         _ => ("unavailable", "unknown", None),
@@ -1484,6 +1493,7 @@ fn query_daily_stats(conn: &Connection, provider: &str, cutoff: &str) -> Vec<Dai
                 row.get(11)?,
                 row.get(12)?,
                 row.get(13)?,
+                row.get(14)?,
             );
             Ok(DailyStat {
                 date: row.get(0)?,
@@ -1709,6 +1719,7 @@ fn query_project_stats(conn: &Connection, provider: &str, cutoff: &str) -> Vec<P
             row.get(10)?,
             row.get(11)?,
             row.get(12)?,
+            row.get(13)?,
         );
         Ok(ProjectStat {
             project: row.get(0)?,
@@ -1767,6 +1778,7 @@ fn query_hourly_activity(conn: &Connection, provider: &str, cutoff: &str) -> Vec
             row.get(4)?,
             row.get(5)?,
             row.get(6)?,
+            row.get(7)?,
         );
         Ok(HourlyActivity {
             hour: row.get(0)?,
@@ -2006,6 +2018,7 @@ fn query_model_distribution(conn: &Connection, provider: &str, cutoff: &str) -> 
             row.get(4)?,
             row.get(5)?,
             row.get(6)?,
+            row.get(7)?,
         );
         Ok(ModelStat {
             model: row.get(0)?,
@@ -2115,7 +2128,12 @@ fn query_daily_costs(
             let mut known_cost = stored_known;
             if basis == CostBasis::Unavailable && stored_known.is_none() {
                 let provider: String = row.get(1)?;
-                let model: String = row.get(4).or_else(|_| row.get::<_, String>(3))?;
+                let model_id: String = row.get(4)?;
+                let model = if model_id.trim().is_empty() {
+                    row.get::<_, String>(3)?
+                } else {
+                    model_id
+                };
                 if let Some(est) = estimate_api_equivalent_cost(
                     &provider,
                     &model,
@@ -2966,10 +2984,47 @@ mod tests {
         assert_eq!(searched.len(), 1);
         assert_eq!(searched[0].cost_basis, CostBasis::Estimated);
 
+        let timeline = query_daily_costs(&conn, "codex", "2026-08-01", None);
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].priced_sessions, 1);
+        assert_eq!(timeline[0].cost_basis, CostBasis::Estimated);
+        assert!(timeline[0].cost > 0.0);
+
         let forecast = cost_forecast_from_connection(&conn, "codex", now);
         assert_eq!(forecast.priced_sessions, 1);
         assert_eq!(forecast.cost_basis, CostBasis::Estimated);
         assert!(forecast.spent_this_month > 0.0);
+    }
+
+    #[test]
+    fn persisted_api_equivalent_cost_remains_estimated_in_sql_aggregates() {
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO sessions (
+                id, provider, project, model, started_at, updated_at,
+                total_cost, cost_status, cost_source, known_cost
+             ) VALUES (
+                'estimated', 'claude', 'repo', 'Claude Opus 4.8',
+                '2026-08-15T12:00:00Z', '2026-08-15T12:00:00Z',
+                2.5, 'exact', 'api_equivalent', 2.5
+             )",
+            [],
+        )
+        .expect("insert estimated session");
+
+        let daily = query_daily_stats(&conn, "claude", "2026-08-01");
+        let projects = query_project_stats(&conn, "claude", "2026-08-01T00:00:00Z");
+        let hourly = query_hourly_activity(&conn, "claude", "2026-08-01T00:00:00Z");
+        let models = query_model_distribution(&conn, "claude", "2026-08-01T00:00:00Z");
+
+        for basis in [
+            daily[0].cost_basis,
+            projects[0].cost_basis,
+            hourly[0].cost_basis,
+            models[0].cost_basis,
+        ] {
+            assert_eq!(basis, CostBasis::Estimated);
+        }
     }
 
     #[test]

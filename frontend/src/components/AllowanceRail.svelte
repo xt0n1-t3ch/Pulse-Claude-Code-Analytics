@@ -127,7 +127,13 @@
                 </section>
               {/each}
             </div>
-          {:else if route.extra_usage}
+          {:else if !route.extra_usage}
+            <div class="no-allowance">
+              Authenticated, but this source exposes no allowance counters.
+            </div>
+          {/if}
+
+          {#if route.extra_usage}
             <div class="api-summary">
               <span>Month-to-date usage</span>
               <strong>
@@ -137,10 +143,6 @@
                   ? "Unavailable"
                   : `$${route.extra_usage.used.toFixed(2)}`}
               </strong>
-            </div>
-          {:else}
-            <div class="no-allowance">
-              Authenticated, but this source exposes no allowance counters.
             </div>
           {/if}
 

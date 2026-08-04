@@ -16,6 +16,7 @@
     selectedAccessSourceId,
   } from "../lib/stores";
   import { authenticatedAccessRoutes } from "../lib/access";
+  import { provider, setProvider, type Provider } from "../lib/provider";
 
   let open = $state(false);
   let loading = $state(false);
@@ -90,6 +91,19 @@
       if (!matchingRoute) {
         errorMessage = "The notification source is no longer available.";
         return;
+      }
+      const nextProvider: Provider | null = matchingRoute.source.kind === "claude_subscription"
+        ? "claude"
+        : matchingRoute.source.kind === "codex_subscription"
+          ? "codex"
+          : null;
+      if (nextProvider && nextProvider !== $provider) {
+        try {
+          await setProvider(nextProvider);
+        } catch {
+          errorMessage = "Pulse could not switch to the notification provider.";
+          return;
+        }
       }
       selectedAccessSourceId.set(matchingRoute.source.id);
     }

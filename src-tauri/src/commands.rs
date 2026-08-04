@@ -923,6 +923,21 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                 force_refresh,
                 provider,
             );
+            for route in &independently_probed_routes {
+                let observed_provider = match route.source.provider.as_str() {
+                    "claude" => Some(Provider::Claude),
+                    "codex" => Some(Provider::Codex),
+                    _ => None,
+                };
+                if let Some(observed_provider) = observed_provider {
+                    observe_access_notifications(
+                        app.as_ref(),
+                        notification_store.as_ref(),
+                        observed_provider,
+                        route,
+                    );
+                }
+            }
             if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
                 codex_config = fresh;
             }
@@ -1036,12 +1051,6 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                                 .unwrap_or_else(|| "no usage data yet".to_string()),
                         ),
                     };
-                    observe_access_notifications(
-                        app.as_ref(),
-                        notification_store.as_ref(),
-                        Provider::Claude,
-                        &access_route,
-                    );
                     // A stale cache remains useful as a diagnostic route but
                     // must not put old percentages back into Rich Presence.
                     let usage_for_discord = (access_route.availability
@@ -1208,13 +1217,6 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                                 }),
                             ),
                         };
-                    observe_access_notifications(
-                        app.as_ref(),
-                        notification_store.as_ref(),
-                        Provider::Codex,
-                        &access_route,
-                    );
-
                     let resolved_plan = codex_plan_detector
                         .resolve_from_envelopes(&usage_envelopes, &codex_config.openai_plan);
                     let resolved_service_tier = resolve_service_tier();
@@ -1746,7 +1748,10 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                     && s.total_cost >= 0.0
                     && (s.total_cost > 0.0 || s.session_total_tokens.unwrap_or(0) == 0)
                 {
-                    "exact".to_string()
+                    match s.source {
+                        session::DataSource::Statusline => "exact".to_string(),
+                        session::DataSource::Jsonl => "estimated".to_string(),
+                    }
                 } else {
                     "unavailable".to_string()
                 },
@@ -5203,6 +5208,19 @@ mod tests {
         let infos = build_claude_session_infos(&[snapshot]);
 
         assert_eq!(infos[0].workflow_label, None);
+    }
+
+    #[test]
+    fn claude_session_cost_provenance_distinguishes_jsonl_estimates_from_statusline() {
+        let jsonl = sample_claude_snapshot("claude-opus-4-8");
+        let mut statusline = jsonl.clone();
+        statusline.source = DataSource::Statusline;
+
+        let estimated = build_claude_session_infos(&[jsonl]);
+        let exact = build_claude_session_infos(&[statusline]);
+
+        assert_eq!(estimated[0].cost_basis, "estimated");
+        assert_eq!(exact[0].cost_basis, "exact");
     }
 
     #[test]

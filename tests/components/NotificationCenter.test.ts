@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { get } from "svelte/store";
+import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import NotificationCenter from "@/components/NotificationCenter.svelte";
 import {
@@ -14,6 +15,8 @@ const api = vi.hoisted(() => ({
   markNotificationRead: vi.fn(),
   markAllNotificationsRead: vi.fn(),
   dismissNotification: vi.fn(),
+  persistActiveProvider: vi.fn(),
+  getProviderCopy: vi.fn(),
 }));
 
 const tauriEvents = vi.hoisted(() => ({
@@ -49,7 +52,9 @@ const notification = {
 };
 
 describe("NotificationCenter", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { provider } = await import("@/lib/provider");
+    provider.set("claude");
     tauriEvents.listeners.clear();
     tauriEvents.emit.mockClear();
     tauriEvents.listen.mockClear();
@@ -83,6 +88,8 @@ describe("NotificationCenter", () => {
     api.markNotificationRead.mockResolvedValue(true);
     api.markAllNotificationsRead.mockResolvedValue(1);
     api.dismissNotification.mockResolvedValue(true);
+    api.persistActiveProvider.mockResolvedValue(undefined);
+    api.getProviderCopy.mockResolvedValue({});
   });
 
   it("loads durable notifications and routes quota actions to Home", async () => {
@@ -97,6 +104,22 @@ describe("NotificationCenter", () => {
     await fireEvent.click(row!);
     expect(api.markNotificationRead).toHaveBeenCalledWith(42);
     expect(get(currentView)).toBe("dashboard");
+  });
+
+  it("switches the active provider before opening a notification from another lane", async () => {
+    const { provider } = await import("@/lib/provider");
+    const { getByRole, getByText } = render(NotificationCenter);
+
+    await waitFor(() => expect(getByRole("button", { name: /1 unread/ })).toBeTruthy());
+    await fireEvent.click(getByRole("button", { name: /1 unread/ }));
+    await waitFor(() => expect(getByText(notification.title)).toBeTruthy());
+    provider.set("codex");
+    await tick();
+    expect(get(provider)).toBe("codex");
+    await fireEvent.click(getByText(notification.title).closest("button")!);
+
+    await waitFor(() => expect(get(provider)).toBe("claude"));
+    expect(get(selectedAccessSourceId)).toBe("claude-subscription");
   });
 
   it("marks every unread event and refreshes the backend count", async () => {

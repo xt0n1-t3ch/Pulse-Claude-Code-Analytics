@@ -198,6 +198,22 @@ describe("Sessions.svelte", () => {
     expect(row?.textContent).not.toContain("$99.00");
   });
 
+  it("labels API-equivalent historical cost as estimated", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([]);
+    getSessionHistory.mockResolvedValueOnce([{
+      ...hist("estimated", "estimated-project", 2.5),
+      cost_basis: "estimated",
+      cost_source: "api_equivalent",
+    }]);
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container } = render(Sessions);
+
+    await waitFor(() => expect(container.querySelectorAll(".ht-row")).toHaveLength(1));
+    expect(container.querySelector(".ht-row")?.textContent).toContain("$2.50 estimated");
+  });
+
   it("marks an unavailable all-time cost as unavailable instead of zero dollars", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([]);

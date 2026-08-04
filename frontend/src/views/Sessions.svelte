@@ -202,7 +202,7 @@
       expandedId = null;
       compareIds = new Set();
       knownProjects = [];
-      void loadHistory();
+      void (searchQuery.trim() ? doSearch() : loadHistory());
     }
     previousProviderScope = provider;
   });
@@ -353,6 +353,8 @@
                 ? "Unavailable"
                 : c.cost_basis === "partial"
                   ? `${fmtCost(c.known_cost)} known`
+                  : c.cost_basis === "estimated"
+                    ? `${fmtCost(c.known_cost)} estimated`
                   : fmtCost(c.known_cost)}
             </div>
           {/each}
@@ -407,6 +409,8 @@
                 ? "Unavailable"
                 : h.cost_basis === "partial"
                   ? `${fmtCost(h.known_cost)} known`
+                  : h.cost_basis === "estimated"
+                    ? `${fmtCost(h.known_cost)} estimated`
                   : fmtCost(h.known_cost)}
             </span>
             <span class="ht-col date">{h.started_at?.slice(0, 10) ?? "—"}</span>
@@ -428,6 +432,8 @@
                   {:else}
                     {#if h.cost_basis === "partial"}
                       <p class="detail-unavailable">Known subtotal; this session has incomplete cost coverage.</p>
+                    {:else if h.cost_basis === "estimated"}
+                      <p class="detail-unavailable">API-equivalent estimate reconstructed from session tokens and model pricing.</p>
                     {/if}
                     <div class="detail-row"><span>Input</span><span>{fmtCost(h.input_cost)}</span></div>
                     <div class="detail-row"><span>Output</span><span>{fmtCost(h.output_cost)}</span></div>
