@@ -128,6 +128,32 @@ rollup, a single-row `budget_config`, and a `sessions_fts` FTS5 virtual table
 queries coalesce `started_at`, `created_at`, and `updated_at` so a null timestamp
 never drops a session out of a view, filter, or export.
 
+Every source-sensitive analytics command accepts an explicit provider scope.
+The SQL predicate treats `all` as cross-provider aggregation and every other
+slug as an exact match; it does not derive analytics identity from the mutable
+active-provider setting. Live-session upserts only cache their fingerprint
+after SQLite confirms the write, so a lock or schema error is retried on the
+next poll instead of making an unpersisted session look durable.
+
+Provider authentication and local analytics availability are separate facts.
+`get_access_snapshot` enriches each discovered route with a `local_history`
+capability derived from the SQLite inventory without changing its proof,
+freshness, availability, plan, or quota windows. The frontend may therefore
+offer an expired Claude subscription as a selectable local-history scope while
+still excluding it from authenticated allowance cards, provider notifications,
+and Discord provider mutation. The `all` source is an explicit cross-provider
+history aggregate; selecting a local-only route never changes the active
+Discord provider.
+
+Cost aggregates keep usage and money on separate evidence tracks.
+`get_cost_totals` always returns the observed input, output, cache-write,
+cache-read, pure-input, and total token counts for the selected window. Its
+`cost_basis` remains `exact`, `partial`, or `unavailable` according to priced
+session coverage. The Costs view uses those token counters for the Subscription
+Value Ledger even when spend is unavailable, renders known partial spend only
+with its coverage denominator and provenance, and omits monetary charts and
+derived rates when doing so would imply complete coverage.
+
 The analyzers in [`../src-tauri/src/analyzers/`](../src-tauri/src/analyzers/) are
 a native Rust reimplementation of the cchubber CLI that run in-process from the
 stored SQLite history with no Node subprocess: `cache_health` grades the
@@ -174,3 +200,9 @@ spike the daemon beeps on, surfaced in the UI. Display preferences (the Discord
 field toggles) are `localStorage`-persisted stores that mirror their state back
 to the backend via `setDiscordDisplayPrefs` so the daemon and the GUI agree on
 what Rich Presence shows.
+
+The access stores intentionally expose two projections. Displayable analytics
+routes include authenticated providers plus providers with local history;
+authenticated routes remain the only inputs to quota, notification, and
+presence surfaces. This split lets every view reuse one provider scope without
+promoting local files into provider proof.

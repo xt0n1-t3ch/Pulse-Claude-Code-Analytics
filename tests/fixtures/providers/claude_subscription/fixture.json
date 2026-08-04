@@ -1,0 +1,37 @@
+{
+  "fixture_version": 1,
+  "raw_payload": {
+    "subscriptionType": "max",
+    "plan": "Claude Max",
+    "usage": {
+      "five_hour": { "utilization": 22, "resets_at": "2026-08-01T05:00:00Z" },
+      "seven_day": { "utilization": 9, "resets_at": "2026-08-08T00:00:00Z" }
+    }
+  },
+  "status": "ok",
+  "source_contract": "claude_subscription.v1",
+  "captured_at": "2026-08-01T00:00:00Z",
+  "expected_dto": {
+    "source": {
+      "id": "claude-subscription:fixture",
+      "kind": "claude_subscription",
+      "provider": "claude",
+      "auth_method": "oauth",
+      "proof": "quota_response",
+      "plan": "Claude Max"
+    },
+    "availability": "available",
+    "freshness": "fresh",
+    "provenance": "provider_api",
+    "observed_at": "2026-08-01T00:00:00Z",
+    "fetched_at": "2026-08-01T00:00:00Z",
+    "expires_at": "2026-08-01T00:00:30Z",
+    "windows": [
+      { "key": "five_hour", "label": "5h", "window_minutes": 300, "used_percent": 22, "remaining_percent": 78, "resets_at": "2026-08-01T05:00:00Z" },
+      { "key": "weekly", "label": "Weekly", "window_minutes": 10080, "used_percent": 9, "remaining_percent": 91, "resets_at": "2026-08-08T00:00:00Z" }
+    ],
+    "credits": null,
+    "extra_usage": { "enabled": false, "used": 0, "limit": null, "utilization": null },
+    "error": null
+  }
+}

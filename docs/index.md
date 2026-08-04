@@ -7,6 +7,8 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | Doc | Purpose |
 | --- | --- |
 | [architecture.md](architecture.md) | High-level component map: daemon -> Tauri -> SQLite -> Svelte |
+| [architecture/dev-bridge.md](architecture/dev-bridge.md) | Debug-only loopback bridge for real Rust data in the Vite browser |
+| [architecture/adaptive-access.md](architecture/adaptive-access.md) | Versioned provider/Discord fixture envelope, access-route DTO, and Browser/Tauri/Discord proof boundaries |
 | [discord-assets.md](discord-assets.md) | Upload assets to the Developer Portal so the RP logo actually renders; in-app preview art |
 | [plan-detection.md](plan-detection.md) | Claude/Codex plan detection, manual override persistence, Codex service tier + surface |
 | [fable-5.md](fable-5.md) | Claude Fable 5 + Mythos 5 pricing, 1M context, cache TTL note, Rich Presence labels |
@@ -19,8 +21,82 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [codex-model-catalog.md](codex-model-catalog.md) | GPT-5.6 labels, aliases, reasoning, context, pricing, cache policy, provenance, and completeness rules |
 | [codex-rich-presence-upstream.md](codex-rich-presence-upstream.md) | Codex Rich Presence source-of-truth repo, sync scripts, CI freshness gate, compatibility overlay |
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
+| [notifications.md](notifications.md) | Durable provider-health, quota, and Discord notification lifecycle, deduplication, and Tauri events |
 | [ui-design-system.md](ui-design-system.md) | Monochrome Geist shell, semantic colors, one-fact/one-owner hierarchy, responsive states, autosave and updater affordances |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
+
+## v1.7.0 docs refresh
+
+- Documented provider-neutral authenticated access routes, freshness-aware quota
+  presentation, and proof/provenance boundaries across Pulse and Discord.
+- Separated stable access-source identity from provider-scoped analytics:
+  `codex`, `claude`, `openai`, and `anthropic` are exact scopes, while `all` is
+  the only cross-provider aggregate; API lanes never borrow subscription
+  sessions or cost.
+- Split provider proof from local-history capability: an expired Claude
+  subscription remains visible and selectable when SQLite contains Claude
+  sessions, but it cannot supply allowance cards, quota notifications, plan
+  claims, or Discord authority until authentication succeeds again.
+- Replaced the unavailable-cost dead end with the Subscription Value Ledger.
+  Token totals, token mix, daily usage trend, sessions, cache reuse, and priced
+  coverage remain useful when money is not reported; partial spend keeps its
+  denominator and provenance, while unavailable spend never renders as `$0`.
+- Locked provider-scoped plan catalogs: Claude `free`, `pro`, `team`,
+  `enterprise`, `max_5x`, `max_20x`; Codex `free`, `go`, `plus`, `business`,
+  `enterprise`, `pro_5x`, `pro_20x`. Ambiguous Max and bare Pro telemetry stay
+  Unknown.
+- Recorded the typed `codex-presence-core` 2.0.0 integration against the local
+  upstream v1.9.0 candidate; publication and immutable revision proof remain
+  pending upstream push.
+- Kept native quota alerts proof-driven: only fresh authenticated Codex/Claude
+  reset transitions notify (`remaining < 100 -> 100` or `used > 0 -> 0`), while
+  timestamp drift, stale/cache/unproved samples, thresholds, health, and
+  Discord diagnostics remain silent. Legacy timestamp-only reset rows are
+  preserved and dismissed once during migration.
+- Added the second legacy-reset dismissal marker so false rows written by an
+  older concurrent producer after the first migration are preserved but hidden;
+  genuine reset transitions created after v2 stay visible.
+- Exposed canonical Codex `rateLimitResetCredits` separately from spend
+  `credits`, preserving the provider's structured count and optional detail
+  records without a second Pulse parser. Claude cache-only reads remain an
+  honest unauthenticated/unavailable route.
+- Registered Tauri's single-instance plugin before background-poller setup so a
+  second Pulse launch focuses the existing window instead of starting another
+  poller; the Discord `PublisherLease` remains an independent publisher guard.
+- Kept provider-health notifications edge-triggered: unavailable baselines and
+  unproofed cache/session fallbacks stay diagnostic-only, while only authenticated
+  health transitions can create native alerts.
+- Kept the release contract explicit: Pulse v1.7.0 is a candidate until the
+  upstream revision, version surfaces, and final release gates are re-verified.
+- Hardened the Windows Codex account probe for unpackaged Pulse installs: the
+  resolver prefers the user-local Codex CLI before the AppX package path, whose
+  ACL can reject `CreateProcess` from Pulse.
+- Hardened native Tauri CDP validation: the runner selects the `pulse` binary,
+  isolates WebView2 user data from installed Pulse, and runs the real
+  `chromium.connectOverCDP` Playwright seam with identity-checked cleanup.
+- Kept Windows Pulse unit-test harnesses on the same Common-Controls v6
+  manifest as the packaged Tauri app, avoiding a pre-test `TaskDialogIndirect`
+  loader failure against legacy `system32/comctl32.dll`. Cargo currently does
+  not apply build-script `rustc-link-arg-tests` to the Windows lib harness, so
+  the checked-in manifest is intentionally shared and retains Tauri's exact
+  `asInvoker`/`uiAccess=false` trust policy; production RT_MANIFEST readback is
+  a release gate, not implied by the compile-time receipt.
+- Reworked every Pulse view into a shared edge-to-edge responsive shell. Home
+  now follows the approved dense provider/work composition, while Sessions,
+  Context, Costs, Reports, Discord, and Settings share bounded-width,
+  mobile-stack, and consumer-owned horizontal-scroll contracts.
+- Unified cost provenance across live history, Summary, Projects, hourly/model
+  aggregates, Reports timelines, analyzers, and offline exports: only
+  `known_cost` contributes to spend, averages divide by priced sessions, and
+  partial/unavailable coverage stays explicit instead of promoting raw
+  estimates to exact totals.
+- Recorded the same-viewport reference comparison and four-breakpoint visual
+  result in [`../design-qa.md`](../design-qa.md). Live preview remains
+  proof-gated: an unauthenticated provider route renders an honest empty state
+  instead of example allowance data.
+- Re-ran the final consumer audit at `1488 x 1058` and `390 x 844` across all
+  seven routes, including Claude local-history selection, the Codex
+  unavailable-cost state, and the durable notification center.
 
 ## v1.6.5 docs refresh
 
@@ -115,13 +191,14 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 - **Install**: see [README](../README.md#install)
 - **Architecture** (full component map): [architecture.md](architecture.md)
+- **Adaptive access contract**: [architecture/adaptive-access.md](architecture/adaptive-access.md)
 - **Contributing + local dev**: [../CONTRIBUTING.md](../CONTRIBUTING.md)
 - **Test suite**: [../tests/index.md](../tests/index.md)
 - **Bug / feature requests**: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/issues
 
 ## Version
 
-- App release: **v1.6.5**
+- App release: **v1.7.0**
 - Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v5**
-- Last docs refresh: 2026-07-25 (monochrome Pulse UI contract, single-owner Dashboard telemetry, visible Discord autosave, and one-action signed updates)
+- Last docs refresh: 2026-08-03 (proof-driven reset alerts, canonical Codex reset-credit DTO, honest Claude auth, and single-instance startup)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

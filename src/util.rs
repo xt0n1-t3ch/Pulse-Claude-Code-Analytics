@@ -179,4 +179,19 @@ mod tests {
         assert_eq!(progress_bar(0.0, 10), "----------");
         assert_eq!(progress_bar(100.0, 10), "##########");
     }
+
+    #[test]
+    fn provider_version_probe_uses_the_hidden_launcher() {
+        let app = include_str!("app.rs");
+        assert!(
+            app.contains("crate::util::silent_command(program)"),
+            "doctor/provider version probes must apply CREATE_NO_WINDOW on Windows"
+        );
+        assert!(
+            !app.contains(
+                "fn command_available(program: &str) -> bool {\n    Command::new(program)"
+            ),
+            "provider probes must not bypass the shared hidden launcher"
+        );
+    }
 }

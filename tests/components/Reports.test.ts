@@ -12,7 +12,15 @@ function makeDailyCosts(): ReportsBundle["daily_costs"] {
     const date = d.toISOString().slice(0, 10);
     // One clear peak on the 4th day, two idle days, rest modest.
     const cost = i === 3 ? 42 : i === 5 || i === 6 ? 0 : 6;
-    return { date, cost, sessions: cost > 0 ? 2 : 0 };
+    const sessions = cost > 0 ? 2 : 0;
+    return {
+      date,
+      cost,
+      sessions,
+      priced_sessions: sessions,
+      cost_basis: sessions > 0 ? "exact" as const : "unavailable" as const,
+      cost_sources: sessions > 0 ? ["anthropic_api_equivalent"] : [],
+    };
   });
 }
 
@@ -104,11 +112,15 @@ function makeBundle(): ReportsBundle {
     },
     model_routing: {
       total_sessions: 3,
+      priced_sessions: 3,
       total_cost: 10,
-      opus: { sessions: 2, cost: 8, cost_share_pct: 80, avg_cost_per_session: 4 },
-      sonnet: { sessions: 1, cost: 2, cost_share_pct: 20, avg_cost_per_session: 2 },
-      haiku: { sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
-      other: { sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+      cost_basis: "exact",
+      cost_sources: ["anthropic_api_equivalent"],
+      opus: { sessions: 2, priced_sessions: 2, cost: 8, cost_share_pct: 80, avg_cost_per_session: 4 },
+      sonnet: { sessions: 1, priced_sessions: 1, cost: 2, cost_share_pct: 20, avg_cost_per_session: 2 },
+      haiku: { sessions: 0, priced_sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+      other: { sessions: 0, priced_sessions: 0, cost: 0, cost_share_pct: 0, avg_cost_per_session: 0 },
+      savings_estimate_available: true,
       estimated_savings_if_rerouted: 1.5,
       diagnosis: "Mostly Opus.",
     },
@@ -120,7 +132,7 @@ function makeBundle(): ReportsBundle {
 let resolvers: Array<() => void> = [];
 let activeBundle = makeBundle();
 const getReportsBundle = vi.fn(
-  () =>
+  (_days?: number) =>
     new Promise<ReportsBundle>((resolve) => {
       resolvers.push(() => resolve(activeBundle));
     }),
@@ -130,7 +142,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
-    getReportsBundle: () => getReportsBundle(),
+    getReportsBundle: (days?: number) => getReportsBundle(days),
   };
 });
 
@@ -169,7 +181,7 @@ describe("Reports.svelte", () => {
     flushAll();
 
     expect(await findByText("Cache is doing its job.")).toBeTruthy();
-    expect(queryByText("Model Routing")).toBeNull();
+    expect(queryByText("Model routing")).toBeNull();
   });
 
   it("populates sections from a single bundle call", async () => {
@@ -204,6 +216,54 @@ describe("Reports.svelte", () => {
     await waitFor(() => {
       expect(container.querySelector(".reload-banner")).toBeNull();
     });
+  });
+
+  it("distinguishes a failed 7-day request from a real empty window and offers retry", async () => {
+    const Reports = (await import("@/views/Reports.svelte")).default;
+    const { getByText, findByRole, queryByText } = render(Reports);
+
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    flushAll();
+    await waitFor(() => expect(queryByText("Cost timeline")).toBeTruthy());
+
+    getReportsBundle.mockRejectedValueOnce(new Error("query failed"));
+    await fireEvent.click(getByText("7d"));
+
+    const alert = await findByRole("alert");
+    expect(alert.textContent).toContain("7-day report unavailable");
+    expect(alert.textContent).toContain("Retry");
+    expect(alert.textContent).not.toContain("No actionable findings");
+  });
+
+  it("requests the selected 7-day backend window and explains a genuinely empty result", async () => {
+    const Reports = (await import("@/views/Reports.svelte")).default;
+    const { getByText, findByText } = render(Reports);
+
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    flushAll();
+
+    activeBundle = {
+      ...makeBundle(),
+      days: 7,
+      total_sessions: 0,
+      daily_costs: Array.from({ length: 7 }, (_, index) => ({
+        date: `2026-08-0${index + 1}`,
+        cost: 0,
+        sessions: 0,
+        priced_sessions: 0,
+        cost_basis: "unavailable",
+        cost_sources: [],
+      })),
+      recommendations: [],
+      inflection_points: [],
+      model_routing: null,
+      capabilities: { cache_health: false, model_routing: false, extra_usage: false },
+    };
+    await fireEvent.click(getByText("7d"));
+    await waitFor(() => expect(getReportsBundle).toHaveBeenLastCalledWith(7));
+    flushAll();
+
+    expect(await findByText("No sessions in this 7-day window.")).toBeTruthy();
   });
 
   describe("cost timeline", () => {

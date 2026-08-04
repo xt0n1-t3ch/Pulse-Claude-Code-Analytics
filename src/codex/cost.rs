@@ -240,7 +240,10 @@ pub fn format_presentable_cost(
     let formatted = crate::codex::util::format_cost(total);
     match status {
         PricingStatus::Exact => Some(formatted),
-        PricingStatus::Partial => Some(format!(">={formatted}")),
+        // A subtotal is useful for diagnostics but is not a billable total.
+        // Omitting it keeps Discord and Pulse from presenting a lower bound as
+        // an exact cost (or smuggling a comparator into a metric field).
+        PricingStatus::Partial => None,
         PricingStatus::Unavailable => None,
     }
 }
@@ -460,7 +463,7 @@ mod tests {
     fn partial_and_unavailable_costs_cannot_render_as_exact() {
         assert_eq!(
             format_presentable_cost(Some(0.0065), PricingStatus::Partial),
-            Some(">=$0.0065".to_string())
+            None
         );
         assert_eq!(
             format_presentable_cost(None, PricingStatus::Unavailable),

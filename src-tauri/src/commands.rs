@@ -22,6 +22,7 @@ use cc_discord_presence::codex::session::{
     self as codex_session, CodexSessionSnapshot, GitBranchCache as CodexGitBranchCache,
     SessionParseCache as CodexSessionParseCache,
 };
+use cc_discord_presence::codex::telemetry::limits::{RateLimits, UsageWindow};
 use cc_discord_presence::codex::telemetry::plan::{DetectedPlanTier, PlanDetector};
 use cc_discord_presence::codex::telemetry::service_tier::resolve_service_tier;
 use cc_discord_presence::config::PresenceConfig;
@@ -30,18 +31,27 @@ use cc_discord_presence::discord::DiscordPresence as ClaudeDiscordPresence;
 use cc_discord_presence::discord::presence_lines as claude_presence_lines;
 use cc_discord_presence::provider::Provider;
 use cc_discord_presence::session::{
-    self, ClaudeSessionSnapshot, GitBranchCache, SessionParseCache, latest_limits_source,
-    merge_statusline_into_sessions, preferred_active_session, read_statusline_data,
+    self, ClaudeSessionSnapshot, GitBranchCache, RateLimits as ClaudeRateLimits, SessionParseCache,
+    UsageWindowLimits as ClaudeUsageWindowLimits, merge_statusline_into_sessions,
+    preferred_active_session, read_statusline_data,
 };
-use cc_discord_presence::usage::UsageManager;
+use cc_discord_presence::usage::{UsageAuth, UsageManager};
 use codex_presence_core::{
-    PresenceFieldId, QuotaScope, QuotaWindow, RateLimitScope, UsageSnapshot,
+    CreditBalance, PresenceFieldId, QuotaScope, QuotaWindow, RateLimitScope,
+    RateLimits as CoreRateLimits, UsageSignal, UsageSnapshot, UsageSource,
     usage_snapshot_from_envelopes,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
+use crate::access::{
+    AccessAvailability, AccessFreshness, AccessProof, AccessProvenance, AccessRouteSnapshot,
+    AccessSnapshot, AccessWindow, AuthMethod, access_route_from_usage,
+    access_route_from_usage_with_account_details, api_source, claude_route_from_usage,
+    subscription_source, window_label,
+};
 use crate::live::PublisherLease;
+use crate::notifications::{NotificationRecord, NotificationStore};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STALE_THRESHOLD: Duration = Duration::from_secs(120);
@@ -56,6 +66,60 @@ static SESSION_FINGERPRINTS: std::sync::OnceLock<Mutex<HashMap<String, u64>>> =
     std::sync::OnceLock::new();
 fn uptime_secs() -> u64 {
     START_TIME.get_or_init(Instant::now).elapsed().as_secs()
+}
+
+fn publish_notification(app: Option<&tauri::AppHandle>, record: Option<NotificationRecord>) {
+    let Some(record) = record else {
+        return;
+    };
+    let Some(app) = app else {
+        // The standalone browser bridge keeps the durable notification record
+        // but has no Tauri runtime to deliver native events through.
+        return;
+    };
+    if let Err(error) = crate::notifications::send_native_notification(app, &record) {
+        tracing::debug!(error = %error, id = record.id, "native notification delivery unavailable");
+    }
+    if let Err(error) = app.emit("pulse://notification", &record) {
+        tracing::warn!(error = %error, id = record.id, "failed to emit Pulse notification");
+    }
+}
+
+fn observe_access_notifications(
+    app: Option<&tauri::AppHandle>,
+    store: Option<&NotificationStore<'_>>,
+    provider: Provider,
+    route: &AccessRouteSnapshot,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    let provider_name = provider.as_str();
+    // Native notifications are intentionally limited to genuine quota-reset
+    // edges. Health, threshold, Discord, stale, cache, and unproved samples
+    // remain diagnostics in the access snapshot and never become alerts.
+    let now = chrono::Utc::now();
+    if route.availability != AccessAvailability::Available
+        || route.freshness != AccessFreshness::Fresh
+        || !route.is_authenticated()
+    {
+        return;
+    }
+    for window in &route.windows {
+        match store.observe_quota_reset_transition(
+            provider_name,
+            &window.key,
+            window.quota.used_percent,
+            window.quota.remaining_percent,
+            window.quota.resets_at,
+            now,
+        ) {
+            Ok(record) => publish_notification(app, record),
+            Err(error) => {
+                tracing::warn!(provider = provider_name, window = %window.key, error = %error, "failed to record quota reset notification")
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -119,10 +183,14 @@ struct CachedData {
     active_provider: Provider,
     sessions: ActiveSessions,
     claude_usage: Option<CachedUsage>,
+    claude_usage_data: Option<cc_discord_presence::usage::UsageData>,
     claude_usage_error: Option<String>,
     codex_usage: Option<UsageSnapshot>,
     codex_limits: Option<codex_session::EffectiveLimitSelection>,
     codex_usage_error: Option<String>,
+    /// Canonical provider access routes. All quota DTOs and presence gates
+    /// derive from this snapshot rather than reconstructing windows per seam.
+    access: AccessSnapshot,
     discord_status: String,
     discord_publisher: String,
     discord_enabled: bool,
@@ -138,11 +206,7 @@ struct CachedData {
 #[derive(Clone)]
 struct CachedUsage {
     five_hour_pct: f64,
-    five_hour_resets: String,
     seven_day_pct: f64,
-    seven_day_resets: String,
-    sonnet_pct: Option<f64>,
-    sonnet_resets: Option<String>,
     extra_enabled: bool,
     extra_limit: Option<f64>,
     extra_used: Option<f64>,
@@ -151,6 +215,330 @@ struct CachedUsage {
     /// the OAuth handshake or the on-disk cache. Carried through so the UI can
     /// state how it knows, instead of the old hard-coded `api` label.
     source: String,
+}
+
+/// A bounded API probe is deliberately separate from subscription polling.
+/// A provider key's presence is configuration, not authentication proof; the
+/// route only becomes proofed after the provider accepts the request.
+const API_PROBE_TTL: Duration = Duration::from_secs(300);
+const API_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Default)]
+struct ApiProbeCache {
+    openai: ApiProbeEntry,
+    anthropic: ApiProbeEntry,
+}
+
+#[derive(Default)]
+struct ApiProbeEntry {
+    key_fingerprint: Option<u64>,
+    checked_at: Option<Instant>,
+    route: Option<AccessRouteSnapshot>,
+}
+
+/// Build a stable, non-secret cache key for an API credential. The key itself
+/// never enters logs, snapshots, or diagnostics.
+fn api_key_fingerprint(key: Option<&str>) -> Option<u64> {
+    let key = key?.trim();
+    if key.is_empty() {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    Some(hasher.finish())
+}
+
+fn api_probe_route(
+    provider: &'static str,
+    key: Option<&str>,
+    cache: &mut ApiProbeEntry,
+) -> AccessRouteSnapshot {
+    let fingerprint = api_key_fingerprint(key);
+    if cache.key_fingerprint == fingerprint
+        && cache
+            .checked_at
+            .is_some_and(|checked_at| checked_at.elapsed() < API_PROBE_TTL)
+        && let Some(route) = cache.route.clone()
+    {
+        return route;
+    }
+
+    let route = match key.map(str::trim).filter(|key| !key.is_empty()) {
+        None => AccessRouteSnapshot::unavailable(
+            api_source(provider, AuthMethod::ApiKey, AccessProof::None),
+            "API key not configured",
+        ),
+        Some(key) => probe_api_endpoint(provider, key),
+    };
+    cache.key_fingerprint = fingerprint;
+    cache.checked_at = Some(Instant::now());
+    cache.route = Some(route.clone());
+    route
+}
+
+/// Probe only the provider's authentication surface. `/models` intentionally
+/// supplies no fabricated quota windows: an API route is proofed when the
+/// request succeeds, while allowance windows remain absent until that API
+/// actually reports them.
+fn probe_api_endpoint(provider: &'static str, key: &str) -> AccessRouteSnapshot {
+    let agent = ureq::AgentBuilder::new().timeout(API_PROBE_TIMEOUT).build();
+    let mut request = match provider {
+        "anthropic" => agent
+            .get("https://api.anthropic.com/v1/models")
+            .set("x-api-key", key)
+            .set("anthropic-version", "2023-06-01"),
+        _ => agent
+            .get("https://api.openai.com/v1/models")
+            .set("Authorization", &format!("Bearer {key}")),
+    };
+    request = request.set("User-Agent", "cc-discord-presence");
+
+    match request.call() {
+        Ok(response) if (200..300).contains(&response.status()) => {
+            let source = api_source(
+                provider,
+                AuthMethod::ApiKey,
+                AccessProof::AuthenticatedProbe,
+            );
+            AccessRouteSnapshot::unavailable(
+                source,
+                "authenticated probe succeeded; provider reported no quota windows",
+            )
+        }
+        Ok(response) => AccessRouteSnapshot::unavailable(
+            api_source(provider, AuthMethod::ApiKey, AccessProof::None),
+            format!("provider rejected API probe (HTTP {})", response.status()),
+        ),
+        Err(ureq::Error::Status(status, _)) => AccessRouteSnapshot::unavailable(
+            api_source(provider, AuthMethod::ApiKey, AccessProof::None),
+            format!("provider rejected API probe (HTTP {status})"),
+        ),
+        Err(_) => AccessRouteSnapshot::unavailable(
+            api_source(provider, AuthMethod::ApiKey, AccessProof::None),
+            "provider API probe failed",
+        ),
+    }
+}
+
+fn merge_access_routes(
+    base: &[AccessRouteSnapshot],
+    replacements: impl IntoIterator<Item = AccessRouteSnapshot>,
+) -> AccessSnapshot {
+    let mut routes = base.to_vec();
+    for replacement in replacements {
+        if let Some(existing) = routes
+            .iter_mut()
+            .find(|route| route.source.id == replacement.source.id)
+        {
+            *existing = replacement;
+        } else {
+            routes.push(replacement);
+        }
+    }
+    // The provider lanes are a small fixed inventory. Keep one route per source
+    // so a failed probe replaces, rather than leaves behind, old windows.
+    routes.sort_by(|left, right| left.source.id.cmp(&right.source.id));
+    AccessSnapshot { routes }
+}
+
+fn route_for_provider(data: &CachedData, provider: Provider) -> Option<AccessRouteSnapshot> {
+    data.access
+        .routes
+        .iter()
+        .find(|route| {
+            route.source.provider == provider.as_str()
+                && matches!(
+                    (provider, route.source.kind),
+                    (
+                        Provider::Codex,
+                        crate::access::AccessSourceKind::CodexSubscription
+                    ) | (
+                        Provider::Claude,
+                        crate::access::AccessSourceKind::ClaudeSubscription
+                    )
+                )
+        })
+        .cloned()
+}
+
+fn claude_route_from_probe(
+    usage_mgr: &mut UsageManager,
+    force_refresh: bool,
+) -> (
+    AccessRouteSnapshot,
+    Option<cc_discord_presence::usage::UsageData>,
+    Option<CachedUsage>,
+    Option<String>,
+    Option<String>,
+) {
+    if force_refresh {
+        usage_mgr.invalidate_cache();
+        let usage_cache_path =
+            cc_discord_presence::config::claude_home().join("discord-presence-usage-cache.json");
+        if let Err(error) = std::fs::remove_file(&usage_cache_path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %usage_cache_path.display(),
+                error = %error,
+                "failed to remove usage cache"
+            );
+        }
+    }
+
+    let usage = trusted_claude_usage(usage_mgr);
+    let usage_source = usage_mgr
+        .last_usage_origin()
+        .map(|origin| origin.label())
+        .unwrap_or_else(|| "unknown source".to_string());
+    let detected_plan_key = usage_mgr.detected_plan_key();
+    let cached_usage = usage.as_ref().map(|usage| CachedUsage {
+        five_hour_pct: usage.five_hour.utilization,
+        seven_day_pct: usage.seven_day.utilization,
+        extra_enabled: usage
+            .extra_usage
+            .as_ref()
+            .is_some_and(|extra| extra.is_enabled),
+        extra_limit: usage
+            .extra_usage
+            .as_ref()
+            .and_then(|extra| extra.monthly_limit),
+        extra_used: usage
+            .extra_usage
+            .as_ref()
+            .and_then(|extra| extra.used_credits),
+        extra_pct: usage
+            .extra_usage
+            .as_ref()
+            .and_then(|extra| extra.utilization),
+        source: usage_source.clone(),
+    });
+    let usage_error = usage_mgr.error_hint_with_countdown();
+    let observed_at = usage_mgr
+        .last_usage_observed_at()
+        .unwrap_or_else(chrono::Utc::now);
+    let route = match usage.as_ref() {
+        Some(usage) => {
+            let mut source = subscription_source("claude", detected_plan_key.clone());
+            if usage_mgr
+                .last_usage_origin()
+                .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth))
+            {
+                source.proof = AccessProof::QuotaResponse;
+            }
+            claude_route_from_usage(
+                source,
+                usage,
+                observed_at,
+                chrono::Utc::now(),
+                chrono::Duration::seconds(300),
+                chrono::Utc::now(),
+                usage_source,
+            )
+        }
+        None => AccessRouteSnapshot::unavailable(
+            subscription_source("claude", detected_plan_key.clone()),
+            usage_error.clone().unwrap_or_else(|| {
+                "Claude quota requires an authenticated OAuth response; local credentials are missing or invalid"
+                    .to_string()
+            }),
+        ),
+    };
+    (route, usage, cached_usage, usage_error, detected_plan_key)
+}
+
+/// Cache/session data can be useful diagnostics but is not provider proof. The
+/// Claude subscription route therefore exposes metrics only when the usage
+/// manager recorded a successful OAuth response for those exact figures.
+fn trusted_claude_usage(
+    usage_mgr: &mut UsageManager,
+) -> Option<cc_discord_presence::usage::UsageData> {
+    let usage = usage_mgr.get_usage();
+    let authenticated = usage_mgr
+        .last_usage_origin()
+        .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth));
+    usage.filter(|_| authenticated)
+}
+
+fn codex_route_from_probe(
+    latest: &Arc<Mutex<Option<Result<AccountUsageReading, String>>>>,
+    plan_detector: &mut PlanDetector,
+    plan_config: &cc_discord_presence::codex::config::OpenAiPlanDisplayConfig,
+) -> (AccessRouteSnapshot, Option<UsageSnapshot>, Option<String>) {
+    let account_usage = latest
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_else(|| Err("Codex account quota read is pending".to_string()));
+    match account_usage {
+        Ok(reading) => {
+            let resolved_plan =
+                plan_detector.resolve_from_envelopes(&reading.envelopes, plan_config);
+            let plan_key = codex_plan_key_from_tier(resolved_plan.tier);
+            let usage = reading.usage_snapshot();
+            let reset_credits = reading.rate_limit_reset_credits.clone();
+            let individual_limits = reading.individual_limits.clone();
+            let mut source = subscription_source(
+                "codex",
+                (!plan_key.is_empty()).then(|| plan_key.to_string()),
+            );
+            source.proof = AccessProof::QuotaResponse;
+            let route = access_route_from_usage_with_account_details(
+                source,
+                usage.clone(),
+                reset_credits,
+                individual_limits,
+                chrono::Utc::now(),
+                chrono::Duration::seconds(30),
+                chrono::Utc::now(),
+            );
+            (route, Some(usage), None)
+        }
+        Err(error) => {
+            let message = format!("Codex account API unavailable: {error}");
+            (
+                AccessRouteSnapshot::unavailable(subscription_source("codex", None), &message),
+                None,
+                Some(message),
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn independently_probe_access(
+    usage_mgr: &mut UsageManager,
+    codex_usage_trigger: &std::sync::mpsc::SyncSender<()>,
+    codex_usage_force: &AtomicBool,
+    codex_usage_latest: &Arc<Mutex<Option<Result<AccountUsageReading, String>>>>,
+    api_probe_cache: &mut ApiProbeCache,
+    force_refresh: bool,
+    active_provider: Provider,
+    codex_plan_detector: &mut PlanDetector,
+    codex_plan_config: &cc_discord_presence::codex::config::OpenAiPlanDisplayConfig,
+) -> Vec<AccessRouteSnapshot> {
+    if force_refresh {
+        codex_usage_force.store(true, Ordering::Release);
+    }
+    // Trigger the app-server lane on every tick, regardless of which provider
+    // currently owns the UI/presence surface.
+    let _ = codex_usage_trigger.try_send(());
+
+    let refresh_claude = force_refresh && active_provider != Provider::Claude;
+    let (claude_route, _, _, _, _) = claude_route_from_probe(usage_mgr, refresh_claude);
+    let (codex_route, _, _) =
+        codex_route_from_probe(codex_usage_latest, codex_plan_detector, codex_plan_config);
+    let openai_route = api_probe_route(
+        "openai",
+        std::env::var("OPENAI_API_KEY").ok().as_deref(),
+        &mut api_probe_cache.openai,
+    );
+    let anthropic_route = api_probe_route(
+        "anthropic",
+        std::env::var("ANTHROPIC_API_KEY").ok().as_deref(),
+        &mut api_probe_cache.anthropic,
+    );
+    vec![codex_route, claude_route, openai_route, anthropic_route]
 }
 
 static SHARED: std::sync::OnceLock<Arc<Mutex<CachedData>>> = std::sync::OnceLock::new();
@@ -167,18 +555,248 @@ fn current_provider() -> Provider {
         .unwrap_or_else(cc_discord_presence::provider::load_active_provider)
 }
 
+fn active_access_route(data: &CachedData) -> AccessRouteSnapshot {
+    if let Some(route) = route_for_provider(data, data.active_provider) {
+        return route.clone();
+    }
+
+    match data.active_provider {
+        Provider::Claude => {
+            let source = subscription_source("claude", None);
+            let Some(usage) = data.claude_usage.as_ref() else {
+                return AccessRouteSnapshot::unavailable(source, "no usage data yet");
+            };
+            let now = chrono::Utc::now();
+            let snapshot = UsageSnapshot {
+                source: UsageSource::new(
+                    "claude-subscription:default",
+                    [UsageSignal::ClaudeSubscriptionUsage],
+                ),
+                scopes: vec![QuotaScope {
+                    id: Some("claude".to_string()),
+                    name: Some("Account quota".to_string()),
+                    kind: RateLimitScope::GlobalAccount,
+                    windows: vec![
+                        QuotaWindow {
+                            window_minutes: 300,
+                            used_percent: usage.five_hour_pct,
+                            remaining_percent: (100.0 - usage.five_hour_pct).clamp(0.0, 100.0),
+                            resets_at: None,
+                        },
+                        QuotaWindow {
+                            window_minutes: 10_080,
+                            used_percent: usage.seven_day_pct,
+                            remaining_percent: (100.0 - usage.seven_day_pct).clamp(0.0, 100.0),
+                            resets_at: None,
+                        },
+                    ],
+                }],
+                credits: None,
+                observed_at: Some(now),
+                provenance_source: usage.source.clone(),
+            };
+            let mut route =
+                access_route_from_usage(source, snapshot, now, chrono::Duration::seconds(300), now);
+            route.extra_usage = Some(crate::access::ExtraUsageSnapshot {
+                enabled: usage.extra_enabled,
+                limit: usage.extra_limit,
+                used: usage.extra_used,
+                utilization: usage.extra_pct,
+            });
+            route
+        }
+        Provider::Codex => data
+            .codex_usage
+            .clone()
+            .map(|usage| {
+                let now = chrono::Utc::now();
+                access_route_from_usage(
+                    subscription_source("codex", None),
+                    usage,
+                    now,
+                    chrono::Duration::seconds(30),
+                    now,
+                )
+            })
+            .unwrap_or_else(|| {
+                AccessRouteSnapshot::unavailable(
+                    subscription_source("codex", None),
+                    data.codex_usage_error
+                        .clone()
+                        .unwrap_or_else(|| "Codex account quota unavailable".to_string()),
+                )
+            }),
+    }
+}
+
+fn route_window_slots(
+    route: &AccessRouteSnapshot,
+) -> (Option<&AccessWindow>, Option<&AccessWindow>) {
+    let primary = route.windows.iter().find(|window| {
+        window.key == "five_hour" || window.key == "primary" || window.quota.window_minutes == 300
+    });
+    let secondary = route.windows.iter().find(|window| {
+        matches!(window.key.as_str(), "weekly" | "seven_day" | "secondary")
+            || window.quota.window_minutes == 10_080
+    });
+    if primary.is_none() && secondary.is_none() && route.windows.len() == 1 {
+        let only = &route.windows[0];
+        if only.key.contains("week") || only.key.contains("seven") {
+            return (None, Some(only));
+        }
+        return (Some(only), None);
+    }
+    // Do not promote a known weekly window into the legacy primary/5h slot
+    // merely because another model-scoped weekly window is also present.
+    let primary = primary.or_else(|| secondary.is_none().then(|| route.windows.first()).flatten());
+    (primary, secondary)
+}
+
+/// Adapt the canonical access route to the legacy presence compositor without
+/// re-reading session envelopes. A supplied route always yields `Some`: an
+/// unavailable or stale route intentionally becomes an empty limit object so
+/// Codex's compositor cannot fall back to the session's older limits.
+fn route_limits_for_presence(route: Option<&AccessRouteSnapshot>) -> Option<RateLimits> {
+    let route = route?;
+    let live = route.availability == AccessAvailability::Available
+        && route.freshness == AccessFreshness::Fresh;
+    if !live {
+        return Some(RateLimits::default());
+    }
+    let (primary, secondary) = route_window_slots(route);
+    Some(CoreRateLimits::new(
+        [
+            primary.and_then(presence_window_from_access),
+            secondary.and_then(presence_window_from_access),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    ))
+}
+
+fn route_limits_for_claude_presence(
+    route: Option<&AccessRouteSnapshot>,
+) -> Option<ClaudeRateLimits> {
+    let route = route?;
+    let live = route.availability == AccessAvailability::Available
+        && route.freshness == AccessFreshness::Fresh;
+    if !live {
+        return Some(ClaudeRateLimits::default());
+    }
+    let (primary, secondary) = route_window_slots(route);
+    Some(ClaudeRateLimits {
+        primary: primary.and_then(claude_window_from_access),
+        secondary: secondary.and_then(claude_window_from_access),
+    })
+}
+
+fn presence_window_from_access(window: &AccessWindow) -> Option<UsageWindow> {
+    let used_percent = window.quota.used_percent;
+    let remaining_percent = window.quota.remaining_percent;
+    (used_percent.is_finite()
+        && remaining_percent.is_finite()
+        && (0.0..=100.0).contains(&used_percent)
+        && (0.0..=100.0).contains(&remaining_percent))
+    .then_some(UsageWindow {
+        used_percent,
+        remaining_percent,
+        window_minutes: window.quota.window_minutes,
+        resets_at: window.quota.resets_at,
+    })
+}
+
+fn claude_window_from_access(window: &AccessWindow) -> Option<ClaudeUsageWindowLimits> {
+    let used_percent = window.quota.used_percent;
+    let remaining_percent = window.quota.remaining_percent;
+    (used_percent.is_finite()
+        && remaining_percent.is_finite()
+        && (0.0..=100.0).contains(&used_percent)
+        && (0.0..=100.0).contains(&remaining_percent))
+    .then_some(ClaudeUsageWindowLimits {
+        used_percent,
+        remaining_percent,
+        window_minutes: window.quota.window_minutes,
+        resets_at: window.quota.resets_at,
+    })
+}
+
+fn access_source_label(route: &AccessRouteSnapshot) -> String {
+    match route.provenance {
+        AccessProvenance::AppServer => "Codex account API".to_string(),
+        AccessProvenance::ProviderApi => "Provider API".to_string(),
+        AccessProvenance::MemoryCache => "Cached provider response".to_string(),
+        AccessProvenance::SessionJsonl => "Session JSONL".to_string(),
+        AccessProvenance::None => route
+            .error
+            .clone()
+            .unwrap_or_else(|| "no usage data yet".to_string()),
+    }
+}
+
+fn rate_limit_info_from_access(route: &AccessRouteSnapshot) -> RateLimitInfo {
+    let (primary, secondary) = route_window_slots(route);
+    let sonnet = route
+        .windows
+        .iter()
+        .find(|window| window.key == "sonnet_free");
+    let live = route.availability == AccessAvailability::Available
+        && route.freshness == AccessFreshness::Fresh;
+    let usage = live
+        .then(|| route.usage.clone())
+        .flatten()
+        .map(|snapshot| UsageSnapshotTransport::from_snapshot(&route.source.provider, snapshot));
+    let extra = route.extra_usage.as_ref();
+    RateLimitInfo {
+        provider: route.source.provider.clone(),
+        usage,
+        five_hour_pct: if live {
+            primary.map_or(0.0, |window| window.quota.used_percent)
+        } else {
+            0.0
+        },
+        five_hour_resets: live
+            .then(|| primary.and_then(|window| window.quota.resets_at))
+            .flatten()
+            .map_or_else(|| "N/A".to_string(), |reset| reset.to_rfc3339()),
+        five_hour_label: primary.map_or_else(|| "5-hour window".to_string(), window_label),
+        five_hour_window_minutes: primary.map(|window| window.quota.window_minutes),
+        seven_day_pct: if live {
+            secondary.map_or(0.0, |window| window.quota.used_percent)
+        } else {
+            0.0
+        },
+        seven_day_resets: live
+            .then(|| secondary.and_then(|window| window.quota.resets_at))
+            .flatten()
+            .map_or_else(|| "N/A".to_string(), |reset| reset.to_rfc3339()),
+        seven_day_label: secondary.map_or_else(|| "All Models".to_string(), window_label),
+        seven_day_window_minutes: secondary.map(|window| window.quota.window_minutes),
+        sonnet_pct: live
+            .then_some(sonnet.map(|window| window.quota.used_percent))
+            .flatten(),
+        sonnet_resets: live
+            .then(|| sonnet.and_then(|window| window.quota.resets_at))
+            .flatten()
+            .map(|reset| reset.to_rfc3339()),
+        extra_enabled: extra.is_some_and(|usage| usage.enabled),
+        extra_limit: extra.and_then(|usage| usage.limit),
+        extra_used: extra.and_then(|usage| usage.used),
+        extra_pct: extra.and_then(|usage| usage.utilization),
+        source: access_source_label(route),
+        availability: route.availability,
+        freshness: route.freshness,
+        provenance: route.provenance,
+        error: route.error.clone(),
+    }
+}
+
 fn plan_name_from_key(key: &str) -> String {
     cc_discord_presence::plan::name_from_key(key)
 }
 
 fn plan_key_from_override(name: &str) -> Option<&'static str> {
     cc_discord_presence::plan::key_from_override(name)
-}
-
-fn log_save_error(scope: &str, result: anyhow::Result<()>) {
-    if let Err(err) = result {
-        tracing::warn!(scope, error = %err, "failed to save Pulse configuration");
-    }
 }
 
 fn codex_plan_key_from_tier(tier: DetectedPlanTier) -> &'static str {
@@ -215,6 +833,9 @@ pub(crate) fn seed_discord_state_for(provider: Provider) {
         return;
     };
     data.active_provider = provider;
+    // Access routes are provider-lane state, not UI selection state. Keep the
+    // independently probed lanes while the active provider changes; the
+    // selector below still chooses only the current subscription route.
     match data.active_provider {
         Provider::Claude => {
             if let Ok(config) = PresenceConfig::load_or_init() {
@@ -232,6 +853,20 @@ pub(crate) fn seed_discord_state_for(provider: Provider) {
 }
 
 pub fn start_background_poller(app: tauri::AppHandle) {
+    start_background_poller_inner(Some(app));
+}
+
+/// Starts the same live session/usage poller for the standalone debug bridge.
+///
+/// The bridge has no Tauri `AppHandle`, so notification delivery and snapshot
+/// events are intentionally omitted; the shared state and durable analytics
+/// writes remain identical to the native Pulse process.
+#[cfg(debug_assertions)]
+pub fn start_background_poller_without_app() {
+    start_background_poller_inner(None);
+}
+
+fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
     INITIAL_SNAPSHOT_READY.store(false, Ordering::Release);
     SNAPSHOT_POLLER_STARTED.store(true, Ordering::Release);
     let data = Arc::clone(shared());
@@ -258,6 +893,8 @@ pub fn start_background_poller(app: tauri::AppHandle) {
     seed_discord_state_from_disk();
 
     thread::spawn(move || {
+        let notification_connection = crate::notifications::open_default_database().ok();
+        let notification_store = notification_connection.as_ref().map(NotificationStore::new);
         let mut claude_git = GitBranchCache::new(Duration::from_secs(30));
         let mut claude_parse = SessionParseCache::default();
         let mut codex_git = CodexGitBranchCache::new(Duration::from_secs(30));
@@ -271,6 +908,7 @@ pub fn start_background_poller(app: tauri::AppHandle) {
         let mut claude_publisher = PublisherLease::new(cc_discord_presence::config::lock_path());
         let mut codex_publisher =
             PublisherLease::new(cc_discord_presence::codex::config::lock_path());
+        let mut api_probe_cache = ApiProbeCache::default();
         let mut last_snapshot_hash = None;
 
         loop {
@@ -288,6 +926,76 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                 })
                 .unwrap_or((true, DiscordDisplayPrefs::default(), false));
 
+            if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
+                codex_config = fresh;
+            }
+            let independently_probed_routes = independently_probe_access(
+                &mut usage_mgr,
+                &codex_usage_trigger,
+                &codex_usage_force,
+                &codex_usage_latest,
+                &mut api_probe_cache,
+                force_refresh,
+                provider,
+                &mut codex_plan_detector,
+                &codex_config.openai_plan,
+            );
+            for route in &independently_probed_routes {
+                let observed_provider = match route.source.provider.as_str() {
+                    "claude" => Some(Provider::Claude),
+                    "codex" => Some(Provider::Codex),
+                    _ => None,
+                };
+                if let Some(observed_provider) = observed_provider {
+                    observe_access_notifications(
+                        app.as_ref(),
+                        notification_store.as_ref(),
+                        observed_provider,
+                        route,
+                    );
+                }
+            }
+            let codex_sessions_roots = cc_discord_presence::codex::config::sessions_paths();
+            let active_codex = codex_session::collect_active_sessions_multi(
+                &codex_sessions_roots,
+                STALE_THRESHOLD,
+                STICKY_WINDOW,
+                &mut codex_git,
+                &mut codex_parse,
+                &codex_config.pricing,
+            )
+            .unwrap_or_default();
+            // Analytics ingestion is provider-independent: switching the visible
+            // workspace to Claude must not stop current Codex JSONLs advancing.
+            persist_live_codex_snapshots(&active_codex, &codex_config, PresenceSurface::Cli);
+
+            if let Ok(fresh) = PresenceConfig::load_or_init() {
+                claude_config = fresh;
+            }
+            let now = SystemTime::now();
+            let cutoff = now
+                .checked_sub(ACTIVE_CUTOFF)
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let mut all_claude = session::collect_active_sessions(
+                &mut claude_git,
+                &mut claude_parse,
+                STALE_THRESHOLD,
+                STICKY_WINDOW,
+            )
+            .unwrap_or_default();
+            if let Some(statusline) = read_statusline_data(&mut claude_git) {
+                merge_statusline_into_sessions(&mut all_claude, statusline);
+            }
+            let cutoff_chrono =
+                chrono::Utc::now() - chrono::Duration::seconds(ACTIVE_CUTOFF.as_secs() as i64);
+            let active_claude: Vec<_> = all_claude
+                .into_iter()
+                .filter(|session| is_claude_presence_candidate(session, cutoff, cutoff_chrono))
+                .collect();
+            // Claude analytics advance independently from the provider that
+            // currently owns the visible workspace and Discord publisher.
+            persist_live_claude_snapshots(&active_claude);
+
             let (discord_status, discord_publisher) = match provider {
                 Provider::Claude => {
                     codex_publisher.release();
@@ -295,33 +1003,7 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         tracing::warn!(error = %error, "failed to acquire Claude publisher lease");
                         false
                     });
-                    if let Ok(fresh) = PresenceConfig::load_or_init() {
-                        claude_config = fresh;
-                    }
-
-                    let now = SystemTime::now();
-                    let cutoff = now
-                        .checked_sub(ACTIVE_CUTOFF)
-                        .unwrap_or(SystemTime::UNIX_EPOCH);
-
-                    let mut all = session::collect_active_sessions(
-                        &mut claude_git,
-                        &mut claude_parse,
-                        STALE_THRESHOLD,
-                        STICKY_WINDOW,
-                    )
-                    .unwrap_or_default();
-
-                    if let Some(sl) = read_statusline_data(&mut claude_git) {
-                        merge_statusline_into_sessions(&mut all, sl);
-                    }
-
-                    let cutoff_chrono = chrono::Utc::now()
-                        - chrono::Duration::seconds(ACTIVE_CUTOFF.as_secs() as i64);
-                    let active: Vec<_> = all
-                        .into_iter()
-                        .filter(|s| is_claude_presence_candidate(s, cutoff, cutoff_chrono))
-                        .collect();
+                    let active = active_claude;
 
                     if force_refresh {
                         usage_mgr.invalidate_cache();
@@ -338,48 +1020,77 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         }
                     }
 
-                    let usage = usage_mgr.get_usage();
+                    let usage = trusted_claude_usage(&mut usage_mgr);
                     let usage_source = usage_mgr
                         .last_usage_origin()
                         .map(|origin| origin.label())
                         .unwrap_or_else(|| "unknown source".to_string());
                     let detected_plan_key = usage_mgr.detected_plan_key();
-                    let cached_usage = usage.as_ref().map(|u| {
-                        let fmt_reset = |dt: Option<chrono::DateTime<chrono::Utc>>| -> String {
-                            dt.map(|d| d.to_rfc3339())
-                                .unwrap_or_else(|| "N/A".to_string())
-                        };
-                        CachedUsage {
-                            five_hour_pct: u.five_hour.utilization,
-                            five_hour_resets: fmt_reset(u.five_hour.resets_at),
-                            seven_day_pct: u.seven_day.utilization,
-                            seven_day_resets: fmt_reset(u.seven_day.resets_at),
-                            sonnet_pct: u.sonnet_free.as_ref().map(|s| s.utilization),
-                            sonnet_resets: u.sonnet_free.as_ref().map(|s| fmt_reset(s.resets_at)),
-                            extra_enabled: u.extra_usage.as_ref().is_some_and(|e| e.is_enabled),
-                            extra_limit: u.extra_usage.as_ref().and_then(|e| e.monthly_limit),
-                            extra_used: u.extra_usage.as_ref().and_then(|e| e.used_credits),
-                            extra_pct: u.extra_usage.as_ref().and_then(|e| e.utilization),
-                            source: usage_source.clone(),
-                        }
+                    let cached_usage = usage.as_ref().map(|u| CachedUsage {
+                        five_hour_pct: u.five_hour.utilization,
+                        seven_day_pct: u.seven_day.utilization,
+                        extra_enabled: u.extra_usage.as_ref().is_some_and(|e| e.is_enabled),
+                        extra_limit: u.extra_usage.as_ref().and_then(|e| e.monthly_limit),
+                        extra_used: u.extra_usage.as_ref().and_then(|e| e.used_credits),
+                        extra_pct: u.extra_usage.as_ref().and_then(|e| e.utilization),
+                        source: usage_source.clone(),
                     });
                     let usage_error = usage_mgr.error_hint_with_countdown();
+                    let observed_at = usage_mgr
+                        .last_usage_observed_at()
+                        .unwrap_or_else(chrono::Utc::now);
+                    let access_route = match usage.as_ref() {
+                        Some(usage) => {
+                            let mut source =
+                                subscription_source("claude", detected_plan_key.clone());
+                            if usage_mgr
+                                .last_usage_origin()
+                                .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth))
+                            {
+                                source.proof = crate::access::AccessProof::QuotaResponse;
+                            }
+                            claude_route_from_usage(
+                                source,
+                                usage,
+                                observed_at,
+                                chrono::Utc::now(),
+                                chrono::Duration::seconds(300),
+                                chrono::Utc::now(),
+                                usage_source.clone(),
+                            )
+                        }
+                        None => AccessRouteSnapshot::unavailable(
+                            subscription_source("claude", detected_plan_key.clone()),
+                            usage_error
+                                .clone()
+                                .unwrap_or_else(|| "no usage data yet".to_string()),
+                        ),
+                    };
+                    // A stale cache remains useful as a diagnostic route but
+                    // must not put old percentages back into Rich Presence.
+                    let usage_for_discord = (access_route.availability
+                        == AccessAvailability::Available
+                        && access_route.freshness == AccessFreshness::Fresh)
+                        .then_some(usage.as_ref())
+                        .flatten();
 
                     apply_claude_display_prefs(&mut claude_config, &prefs);
                     let manual_plan = PresenceConfig::load_or_init()
                         .ok()
                         .and_then(|cfg| cfg.plan)
-                        .filter(|p| !p.trim().is_empty());
+                        .filter(|p| {
+                            !p.trim().is_empty()
+                                && cc_discord_presence::plan::plan_from_key(p).is_some()
+                        });
                     claude_config.plan = manual_plan.or_else(|| detected_plan_key.clone());
 
-                    persist_live_claude_snapshots(&active);
                     let status = if discord_enabled && publisher_owned {
                         let active_session = preferred_active_session(&active);
-                        let limits = latest_limits_source(&active).map(|s| &s.limits);
+                        let limits = route_limits_for_claude_presence(Some(&access_route));
                         if let Err(err) = claude_discord.update(
                             active_session,
-                            limits,
-                            usage.as_ref(),
+                            limits.as_ref(),
+                            usage_for_discord,
                             &claude_config,
                         ) {
                             tracing::warn!(error = %err, "failed to update Claude Discord presence");
@@ -395,11 +1106,13 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         codex_discord.shutdown();
                         "Controlled by external daemon".to_string()
                     };
-
                     if let Ok(mut d) = data.lock() {
                         d.sessions = ActiveSessions::Claude(active);
                         d.claude_usage = cached_usage;
+                        d.claude_usage_data = usage.clone();
                         d.claude_usage_error = usage_error;
+                        d.access =
+                            merge_access_routes(&independently_probed_routes, [access_route]);
                     }
                     (
                         status,
@@ -417,23 +1130,11 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         tracing::warn!(error = %error, "failed to acquire Codex publisher lease");
                         false
                     });
-                    if let Ok(fresh) = CodexPresenceConfig::load_or_init() {
-                        codex_config = fresh;
-                    }
                     let discord_enabled = codex_config.presence_enabled;
 
                     apply_codex_display_prefs(&mut codex_config, &prefs, CreditsMirror::Apply);
 
-                    let sessions_roots = cc_discord_presence::codex::config::sessions_paths();
-                    let active = codex_session::collect_active_sessions_multi(
-                        &sessions_roots,
-                        STALE_THRESHOLD,
-                        STICKY_WINDOW,
-                        &mut codex_git,
-                        &mut codex_parse,
-                        &codex_config.pricing,
-                    )
-                    .unwrap_or_default();
+                    let active = active_codex;
                     let jsonl_envelopes = fresh_envelopes(
                         codex_parse.rate_limit_envelopes(),
                         chrono::Utc::now(),
@@ -450,14 +1151,32 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         .ok()
                         .and_then(|slot| slot.clone())
                         .unwrap_or_else(|| Err("Codex account quota read is pending".to_string()));
-                    let (usage_envelopes, codex_usage, codex_usage_error) = match account_usage {
+                    let (
+                        usage_envelopes,
+                        codex_usage,
+                        codex_usage_error,
+                        codex_reset_credits,
+                        codex_individual_limits,
+                    ) = match account_usage {
                         Ok(reading) => {
                             let snapshot = reading.usage_snapshot();
-                            (reading.envelopes, Some(snapshot), None)
+                            (
+                                reading.envelopes,
+                                Some(snapshot),
+                                None,
+                                reading.rate_limit_reset_credits,
+                                reading.individual_limits,
+                            )
                         }
                         Err(error) if !jsonl_envelopes.is_empty() => {
                             let snapshot = usage_snapshot_from_envelopes(
-                                Provider::Codex.as_str(),
+                                UsageSource::new(
+                                    "codex-subscription:jsonl",
+                                    [
+                                        UsageSignal::CodexSessionJsonl,
+                                        UsageSignal::CodexSubscriptionUsage,
+                                    ],
+                                ),
                                 "Codex JSONL rate_limits · fallback",
                                 &jsonl_envelopes,
                             );
@@ -465,18 +1184,58 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                                 jsonl_envelopes,
                                 Some(snapshot),
                                 Some(format!("Codex account API unavailable: {error}")),
+                                None,
+                                Vec::new(),
                             )
                         }
                         Err(error) => (
                             Vec::new(),
                             None,
                             Some(format!("Codex account API unavailable: {error}")),
+                            None,
+                            Vec::new(),
                         ),
                     };
                     let effective_limits = effective_limits_from_envelopes(&usage_envelopes);
-
                     let resolved_plan = codex_plan_detector
                         .resolve_from_envelopes(&usage_envelopes, &codex_config.openai_plan);
+                    let resolved_plan_key = codex_plan_key_from_tier(resolved_plan.tier);
+                    let access_plan =
+                        (!resolved_plan_key.is_empty()).then(|| resolved_plan_key.to_string());
+                    let access_route =
+                        match codex_usage.clone() {
+                            Some(usage) => {
+                                let max_age =
+                                    if usage.source.signals.iter().any(|signal| {
+                                        matches!(signal, UsageSignal::CodexSessionJsonl)
+                                    }) {
+                                        chrono::Duration::minutes(15)
+                                    } else {
+                                        chrono::Duration::seconds(30)
+                                    };
+                                let mut source = subscription_source("codex", access_plan.clone());
+                                if usage.source.signals.iter().any(|signal| {
+                                    matches!(signal, UsageSignal::CodexSubscriptionUsage)
+                                }) {
+                                    source.proof = crate::access::AccessProof::QuotaResponse;
+                                }
+                                access_route_from_usage_with_account_details(
+                                    source,
+                                    usage,
+                                    codex_reset_credits,
+                                    codex_individual_limits,
+                                    chrono::Utc::now(),
+                                    max_age,
+                                    chrono::Utc::now(),
+                                )
+                            }
+                            None => AccessRouteSnapshot::unavailable(
+                                subscription_source("codex", access_plan),
+                                codex_usage_error.clone().unwrap_or_else(|| {
+                                    "Codex account quota unavailable".to_string()
+                                }),
+                            ),
+                        };
                     let resolved_service_tier = resolve_service_tier();
                     let opencode_running =
                         cc_discord_presence::codex::process::is_opencode_running();
@@ -484,13 +1243,12 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         cc_discord_presence::codex::process::is_desktop_surface_running();
                     let surface_override = codex_fallback_surface(codex_desktop_running);
 
-                    persist_live_codex_snapshots(&active, &codex_config, surface_override);
                     let status = if discord_enabled && publisher_owned {
                         let active_session = codex_session::preferred_active_session(&active);
-                        let limits = effective_limits.as_ref().map(|item| &item.limits);
+                        let limits = route_limits_for_presence(Some(&access_route));
                         if let Err(err) = codex_discord.update(
                             active_session,
-                            limits,
+                            limits.as_ref(),
                             &resolved_plan,
                             &resolved_service_tier,
                             &codex_config,
@@ -509,17 +1267,19 @@ pub fn start_background_poller(app: tauri::AppHandle) {
                         codex_discord.shutdown();
                         "Controlled by external daemon".to_string()
                     };
-
                     if let Ok(mut d) = data.lock() {
                         d.discord_enabled = discord_enabled;
                         d.sessions = ActiveSessions::Codex(active);
                         d.codex_opencode_running = opencode_running;
                         d.codex_desktop_surface_running = codex_desktop_running;
                         d.claude_usage = None;
+                        d.claude_usage_data = None;
                         d.claude_usage_error = None;
                         d.codex_usage = codex_usage;
                         d.codex_limits = effective_limits;
                         d.codex_usage_error = codex_usage_error;
+                        d.access =
+                            merge_access_routes(&independently_probed_routes, [access_route]);
                     }
                     (
                         status,
@@ -542,7 +1302,9 @@ pub fn start_background_poller(app: tauri::AppHandle) {
             if let Ok(snapshot) = get_app_snapshot() {
                 let snapshot_hash = app_snapshot_fingerprint(&snapshot);
                 if last_snapshot_hash != Some(snapshot_hash) {
-                    if let Err(error) = app.emit("pulse://snapshot", &snapshot) {
+                    if let Some(app) = app.as_ref()
+                        && let Err(error) = app.emit("pulse://snapshot", &snapshot)
+                    {
                         tracing::warn!(error = %error, "failed to emit Pulse snapshot");
                     }
                     last_snapshot_hash = Some(snapshot_hash);
@@ -639,6 +1401,7 @@ pub struct AppSnapshot {
     pub health: HealthResponse,
     pub metrics: MetricsResponse,
     pub sessions: Vec<SessionInfo>,
+    pub access: AccessSnapshot,
     pub rate_limits: Option<RateLimitInfo>,
     pub discord_preview: DiscordPresencePreview,
     pub discord_settings: DiscordSettings,
@@ -654,16 +1417,38 @@ pub fn get_app_snapshot() -> Result<AppSnapshot, String> {
     {
         thread::sleep(Duration::from_millis(25));
     }
+    let access = get_access_snapshot();
     Ok(AppSnapshot {
         revision: 1,
         health: get_health(),
         metrics: get_metrics(),
         sessions: get_live_sessions(),
+        access,
         rate_limits: get_rate_limits(),
         discord_preview: get_discord_preview(),
         discord_settings: get_discord_settings()?,
         plan: get_plan_info(),
     })
+}
+
+/// Returns the canonical access routes used to build quota DTOs, previews, and
+/// live provider state. Unavailable lanes remain in the diagnostic transport;
+/// proof-gated consumers select only routes with authenticated evidence.
+#[tauri::command]
+pub fn get_access_snapshot() -> AccessSnapshot {
+    let inventory = crate::db::get_provider_history_inventory(None);
+    shared()
+        .lock()
+        .ok()
+        .map(|data| {
+            if data.access.routes.is_empty() {
+                AccessSnapshot::new(vec![active_access_route(&data)])
+            } else {
+                AccessSnapshot::new(data.access.routes.clone())
+            }
+        })
+        .map(|snapshot| snapshot.with_local_history(&inventory))
+        .unwrap_or_default()
 }
 
 fn app_snapshot_fingerprint(snapshot: &AppSnapshot) -> u64 {
@@ -718,6 +1503,10 @@ pub struct DiscordPresencePreview {
 #[derive(Serialize)]
 pub struct MetricsResponse {
     pub total_cost: f64,
+    /// False when one or more sessions have no exact cost basis. The numeric
+    /// total then covers exact observations only and is not a complete bill.
+    pub cost_available: bool,
+    pub cost_basis: String,
     pub input_tokens: u64,
     pub pure_input_tokens: u64,
     pub output_tokens: u64,
@@ -787,6 +1576,9 @@ pub struct SessionInfo {
     pub model_id: String,
     pub context_window: String,
     pub cost: f64,
+    /// Distinguishes a true observed zero from an unavailable/partial cost.
+    pub cost_available: bool,
+    pub cost_basis: String,
     pub tokens: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -831,9 +1623,37 @@ pub struct SessionInfo {
 }
 
 #[derive(Serialize)]
+pub struct UsageSnapshotTransport {
+    /// Legacy v1.6 discriminator retained for existing IPC consumers.
+    pub provider: String,
+    /// Legacy v1.6 provenance string retained under its original key.
+    pub source: String,
+    /// Structured v1.7 source identity.
+    pub usage_source: UsageSource,
+    pub scopes: Vec<QuotaScope>,
+    pub credits: Option<CreditBalance>,
+    pub observed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub provenance_source: String,
+}
+
+impl UsageSnapshotTransport {
+    fn from_snapshot(provider: &str, snapshot: UsageSnapshot) -> Self {
+        Self {
+            provider: provider.to_string(),
+            source: snapshot.provenance_source.clone(),
+            usage_source: snapshot.source,
+            scopes: snapshot.scopes,
+            credits: snapshot.credits,
+            observed_at: snapshot.observed_at,
+            provenance_source: snapshot.provenance_source,
+        }
+    }
+}
+
+#[derive(Serialize)]
 pub struct RateLimitInfo {
     pub provider: String,
-    pub usage: Option<UsageSnapshot>,
+    pub usage: Option<UsageSnapshotTransport>,
     pub five_hour_pct: f64,
     pub five_hour_resets: String,
     pub five_hour_label: String,
@@ -849,24 +1669,10 @@ pub struct RateLimitInfo {
     pub extra_used: Option<f64>,
     pub extra_pct: Option<f64>,
     pub source: String,
-}
-
-fn format_codex_window_label(minutes: Option<u64>, fallback: &str) -> String {
-    match minutes {
-        Some(300) => "5h Window".into(),
-        Some(10080) => "7d Window".into(),
-        Some(1440) => "24h Window".into(),
-        Some(value) if value > 0 => {
-            if value % 1440 == 0 {
-                format!("{}d Window", value / 1440)
-            } else if value % 60 == 0 {
-                format!("{}h Window", value / 60)
-            } else {
-                format!("{value}m Window")
-            }
-        }
-        _ => fallback.into(),
-    }
+    pub availability: AccessAvailability,
+    pub freshness: AccessFreshness,
+    pub provenance: AccessProvenance,
+    pub error: Option<String>,
 }
 
 fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> {
@@ -952,6 +1758,20 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
                 model_id: model_id_raw,
                 context_window: ctx_window,
                 cost: s.total_cost,
+                cost_available: s.total_cost.is_finite()
+                    && s.total_cost >= 0.0
+                    && (s.total_cost > 0.0 || s.session_total_tokens.unwrap_or(0) == 0),
+                cost_basis: if s.total_cost.is_finite()
+                    && s.total_cost >= 0.0
+                    && (s.total_cost > 0.0 || s.session_total_tokens.unwrap_or(0) == 0)
+                {
+                    match s.source {
+                        session::DataSource::Statusline => "exact".to_string(),
+                        session::DataSource::Jsonl => "estimated".to_string(),
+                    }
+                } else {
+                    "unavailable".to_string()
+                },
                 tokens: s.session_total_tokens.unwrap_or(0),
                 input_tokens: s.input_tokens,
                 output_tokens: s.output_tokens,
@@ -986,7 +1806,7 @@ fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<Sessio
         .collect()
 }
 
-fn build_codex_session_infos(
+pub(crate) fn build_codex_session_infos(
     snapshots: &[CodexSessionSnapshot],
     config: &CodexPresenceConfig,
     fallback_surface: PresenceSurface,
@@ -995,7 +1815,6 @@ fn build_codex_session_infos(
     let idle = now
         .checked_sub(IDLE_CUTOFF)
         .unwrap_or(SystemTime::UNIX_EPOCH);
-
     snapshots
         .iter()
         .map(|s| {
@@ -1047,6 +1866,11 @@ fn build_codex_session_infos(
             };
             let activity_target = s.activity.as_ref().and_then(|a| a.target.clone());
             let surface = codex_session_surface(s, fallback_surface);
+            let exact_cost = (s.pricing_status
+                == cc_discord_presence::codex::cost::PricingStatus::Exact)
+                .then_some(s.known_cost_usd)
+                .flatten();
+            let cost_breakdown = &s.cost_breakdown;
             SessionInfo {
                 provider: Provider::Codex.as_str().to_string(),
                 app_name: Some(
@@ -1060,7 +1884,13 @@ fn build_codex_session_infos(
                 model: display_name,
                 model_id: model_key,
                 context_window: context_window_label,
-                cost: s.known_cost_usd.unwrap_or(0.0),
+                cost: exact_cost.unwrap_or(0.0),
+                cost_available: exact_cost.is_some(),
+                cost_basis: if exact_cost.is_some() {
+                    "exact".to_string()
+                } else {
+                    "unavailable".to_string()
+                },
                 tokens: s
                     .session_total_tokens
                     .unwrap_or(input_total + s.output_tokens_total),
@@ -1086,10 +1916,18 @@ fn build_codex_session_infos(
                 subagent_count: 0,
                 subagents: Vec::new(),
                 tokens_per_sec: 0.0,
-                input_cost: s.cost_breakdown.input_cost_usd,
-                output_cost: s.cost_breakdown.output_cost_usd,
-                cache_write_cost: 0.0,
-                cache_read_cost: s.cost_breakdown.cached_input_cost_usd,
+                input_cost: exact_cost
+                    .map(|_| cost_breakdown.input_cost_usd)
+                    .unwrap_or(0.0),
+                output_cost: exact_cost
+                    .map(|_| cost_breakdown.output_cost_usd)
+                    .unwrap_or(0.0),
+                cache_write_cost: exact_cost
+                    .map(|_| cost_breakdown.cache_write_cost_usd)
+                    .unwrap_or(0.0),
+                cache_read_cost: exact_cost
+                    .map(|_| cost_breakdown.cached_input_cost_usd)
+                    .unwrap_or(0.0),
                 speed: s.speed.mode.label().to_ascii_lowercase(),
                 fast,
                 service_tier: s.speed.known.then(|| {
@@ -1128,8 +1966,7 @@ fn persist_live_session_infos(provider: Provider, result: &[SessionInfo]) {
             .as_ref()
             .and_then(|items| items.get(&key))
             .is_some_and(|previous| *previous == fingerprint);
-        if !unchanged {
-            crate::db::upsert_session(s);
+        if !unchanged && crate::db::upsert_session(s) {
             changed_count += 1;
             if let Some(items) = fingerprints.as_mut() {
                 items.insert(key, fingerprint);
@@ -1184,6 +2021,52 @@ pub fn get_health() -> HealthResponse {
         discord_status,
         discord_enabled,
     }
+}
+
+#[tauri::command]
+pub fn get_notifications(limit: Option<usize>) -> Result<Vec<NotificationRecord>, String> {
+    let connection =
+        crate::notifications::open_default_database().map_err(|error| error.to_string())?;
+    NotificationStore::new(&connection)
+        .list(limit)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn get_unread_notification_count() -> u32 {
+    let Ok(connection) = crate::notifications::open_default_database() else {
+        return 0;
+    };
+    NotificationStore::new(&connection)
+        .unread_count()
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+pub fn mark_notification_read(id: i64) -> Result<bool, String> {
+    let connection =
+        crate::notifications::open_default_database().map_err(|error| error.to_string())?;
+    NotificationStore::new(&connection)
+        .mark_read(id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn mark_all_notifications_read() -> Result<usize, String> {
+    let connection =
+        crate::notifications::open_default_database().map_err(|error| error.to_string())?;
+    NotificationStore::new(&connection)
+        .mark_all_read()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn dismiss_notification(id: i64) -> Result<bool, String> {
+    let connection =
+        crate::notifications::open_default_database().map_err(|error| error.to_string())?;
+    NotificationStore::new(&connection)
+        .dismiss(id)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1365,8 +2248,11 @@ pub fn get_metrics() -> MetricsResponse {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    let (cost_available, cost_basis) = cost_availability(&sessions);
     MetricsResponse {
         total_cost: cost,
+        cost_available,
+        cost_basis,
         input_tokens: inp,
         pure_input_tokens: inp.saturating_sub(cw).saturating_sub(cr),
         output_tokens: out,
@@ -1380,6 +2266,17 @@ pub fn get_metrics() -> MetricsResponse {
         cache_read_cost: crc,
         cache_hit_ratio,
         models,
+    }
+}
+
+fn cost_availability(sessions: &[SessionInfo]) -> (bool, String) {
+    if sessions.is_empty() {
+        return (false, "unavailable".to_string());
+    }
+    if sessions.iter().all(|session| session.cost_available) {
+        (true, "exact".to_string())
+    } else {
+        (false, "partial".to_string())
     }
 }
 
@@ -1399,6 +2296,7 @@ pub fn get_discord_preview() -> DiscordPresencePreview {
 }
 
 fn build_discord_presence_preview(data: &CachedData) -> DiscordPresencePreview {
+    let access = active_access_route(data);
     match data.active_provider {
         Provider::Claude => {
             let mut config = PresenceConfig::load_or_init().unwrap_or_default();
@@ -1407,7 +2305,12 @@ fn build_discord_presence_preview(data: &CachedData) -> DiscordPresencePreview {
                 ActiveSessions::Claude(sessions) => sessions.as_slice(),
                 _ => &[],
             };
-            build_claude_discord_preview(sessions, &config)
+            build_claude_discord_preview_with_access(
+                sessions,
+                &config,
+                Some(&access),
+                data.claude_usage_data.as_ref(),
+            )
         }
         Provider::Codex => {
             let mut config = CodexPresenceConfig::load_or_init().unwrap_or_default();
@@ -1416,7 +2319,12 @@ fn build_discord_presence_preview(data: &CachedData) -> DiscordPresencePreview {
                 ActiveSessions::Codex(sessions) => sessions.as_slice(),
                 _ => &[],
             };
-            build_codex_discord_preview(sessions, &config, data.codex_desktop_surface_running)
+            build_codex_discord_preview_with_access(
+                sessions,
+                &config,
+                data.codex_desktop_surface_running,
+                Some(&access),
+            )
         }
     }
 }
@@ -1617,9 +2525,19 @@ pub fn get_discord_settings() -> Result<DiscordSettings, String> {
     }
 }
 
+#[allow(dead_code)]
 fn build_claude_discord_preview(
     sessions: &[ClaudeSessionSnapshot],
     config: &PresenceConfig,
+) -> DiscordPresencePreview {
+    build_claude_discord_preview_with_access(sessions, config, None, None)
+}
+
+fn build_claude_discord_preview_with_access(
+    sessions: &[ClaudeSessionSnapshot],
+    config: &PresenceConfig,
+    access: Option<&AccessRouteSnapshot>,
+    api_usage: Option<&cc_discord_presence::usage::UsageData>,
 ) -> DiscordPresencePreview {
     let Some(session) = preferred_active_session(sessions) else {
         return DiscordPresencePreview {
@@ -1636,8 +2554,14 @@ fn build_claude_discord_preview(
         };
     };
 
-    let limits = latest_limits_source(sessions).map(|source| &source.limits);
-    let (details, state, _tooltip) = claude_presence_lines(session, limits, None, config);
+    let limits = route_limits_for_claude_presence(access);
+    let route_is_live = access.is_some_and(|route| {
+        route.availability == AccessAvailability::Available
+            && route.freshness == AccessFreshness::Fresh
+    });
+    let live_usage = route_is_live.then_some(api_usage).flatten();
+    let (details, state, _tooltip) =
+        claude_presence_lines(session, limits.as_ref(), live_usage, config);
 
     DiscordPresencePreview {
         provider: Provider::Claude.as_str().to_string(),
@@ -1653,10 +2577,20 @@ fn build_claude_discord_preview(
     }
 }
 
+#[allow(dead_code)]
 fn build_codex_discord_preview(
     sessions: &[CodexSessionSnapshot],
     config: &CodexPresenceConfig,
     desktop_surface_running: bool,
+) -> DiscordPresencePreview {
+    build_codex_discord_preview_with_access(sessions, config, desktop_surface_running, None)
+}
+
+fn build_codex_discord_preview_with_access(
+    sessions: &[CodexSessionSnapshot],
+    config: &CodexPresenceConfig,
+    desktop_surface_running: bool,
+    access: Option<&AccessRouteSnapshot>,
 ) -> DiscordPresencePreview {
     let fallback_surface = codex_fallback_surface(desktop_surface_running);
     let Some(session) = codex_session::preferred_active_session(sessions) else {
@@ -1677,12 +2611,11 @@ fn build_codex_discord_preview(
 
     let resolved_service_tier = resolve_service_tier();
     let resolved_plan = PlanDetector::new().resolve_from_sessions(sessions, &config.openai_plan);
-    let effective_limits = codex_session::latest_limits_source(sessions);
-    let limits = effective_limits.as_ref().map(|item| &item.limits);
+    let limits = route_limits_for_presence(access);
     let presentation = active_presence_presentation(
         codex_session_surface(session, fallback_surface),
         session,
-        limits,
+        limits.as_ref(),
         &resolved_plan,
         &resolved_service_tier,
         config,
@@ -1719,191 +2652,7 @@ fn codex_duration_secs(session: &CodexSessionSnapshot) -> u64 {
 #[tauri::command]
 pub fn get_rate_limits() -> Option<RateLimitInfo> {
     let data = shared().lock().ok()?;
-    match data.active_provider {
-        Provider::Claude => {
-            if let Some(u) = data.claude_usage.as_ref() {
-                return Some(RateLimitInfo {
-                    provider: Provider::Claude.as_str().to_string(),
-                    usage: Some(UsageSnapshot {
-                        provider: Provider::Claude.as_str().to_string(),
-                        scopes: vec![QuotaScope {
-                            id: Some("claude".to_string()),
-                            name: Some("Account quota".to_string()),
-                            kind: RateLimitScope::GlobalCodex,
-                            windows: vec![
-                                QuotaWindow {
-                                    window_minutes: 300,
-                                    used_percent: u.five_hour_pct,
-                                    remaining_percent: (100.0 - u.five_hour_pct).clamp(0.0, 100.0),
-                                    resets_at: None,
-                                },
-                                QuotaWindow {
-                                    window_minutes: 10080,
-                                    used_percent: u.seven_day_pct,
-                                    remaining_percent: (100.0 - u.seven_day_pct).clamp(0.0, 100.0),
-                                    resets_at: None,
-                                },
-                            ],
-                        }],
-                        credits: None,
-                        observed_at: None,
-                        source: u.source.clone(),
-                    }),
-                    five_hour_pct: u.five_hour_pct,
-                    five_hour_resets: u.five_hour_resets.clone(),
-                    five_hour_label: "5-hour window".into(),
-                    five_hour_window_minutes: Some(300),
-                    seven_day_pct: u.seven_day_pct,
-                    seven_day_resets: u.seven_day_resets.clone(),
-                    seven_day_label: "All Models".into(),
-                    seven_day_window_minutes: Some(10080),
-                    sonnet_pct: u.sonnet_pct,
-                    sonnet_resets: u.sonnet_resets.clone(),
-                    extra_enabled: u.extra_enabled,
-                    extra_limit: u.extra_limit,
-                    extra_used: u.extra_used,
-                    extra_pct: u.extra_pct,
-                    source: u.source.clone(),
-                });
-            }
-
-            if let ActiveSessions::Claude(sessions) = &data.sessions
-                && let Some(source) = session::latest_limits_source(sessions)
-                && let Some(primary) = source.limits.primary.as_ref()
-            {
-                let secondary = source.limits.secondary.as_ref();
-                return Some(RateLimitInfo {
-                    provider: Provider::Claude.as_str().to_string(),
-                    usage: Some(UsageSnapshot {
-                        provider: Provider::Claude.as_str().to_string(),
-                        scopes: vec![QuotaScope {
-                            id: Some("claude".to_string()),
-                            name: Some("Account quota".to_string()),
-                            kind: RateLimitScope::GlobalCodex,
-                            windows: std::iter::once(primary)
-                                .chain(secondary.into_iter())
-                                .map(|window| QuotaWindow {
-                                    window_minutes: window.window_minutes,
-                                    used_percent: window.used_percent,
-                                    remaining_percent: window.remaining_percent,
-                                    resets_at: window.resets_at,
-                                })
-                                .collect(),
-                        }],
-                        credits: None,
-                        observed_at: source.last_token_event_at,
-                        source: match source.source {
-                            session::DataSource::Statusline => "statusline".to_string(),
-                            session::DataSource::Jsonl => "jsonl".to_string(),
-                        },
-                    }),
-                    five_hour_pct: primary.used_percent,
-                    five_hour_resets: primary
-                        .resets_at
-                        .map_or("N/A".into(), |d| d.format("%H:%M UTC").to_string()),
-                    five_hour_label: "5-hour window".into(),
-                    five_hour_window_minutes: Some(primary.window_minutes),
-                    seven_day_pct: secondary.map_or(0.0, |s| s.used_percent),
-                    seven_day_resets: secondary
-                        .and_then(|s| s.resets_at)
-                        .map_or("N/A".into(), |d| d.format("%H:%M UTC").to_string()),
-                    seven_day_label: "All Models".into(),
-                    seven_day_window_minutes: secondary.map(|s| s.window_minutes),
-                    sonnet_pct: None,
-                    sonnet_resets: None,
-                    extra_enabled: false,
-                    extra_limit: None,
-                    extra_used: None,
-                    extra_pct: None,
-                    source: data
-                        .claude_usage_error
-                        .clone()
-                        .unwrap_or_else(|| "session".into()),
-                });
-            }
-
-            let hint = data
-                .claude_usage_error
-                .clone()
-                .unwrap_or_else(|| "no data yet".into());
-            Some(RateLimitInfo {
-                provider: Provider::Claude.as_str().to_string(),
-                usage: None,
-                five_hour_pct: 0.0,
-                five_hour_resets: "N/A".into(),
-                five_hour_label: "5-hour window".into(),
-                five_hour_window_minutes: None,
-                seven_day_pct: 0.0,
-                seven_day_resets: "N/A".into(),
-                seven_day_label: "All Models".into(),
-                seven_day_window_minutes: None,
-                sonnet_pct: None,
-                sonnet_resets: None,
-                extra_enabled: false,
-                extra_limit: None,
-                extra_used: None,
-                extra_pct: None,
-                source: hint,
-            })
-        }
-        Provider::Codex => {
-            let usage = data.codex_usage.clone();
-            if let Some(selected) = data.codex_limits.as_ref()
-                && let Some(primary) = selected.limits.primary.as_ref()
-            {
-                let secondary = selected.limits.secondary.as_ref();
-                return Some(RateLimitInfo {
-                    provider: Provider::Codex.as_str().to_string(),
-                    usage,
-                    five_hour_pct: primary.used_percent,
-                    five_hour_resets: primary.resets_at.map_or("N/A".into(), |d| d.to_rfc3339()),
-                    five_hour_label: format_codex_window_label(
-                        Some(primary.window_minutes),
-                        "Primary Window",
-                    ),
-                    five_hour_window_minutes: Some(primary.window_minutes),
-                    seven_day_pct: secondary.map_or(0.0, |s| s.used_percent),
-                    seven_day_resets: secondary
-                        .and_then(|s| s.resets_at)
-                        .map_or("N/A".into(), |d| d.to_rfc3339()),
-                    seven_day_label: format_codex_window_label(
-                        secondary.map(|s| s.window_minutes),
-                        "Secondary Window",
-                    ),
-                    seven_day_window_minutes: secondary.map(|s| s.window_minutes),
-                    sonnet_pct: None,
-                    sonnet_resets: None,
-                    extra_enabled: false,
-                    extra_limit: None,
-                    extra_used: None,
-                    extra_pct: None,
-                    source: selected.source_label(),
-                });
-            }
-            Some(RateLimitInfo {
-                provider: Provider::Codex.as_str().to_string(),
-                usage,
-                five_hour_pct: 0.0,
-                five_hour_resets: "N/A".into(),
-                five_hour_label: "5h Window".into(),
-                five_hour_window_minutes: None,
-                seven_day_pct: 0.0,
-                seven_day_resets: "N/A".into(),
-                seven_day_label: "7d Window".into(),
-                seven_day_window_minutes: None,
-                sonnet_pct: None,
-                sonnet_resets: None,
-                extra_enabled: false,
-                extra_limit: None,
-                extra_used: None,
-                extra_pct: None,
-                source: data
-                    .codex_usage_error
-                    .clone()
-                    .unwrap_or_else(|| "Codex account quota unavailable".into()),
-            })
-        }
-    }
+    Some(rate_limit_info_from_access(&active_access_route(&data)))
 }
 
 #[derive(Serialize)]
@@ -1913,6 +2662,10 @@ pub struct DiscordUserInfo {
     pub discriminator: String,
     pub avatar_hash: String,
     pub avatar_url: String,
+    /// Discord's built-in default avatar for this account. Always resolves
+    /// (HTTP 200), so the UI can fall back to it when `avatar_url` points at a
+    /// stale hash the CDN no longer serves.
+    pub avatar_default_url: String,
     pub banner_hash: Option<String>,
     pub banner_url: Option<String>,
 }
@@ -2084,6 +2837,11 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                         )
                     };
 
+                    // Always resolvable fallback. When the custom avatar hash is
+                    // stale (the CDN returns 404 after the user changes it), the
+                    // UI swaps to this on the img error event.
+                    let avatar_default_url = default_avatar_url(&user_id, &discriminator);
+
                     let (banner_hash, banner_url) = match extract_json_field(&chunk_str, "banner") {
                         Some(bh) if !bh.is_empty() => {
                             let ext = if bh.starts_with("a_") { "gif" } else { "png" };
@@ -2102,6 +2860,7 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                         discriminator,
                         avatar_hash,
                         avatar_url,
+                        avatar_default_url,
                         banner_hash,
                         banner_url,
                     });
@@ -2152,6 +2911,7 @@ pub fn get_plan_info() -> PlanInfo {
         Provider::Claude => {
             if let Ok(cfg) = PresenceConfig::load_or_init()
                 && let Some(plan) = cfg.plan.as_deref().filter(|plan| !plan.trim().is_empty())
+                && cc_discord_presence::plan::plan_from_key(plan).is_some()
             {
                 return PlanInfo {
                     provider: Provider::Claude.as_str().to_string(),
@@ -2168,12 +2928,13 @@ pub fn get_plan_info() -> PlanInfo {
             } else {
                 plan_name_from_key(&plan_key)
             };
+            let detected = !plan_key.is_empty();
 
             PlanInfo {
                 provider: Provider::Claude.as_str().to_string(),
                 plan_key,
                 plan_name,
-                detected: true,
+                detected,
             }
         }
         Provider::Codex => {
@@ -2181,62 +2942,65 @@ pub fn get_plan_info() -> PlanInfo {
             let sessions = read_codex_sessions();
             let mut detector = PlanDetector::new();
             let resolved = detector.resolve_from_sessions(&sessions, &config.openai_plan);
+            let plan_key = codex_plan_key_from_tier(resolved.tier).to_string();
             PlanInfo {
                 provider: Provider::Codex.as_str().to_string(),
-                plan_key: codex_plan_key_from_tier(resolved.tier).to_string(),
+                plan_key: plan_key.clone(),
                 plan_name: resolved.label(config.openai_plan.show_price),
-                detected: !matches!(
-                    resolved.source,
-                    cc_discord_presence::codex::telemetry::plan::DetectedPlanSource::Manual
-                ),
+                detected: !plan_key.is_empty()
+                    && !matches!(
+                        resolved.source,
+                        cc_discord_presence::codex::telemetry::plan::DetectedPlanSource::Manual
+                    ),
             }
         }
     }
 }
 
 #[tauri::command]
-pub fn set_plan_override(plan: String) {
-    match current_provider() {
+pub fn set_plan_override(plan: String, provider: Option<String>) -> Result<(), String> {
+    let provider = match provider {
+        Some(provider) => Provider::parse(&provider)
+            .ok_or_else(|| format!("unsupported provider {provider:?}"))?,
+        None => current_provider(),
+    };
+    match provider {
         Provider::Claude => {
-            if let Ok(mut cfg) = PresenceConfig::load_or_init() {
-                cfg.plan = plan_key_from_override(&plan).map(str::to_string);
-                log_save_error("claude-plan-override", cfg.save());
-            }
+            let mut cfg = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            cfg.plan = plan_key_from_override(&plan).map(str::to_string);
+            cfg.save().map_err(|error| error.to_string())?;
         }
         Provider::Codex => {
-            if let Ok(mut cfg) = CodexPresenceConfig::load_or_init() {
-                let normalized = plan.trim().to_ascii_lowercase();
-                let tier = match normalized.as_str() {
-                    "" | "auto" => None,
-                    "free" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Free),
-                    "go" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Go),
-                    "plus" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Plus),
-                    "team" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business),
-                    "pro_5x" | "pro5x" => {
-                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro5x)
-                    }
-                    "pro" | "pro_20x" | "pro20x" => {
-                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro20x)
-                    }
-                    "business" => {
-                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business)
-                    }
-                    "enterprise" => {
-                        Some(cc_discord_presence::codex::config::OpenAiPlanTier::Enterprise)
-                    }
-                    _ => None,
-                };
-                if let Some(tier) = tier {
-                    cfg.openai_plan.mode =
-                        cc_discord_presence::codex::config::OpenAiPlanMode::Manual;
-                    cfg.openai_plan.tier = tier;
-                } else {
-                    cfg.openai_plan.mode = cc_discord_presence::codex::config::OpenAiPlanMode::Auto;
+            let mut cfg = CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            let normalized = plan.trim().to_ascii_lowercase();
+            let tier = match normalized.as_str() {
+                "" | "auto" => None,
+                "free" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Free),
+                "go" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Go),
+                "plus" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Plus),
+                "team" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business),
+                "pro_5x" | "pro5x" => {
+                    Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro5x)
                 }
-                log_save_error("codex-plan-override", cfg.save());
+                "pro_20x" | "pro20x" => {
+                    Some(cc_discord_presence::codex::config::OpenAiPlanTier::Pro20x)
+                }
+                "business" => Some(cc_discord_presence::codex::config::OpenAiPlanTier::Business),
+                "enterprise" => {
+                    Some(cc_discord_presence::codex::config::OpenAiPlanTier::Enterprise)
+                }
+                _ => None,
+            };
+            if let Some(tier) = tier {
+                cfg.openai_plan.mode = cc_discord_presence::codex::config::OpenAiPlanMode::Manual;
+                cfg.openai_plan.tier = tier;
+            } else {
+                cfg.openai_plan.mode = cc_discord_presence::codex::config::OpenAiPlanMode::Auto;
             }
+            cfg.save().map_err(|error| error.to_string())?;
         }
     }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -2277,18 +3041,15 @@ pub fn get_provider_copy() -> ProviderCopyInfo {
 }
 
 #[tauri::command]
-pub fn set_active_provider(provider: String) {
-    if let Some(provider) = Provider::parse(&provider) {
-        if let Err(err) = cc_discord_presence::provider::save_active_provider(provider) {
-            tracing::warn!(provider = provider.as_str(), error = %err, "failed to save active provider");
-        }
-        // The switch flags and field visibility belong to the provider, not to
-        // the session — re-read them so the Discord view reflects the config
-        // that is now in charge instead of the previous provider's cache. Seed
-        // for the requested provider, not for whatever is on disk: if the write
-        // above failed, the user's choice still governs this process.
-        seed_discord_state_for(provider);
-    }
+pub fn set_active_provider(provider: String) -> Result<(), String> {
+    let provider =
+        Provider::parse(&provider).ok_or_else(|| format!("unsupported provider {provider:?}"))?;
+    cc_discord_presence::provider::save_active_provider(provider)
+        .map_err(|error| error.to_string())?;
+    // The switch flags and field visibility belong to the provider, not to the
+    // session — re-read them only after persistence succeeds.
+    seed_discord_state_for(provider);
+    Ok(())
 }
 
 #[tauri::command]
@@ -2296,11 +3057,14 @@ pub fn get_session_history(
     days: Option<i64>,
     project: Option<String>,
     limit: Option<i64>,
+    provider: Option<String>,
 ) -> Vec<crate::db::HistoricalSession> {
-    crate::db::get_session_history(days, project.as_deref(), limit)
+    crate::db::get_session_history_scoped(provider.as_deref(), days, project.as_deref(), limit)
 }
 
 #[tauri::command]
+// Tauri exposes these filters as flat invoke arguments; nesting them would break the public IPC shape.
+#[allow(clippy::too_many_arguments)]
 pub fn get_session_history_filtered(
     from_iso: Option<String>,
     to_iso: Option<String>,
@@ -2309,8 +3073,10 @@ pub fn get_session_history_filtered(
     min_cost: Option<f64>,
     max_cost: Option<f64>,
     limit: Option<i64>,
+    provider: Option<String>,
 ) -> Vec<crate::db::HistoricalSession> {
-    crate::db::get_session_history_filtered(
+    crate::db::get_session_history_filtered_scoped(
+        provider.as_deref(),
         from_iso.as_deref(),
         to_iso.as_deref(),
         project.as_deref(),
@@ -2326,23 +3092,28 @@ pub fn get_sessions_by_hour_range(
     start_hour: i64,
     end_hour: i64,
     days: Option<i64>,
+    provider: Option<String>,
 ) -> Vec<crate::db::HistoricalSession> {
-    crate::db::get_sessions_by_hour_range(start_hour, end_hour, days)
+    crate::db::get_sessions_by_hour_range_scoped(provider.as_deref(), start_hour, end_hour, days)
 }
 
 #[tauri::command]
-pub fn search_sessions(query: String, limit: Option<i64>) -> Vec<crate::db::HistoricalSession> {
-    crate::db::search_sessions(&query, limit)
+pub fn search_sessions(
+    query: String,
+    limit: Option<i64>,
+    provider: Option<String>,
+) -> Vec<crate::db::HistoricalSession> {
+    crate::db::search_sessions_scoped(provider.as_deref(), &query, limit)
 }
 
 #[tauri::command]
-pub fn get_daily_stats(days: Option<i64>) -> Vec<crate::db::DailyStat> {
-    crate::db::get_daily_stats(days)
+pub fn get_daily_stats(days: Option<i64>, provider: Option<String>) -> Vec<crate::db::DailyStat> {
+    crate::db::get_daily_stats_scoped(provider.as_deref(), days)
 }
 
 #[tauri::command]
-pub fn get_analytics_summary() -> crate::db::AnalyticsSummary {
-    crate::db::get_analytics_summary()
+pub fn get_analytics_summary(provider: Option<String>) -> crate::db::AnalyticsSummary {
+    crate::db::get_analytics_summary_scoped(provider.as_deref())
 }
 
 #[derive(Serialize, Clone)]
@@ -2932,45 +3703,83 @@ fn codex_context_entry(
 }
 
 #[tauri::command]
-pub fn get_context_breakdown(session_id: Option<String>) -> ContextBreakdown {
-    get_context_breakdowns(session_id.map(|id| vec![id]))
+pub fn get_context_breakdown(
+    session_id: Option<String>,
+    provider: Option<String>,
+) -> ContextBreakdown {
+    get_context_breakdowns(session_id.map(|id| vec![id]), provider.clone())
         .into_iter()
         .next()
         .map(|entry| entry.breakdown)
-        .unwrap_or_else(|| match current_provider() {
-            Provider::Claude => empty_context_breakdown("Unknown", 200_000),
-            Provider::Codex => empty_context_breakdown("Codex", 400_000),
+        .unwrap_or_else(|| match provider.as_deref() {
+            Some("codex") => empty_context_breakdown("Codex", 400_000),
+            Some("claude") => empty_context_breakdown("Unknown", 200_000),
+            Some("openai" | "anthropic" | "all") => empty_context_breakdown("Unknown", 0),
+            _ => match current_provider() {
+                Provider::Claude => empty_context_breakdown("Unknown", 200_000),
+                Provider::Codex => empty_context_breakdown("Codex", 400_000),
+            },
         })
 }
 
 #[tauri::command]
-pub fn get_context_breakdowns(session_ids: Option<Vec<String>>) -> Vec<SessionContextBreakdown> {
+pub fn get_context_breakdowns(
+    session_ids: Option<Vec<String>>,
+    provider: Option<String>,
+) -> Vec<SessionContextBreakdown> {
     let idle = SystemTime::now()
         .checked_sub(IDLE_CUTOFF)
         .unwrap_or(SystemTime::UNIX_EPOCH);
 
-    match current_provider() {
-        Provider::Claude => {
+    let scope = provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| current_provider().as_str());
+    match scope {
+        "claude" => {
             let sessions = read_claude_sessions();
             selected_claude_context_sessions(&sessions, session_ids.as_deref())
                 .into_iter()
                 .map(|session| claude_context_entry(session, idle))
                 .collect()
         }
-        Provider::Codex => {
+        "codex" => {
             let sessions = read_codex_sessions();
             selected_codex_context_sessions(&sessions, session_ids.as_deref())
                 .into_iter()
                 .map(|session| codex_context_entry(session, idle))
                 .collect()
         }
+        "all" => {
+            let claude_sessions = read_claude_sessions();
+            let codex_sessions = read_codex_sessions();
+            let mut entries: Vec<_> =
+                selected_claude_context_sessions(&claude_sessions, session_ids.as_deref())
+                    .into_iter()
+                    .map(|session| claude_context_entry(session, idle))
+                    .collect();
+            entries.extend(
+                selected_codex_context_sessions(&codex_sessions, session_ids.as_deref())
+                    .into_iter()
+                    .map(|session| codex_context_entry(session, idle)),
+            );
+            entries
+        }
+        // API access lanes have quota and spend identity but no local CLI
+        // session store. Returning no context is honest; borrowing subscription
+        // sessions here would cross the selected provider boundary.
+        _ => Vec::new(),
     }
 }
 
 #[tauri::command]
-pub fn get_sessions_context_usage(days: Option<i64>) -> Vec<SessionContextUsage> {
+pub fn get_sessions_context_usage(
+    days: Option<i64>,
+    provider: Option<String>,
+) -> Vec<SessionContextUsage> {
     let mut seen = HashSet::new();
-    let mut rows: Vec<SessionContextUsage> = get_context_breakdowns(None)
+    let mut rows: Vec<SessionContextUsage> = get_context_breakdowns(None, provider.clone())
         .into_iter()
         .filter(|entry| seen.insert(entry.session_id.clone()))
         .map(|entry| {
@@ -2991,80 +3800,114 @@ pub fn get_sessions_context_usage(days: Option<i64>) -> Vec<SessionContextUsage>
         .collect();
 
     rows.extend(
-        crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
-            .into_iter()
-            .filter(|s| seen.insert(s.id.clone()))
-            .map(|s| {
-                let window_tokens = if s.window_tokens > 0 {
-                    s.window_tokens as u64
-                } else if cost::is_ga_1m_context(&s.model_id) || s.context_window == "1M" {
-                    1_000_000
-                } else {
-                    200_000
-                };
-                let used_tokens = (s.used_tokens.max(0) as u64).min(window_tokens);
-                let utilization_pct = context_utilization_pct(used_tokens, window_tokens);
-                SessionContextUsage {
-                    session_id: s.id,
-                    project: s.project,
-                    model: s.model_id,
-                    model_display: s.model,
-                    used_tokens,
-                    window_tokens,
-                    utilization_pct,
-                    recommendation: context_recommendation(utilization_pct),
-                }
-            }),
+        crate::db::get_session_history_scoped(
+            provider.as_deref(),
+            Some(days.unwrap_or(30)),
+            None,
+            Some(5000),
+        )
+        .into_iter()
+        .filter(|s| seen.insert(s.id.clone()))
+        .map(|s| {
+            let window_tokens = if s.window_tokens > 0 {
+                s.window_tokens as u64
+            } else if cost::is_ga_1m_context(&s.model_id) || s.context_window == "1M" {
+                1_000_000
+            } else {
+                200_000
+            };
+            let used_tokens = (s.used_tokens.max(0) as u64).min(window_tokens);
+            let utilization_pct = context_utilization_pct(used_tokens, window_tokens);
+            SessionContextUsage {
+                session_id: s.id,
+                project: s.project,
+                model: s.model_id,
+                model_display: s.model,
+                used_tokens,
+                window_tokens,
+                utilization_pct,
+                recommendation: context_recommendation(utilization_pct),
+            }
+        }),
     );
     rows
 }
 
 #[tauri::command]
-pub fn get_project_stats(days: Option<i64>) -> Vec<crate::db::ProjectStat> {
-    crate::db::get_project_stats(days)
+pub fn get_project_stats(
+    days: Option<i64>,
+    provider: Option<String>,
+) -> Vec<crate::db::ProjectStat> {
+    crate::db::get_project_stats_scoped(provider.as_deref(), days)
 }
 
 #[tauri::command]
-pub fn get_hourly_activity(days: Option<i64>) -> Vec<crate::db::HourlyActivity> {
-    crate::db::get_hourly_activity(days)
+pub fn get_hourly_activity(
+    days: Option<i64>,
+    provider: Option<String>,
+) -> Vec<crate::db::HourlyActivity> {
+    crate::db::get_hourly_activity_scoped(provider.as_deref(), days)
 }
 
 #[tauri::command]
 pub fn get_top_sessions(
     limit: Option<i64>,
     days: Option<i64>,
+    provider: Option<String>,
 ) -> Vec<crate::db::HistoricalSession> {
-    crate::db::get_top_sessions(limit, days)
+    crate::db::get_top_sessions_scoped(provider.as_deref(), limit, days)
 }
 
 #[tauri::command]
-pub fn get_cost_forecast() -> crate::db::CostForecast {
-    crate::db::get_cost_forecast()
+pub fn get_cost_forecast(provider: Option<String>) -> crate::db::CostForecast {
+    crate::db::get_cost_forecast_scoped(provider.as_deref())
 }
 
 #[tauri::command]
-pub fn get_budget_status() -> crate::db::BudgetStatus {
-    crate::db::get_budget_status()
+pub fn get_budget_status(provider: Option<String>) -> crate::db::BudgetStatus {
+    crate::db::get_budget_status_scoped(provider.as_deref())
 }
 
 #[tauri::command]
-pub fn set_budget(monthly_budget: f64, alert_threshold_pct: Option<f64>) {
-    crate::db::set_budget(monthly_budget, alert_threshold_pct);
+pub fn set_budget(monthly_budget: f64, alert_threshold_pct: Option<f64>) -> Result<(), String> {
+    if !monthly_budget.is_finite() || monthly_budget < 0.0 {
+        return Err("monthlyBudget must be a finite, non-negative number".to_string());
+    }
+    if alert_threshold_pct
+        .is_some_and(|threshold| !threshold.is_finite() || !(0.0..=100.0).contains(&threshold))
+    {
+        return Err("alertThresholdPct must be between 0 and 100".to_string());
+    }
+    crate::db::set_budget(monthly_budget, alert_threshold_pct)
 }
 
 #[tauri::command]
 pub fn get_model_distribution(days: Option<i64>) -> Vec<(String, i64, f64)> {
-    crate::db::get_model_distribution(days)
+    legacy_model_distribution(crate::db::get_model_distribution(days))
+}
+
+fn legacy_model_distribution(rows: Vec<crate::db::ModelStat>) -> Vec<(String, i64, f64)> {
+    rows.into_iter()
+        .map(|row| (row.model, row.session_count, row.total_cost))
+        .collect()
 }
 
 #[tauri::command]
-pub fn export_all_data() -> serde_json::Value {
-    crate::db::export_all_data()
+pub fn get_model_distribution_v2(
+    days: Option<i64>,
+    provider: Option<String>,
+) -> Vec<crate::db::ModelStat> {
+    crate::db::get_model_distribution_scoped(provider.as_deref(), days)
 }
 
 #[tauri::command]
-pub fn clear_history() -> i64 {
-    crate::db::clear_history()
+pub fn export_all_data(provider: Option<String>) -> serde_json::Value {
+    crate::db::export_all_data_scoped(provider.as_deref())
+}
+
+#[tauri::command]
+pub fn clear_history(provider: Option<String>) -> Result<i64, String> {
+    crate::db::clear_history_scoped(provider.as_deref()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -3073,13 +3916,31 @@ pub fn get_db_size() -> u64 {
 }
 
 #[tauri::command]
-pub async fn generate_html_report(days: Option<i64>, project: Option<String>) -> String {
-    offload(move || crate::report::generate_html_report(days, project.as_deref())).await
+pub async fn generate_html_report(
+    days: Option<i64>,
+    project: Option<String>,
+    provider: Option<String>,
+) -> String {
+    offload(move || {
+        crate::report::generate_html_report_scoped(provider.as_deref(), days, project.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn generate_markdown_report(days: Option<i64>, project: Option<String>) -> String {
-    offload(move || crate::report::generate_markdown_report(days, project.as_deref())).await
+pub async fn generate_markdown_report(
+    days: Option<i64>,
+    project: Option<String>,
+    provider: Option<String>,
+) -> String {
+    offload(move || {
+        crate::report::generate_markdown_report_scoped(
+            provider.as_deref(),
+            days,
+            project.as_deref(),
+        )
+    })
+    .await
 }
 
 async fn offload<T, F>(work: F) -> T
@@ -3092,34 +3953,11 @@ where
         .expect("analyzer blocking task panicked")
 }
 
-fn analyzer_sessions(days: Option<i64>) -> Vec<crate::db::HistoricalSession> {
-    crate::db::get_session_history(Some(days.unwrap_or(30)), None, Some(5000))
-}
-
-/// Analyzer session page for a fixed window, exposed for the debug-only dev
-/// bridge so it can answer analyzer commands without an async runtime.
-#[cfg(debug_assertions)]
-pub fn analyzer_sessions_for(days: i64) -> Vec<crate::db::HistoricalSession> {
-    analyzer_sessions(Some(days))
-}
-
-/// Active analyzer provider, exposed for the debug-only dev bridge.
-#[cfg(debug_assertions)]
-pub fn analyzer_provider_for_bridge() -> Provider {
-    analyzer_provider()
-}
-
 fn analyzer_roots() -> (Vec<PathBuf>, Vec<PathBuf>) {
     (
         cc_discord_presence::config::projects_paths(),
         cc_discord_presence::codex::config::sessions_paths(),
     )
-}
-
-fn analyzer_traces(
-    sessions: &[crate::db::HistoricalSession],
-) -> std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace> {
-    crate::analyzers::session_trace::load_session_traces(sessions)
 }
 
 fn analyzer_provider() -> Provider {
@@ -3129,124 +3967,85 @@ fn analyzer_provider() -> Provider {
 #[tauri::command]
 pub async fn get_cache_health(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> crate::analyzers::cache_health::CacheHealthReport {
-    let provider = analyzer_provider();
-    offload(move || {
-        crate::analyzers::cache_health::analyze_for_provider(provider, &analyzer_sessions(days))
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).cache_health).await
 }
 
 #[tauri::command]
 pub async fn get_inflection_points(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> Vec<crate::analyzers::inflection::InflectionPoint> {
-    let provider = analyzer_provider();
-    offload(move || {
-        crate::analyzers::inflection::detect_for_provider(provider, &analyzer_sessions(days))
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).inflection_points)
+        .await
 }
 
 #[tauri::command]
 pub async fn get_model_routing(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> Option<crate::analyzers::model_routing::ModelRoutingReport> {
-    let provider = analyzer_provider();
-    offload(move || {
-        provider
-            .capabilities()
-            .model_routing
-            .then(|| crate::analyzers::model_routing::analyze(&analyzer_sessions(days)))
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).model_routing).await
 }
 
 #[tauri::command]
 pub async fn get_tool_frequency(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> crate::analyzers::tool_frequency::ToolFrequencyReport {
-    offload(move || {
-        let sessions = analyzer_sessions(days);
-        let traces = analyzer_traces(&sessions);
-        crate::analyzers::tool_frequency::analyze(&sessions, &traces)
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).tool_frequency)
+        .await
 }
 
 #[tauri::command]
 pub async fn get_prompt_complexity(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> crate::analyzers::prompt_complexity::PromptComplexityReport {
-    offload(move || {
-        let sessions = analyzer_sessions(days);
-        let traces = analyzer_traces(&sessions);
-        crate::analyzers::prompt_complexity::analyze(&sessions, &traces)
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).prompt_complexity)
+        .await
 }
 
 #[tauri::command]
 pub async fn get_session_health(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> crate::analyzers::session_health::SessionHealthReport {
-    offload(move || {
-        let sessions = analyzer_sessions(days);
-        let traces = analyzer_traces(&sessions);
-        let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
-        let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
-        crate::analyzers::session_health::analyze(
-            &sessions,
-            &traces,
-            &tool_frequency,
-            &prompt_complexity,
-        )
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).session_health)
+        .await
 }
 
 #[tauri::command]
 pub async fn get_trace_overview(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> crate::analyzers::trace_overview::TraceOverview {
-    let provider = analyzer_provider();
-    offload(move || {
-        let sessions = analyzer_sessions(days);
-        let traces = analyzer_traces(&sessions);
-        let cache = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
-        crate::analyzers::trace_overview::build(
-            provider,
-            &sessions,
-            &traces,
-            cache.trend_weighted_ratio,
-        )
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).trace_overview)
+        .await
 }
 
 #[tauri::command]
 pub async fn get_recommendations(
     days: Option<i64>,
+    provider: Option<String>,
 ) -> Vec<crate::analyzers::recommendations::Recommendation> {
-    let provider = analyzer_provider();
-    offload(move || {
-        let sessions = analyzer_sessions(days);
-        let traces = analyzer_traces(&sessions);
-        recommendations_from_traces(provider, &sessions, &traces)
-    })
-    .await
+    offload(move || reports_bundle_blocking(days.unwrap_or(30), None, provider).recommendations)
+        .await
 }
 
 /// Look up a recommendation by id and return its `fix_prompt` so the frontend
 /// can `navigator.clipboard.writeText(...)` it. Returns an empty string if
-/// no matching recommendation exists for the current data window.
+/// no matching recommendation exists for the requested data window.
 #[tauri::command]
-pub async fn copy_fix_prompt(rec_id: String) -> String {
-    let provider = analyzer_provider();
+pub async fn copy_fix_prompt(
+    rec_id: String,
+    days: Option<i64>,
+    provider: Option<String>,
+) -> String {
     offload(move || {
-        let sessions = analyzer_sessions(None);
-        let traces = analyzer_traces(&sessions);
-        recommendations_from_traces(provider, &sessions, &traces)
+        reports_bundle_blocking(days.unwrap_or(30), None, provider)
+            .recommendations
             .into_iter()
             .find(|r| r.id == rec_id)
             .map(|r| r.fix_prompt)
@@ -3255,44 +4054,15 @@ pub async fn copy_fix_prompt(rec_id: String) -> String {
     .await
 }
 
-fn recommendations_from_traces(
-    provider: Provider,
-    sessions: &[crate::db::HistoricalSession],
-    traces: &std::collections::HashMap<String, crate::analyzers::session_trace::SessionTrace>,
-) -> Vec<crate::analyzers::recommendations::Recommendation> {
-    let cache = crate::analyzers::cache_health::analyze_for_provider(provider, sessions);
-    let routing = provider
-        .capabilities()
-        .model_routing
-        .then(|| crate::analyzers::model_routing::analyze(sessions));
-    let inflections = crate::analyzers::inflection::detect_for_provider(provider, sessions);
-    let tool_frequency = crate::analyzers::tool_frequency::analyze(sessions, traces);
-    let prompt_complexity = crate::analyzers::prompt_complexity::analyze(sessions, traces);
-    let session_health = crate::analyzers::session_health::analyze(
-        sessions,
-        traces,
-        &tool_frequency,
-        &prompt_complexity,
-    );
-    let ctx = crate::analyzers::recommendations::AnalysisContext {
-        provider,
-        sessions,
-        cache: &cache,
-        routing: routing.as_ref(),
-        inflections: &inflections,
-        tool_frequency: Some(&tool_frequency),
-        prompt_complexity: Some(&prompt_complexity),
-        session_health: Some(&session_health),
-    };
-    crate::analyzers::recommendations::generate(&ctx)
-}
-
 #[derive(Serialize)]
 pub struct ReportsBundle {
     pub provider: String,
     pub capabilities: cc_discord_presence::provider::ProviderCapabilities,
     pub days: i64,
     pub total_sessions: usize,
+    pub priced_sessions: usize,
+    pub cost_basis: crate::db::CostBasis,
+    pub cost_sources: Vec<String>,
     pub recommendations: Vec<crate::analyzers::recommendations::Recommendation>,
     pub trace_overview: crate::analyzers::trace_overview::TraceOverview,
     pub tool_frequency: crate::analyzers::tool_frequency::ToolFrequencyReport,
@@ -3313,21 +4083,29 @@ pub struct DailyCostPoint {
     pub date: String,
     pub cost: f64,
     pub sessions: i64,
+    pub priced_sessions: i64,
+    pub cost_basis: crate::db::CostBasis,
+    pub cost_sources: Vec<String>,
 }
 
 #[tauri::command]
-pub async fn get_reports_bundle(days: Option<i64>, project: Option<String>) -> ReportsBundle {
-    let provider = analyzer_provider();
+pub async fn get_reports_bundle(
+    days: Option<i64>,
+    project: Option<String>,
+    provider: Option<String>,
+) -> ReportsBundle {
+    let scope = provider.unwrap_or_else(|| analyzer_provider().as_str().to_string());
     let (claude_roots, codex_roots) = analyzer_roots();
     offload(move || {
-        let sessions = crate::db::get_session_history(
+        let sessions = crate::db::get_session_history_scoped(
+            Some(&scope),
             Some(days.unwrap_or(30)),
             project.as_deref(),
             Some(5000),
         );
-        let daily_costs = window_daily_costs(days.unwrap_or(30), project.as_deref());
-        build_reports_bundle_from_roots(
-            provider,
+        let daily_costs = window_daily_costs_scoped(&scope, days.unwrap_or(30), project.as_deref());
+        build_reports_bundle_for_scope_from_roots(
+            &scope,
             days,
             sessions,
             daily_costs,
@@ -3340,13 +4118,22 @@ pub async fn get_reports_bundle(days: Option<i64>, project: Option<String>) -> R
 
 /// Synchronous form of [`get_reports_bundle`] for callers that are already off
 /// the UI thread (currently the debug-only dev bridge).
-pub fn reports_bundle_blocking(days: i64, project: Option<String>) -> ReportsBundle {
-    let provider = analyzer_provider();
+pub fn reports_bundle_blocking(
+    days: i64,
+    project: Option<String>,
+    provider: Option<String>,
+) -> ReportsBundle {
+    let scope = provider.unwrap_or_else(|| analyzer_provider().as_str().to_string());
     let (claude_roots, codex_roots) = analyzer_roots();
-    let sessions = crate::db::get_session_history(Some(days), project.as_deref(), Some(5000));
-    let daily_costs = window_daily_costs(days, project.as_deref());
-    build_reports_bundle_from_roots(
-        provider,
+    let sessions = crate::db::get_session_history_scoped(
+        Some(&scope),
+        Some(days),
+        project.as_deref(),
+        Some(5000),
+    );
+    let daily_costs = window_daily_costs_scoped(&scope, days, project.as_deref());
+    build_reports_bundle_for_scope_from_roots(
+        &scope,
         Some(days),
         sessions,
         daily_costs,
@@ -3366,12 +4153,18 @@ pub fn reports_bundle_blocking(days: i64, project: Option<String>) -> ReportsBun
 pub struct CostTotals {
     pub days: i64,
     pub sessions: usize,
+    pub priced_sessions: usize,
+    pub cost_basis: crate::db::CostBasis,
+    pub cost_sources: Vec<String>,
     pub total_cost: f64,
     pub input_cost: f64,
     pub output_cost: f64,
     pub cache_write_cost: f64,
     pub cache_read_cost: f64,
     pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_write_tokens: i64,
     pub cache_read_tokens: i64,
     /// Input tokens that were neither written to nor read from cache. Paired
     /// with `input_cost` this yields the window's true per-token input rate,
@@ -3393,43 +4186,75 @@ pub struct CostSlice {
 }
 
 #[tauri::command]
-pub async fn get_cost_totals(days: Option<i64>, project: Option<String>) -> CostTotals {
-    offload(move || cost_totals_blocking(days.unwrap_or(30), project)).await
+pub async fn get_cost_totals(
+    days: Option<i64>,
+    project: Option<String>,
+    provider: Option<String>,
+) -> CostTotals {
+    offload(move || cost_totals_blocking(days.unwrap_or(30), project, provider)).await
 }
 
-pub fn cost_totals_blocking(days: i64, project: Option<String>) -> CostTotals {
+pub fn cost_totals_blocking(
+    days: i64,
+    project: Option<String>,
+    provider: Option<String>,
+) -> CostTotals {
     // No limit: these are aggregates over the whole window by definition.
-    let sessions = crate::db::get_session_history(Some(days), project.as_deref(), None);
+    let sessions = crate::db::get_session_history_scoped(
+        provider.as_deref(),
+        Some(days),
+        project.as_deref(),
+        None,
+    );
     aggregate_cost_totals(days, &sessions)
 }
 
 fn aggregate_cost_totals(days: i64, sessions: &[crate::db::HistoricalSession]) -> CostTotals {
     use std::collections::HashMap;
 
+    let coverage = crate::db::summarize_cost_provenance(sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
     let mut totals = CostTotals {
         days,
         sessions: sessions.len(),
+        priced_sessions: coverage.priced_sessions,
+        cost_basis: coverage.cost_basis,
+        cost_sources: coverage.cost_sources,
         ..Default::default()
     };
     let mut by_model: HashMap<&str, (f64, usize)> = HashMap::new();
     let mut by_project: HashMap<&str, (f64, usize)> = HashMap::new();
 
     for s in sessions {
-        totals.total_cost += s.total_cost;
+        totals.total_tokens += s.total_tokens;
+        totals.input_tokens += s.input_tokens;
+        totals.output_tokens += s.output_tokens;
+        totals.cache_write_tokens += s.cache_write_tokens;
+        totals.cache_read_tokens += s.cache_read_tokens;
+        totals.pure_input_tokens +=
+            (s.input_tokens - s.cache_write_tokens - s.cache_read_tokens).max(0);
+        let Some(known_cost) = s.known_cost else {
+            continue;
+        };
+        if s.cost_basis == crate::db::CostBasis::Unavailable {
+            continue;
+        }
+        totals.total_cost += known_cost;
         totals.input_cost += s.input_cost;
         totals.output_cost += s.output_cost;
         totals.cache_write_cost += s.cache_write_cost;
         totals.cache_read_cost += s.cache_read_cost;
-        totals.total_tokens += s.total_tokens;
-        totals.cache_read_tokens += s.cache_read_tokens;
-        totals.pure_input_tokens +=
-            (s.input_tokens - s.cache_write_tokens - s.cache_read_tokens).max(0);
 
         let m = by_model.entry(s.model.as_str()).or_insert((0.0, 0));
-        m.0 += s.total_cost;
+        m.0 += known_cost;
         m.1 += 1;
         let p = by_project.entry(s.project.as_str()).or_insert((0.0, 0));
-        p.0 += s.total_cost;
+        p.0 += known_cost;
         p.1 += 1;
     }
 
@@ -3474,9 +4299,13 @@ fn window_start_date(days: i64) -> chrono::NaiveDate {
 /// Separate from the analyzer session page on purpose: the analyzers accept a
 /// capped page of recent rows, but a timeline built from that page would
 /// zero-fill days whose sessions were discarded.
-fn window_daily_costs(days: i64, project: Option<&str>) -> Vec<crate::db::DailyCostRow> {
+fn window_daily_costs_scoped(
+    provider: &str,
+    days: i64,
+    project: Option<&str>,
+) -> Vec<crate::db::DailyCostRow> {
     let from = window_start_date(days).format("%Y-%m-%d").to_string();
-    crate::db::get_daily_costs(&from, project)
+    crate::db::get_daily_costs_scoped(Some(provider), &from, project)
 }
 
 /// Zero-fills SQL daily totals into one point per day, oldest first.
@@ -3488,10 +4317,8 @@ fn window_daily_costs(days: i64, project: Option<&str>) -> Vec<crate::db::DailyC
 fn daily_cost_series(rows: &[crate::db::DailyCostRow], days: i64) -> Vec<DailyCostPoint> {
     use std::collections::HashMap;
 
-    let by_date: HashMap<&str, (f64, i64)> = rows
-        .iter()
-        .map(|row| (row.date.as_str(), (row.cost, row.sessions)))
-        .collect();
+    let by_date: HashMap<&str, &crate::db::DailyCostRow> =
+        rows.iter().map(|row| (row.date.as_str(), row)).collect();
 
     let span = days.max(1);
     let start = window_start_date(days);
@@ -3500,11 +4327,24 @@ fn daily_cost_series(rows: &[crate::db::DailyCostRow], days: i64) -> Vec<DailyCo
             let date = (start + chrono::Duration::days(offset))
                 .format("%Y-%m-%d")
                 .to_string();
-            let (cost, sessions) = by_date.get(date.as_str()).copied().unwrap_or((0.0, 0));
-            DailyCostPoint {
-                date,
-                cost,
-                sessions,
+            if let Some(row) = by_date.get(date.as_str()).copied() {
+                DailyCostPoint {
+                    date,
+                    cost: row.cost,
+                    sessions: row.sessions,
+                    priced_sessions: row.priced_sessions,
+                    cost_basis: row.cost_basis,
+                    cost_sources: row.cost_sources.clone(),
+                }
+            } else {
+                DailyCostPoint {
+                    date,
+                    cost: 0.0,
+                    sessions: 0,
+                    priced_sessions: 0,
+                    cost_basis: crate::db::CostBasis::Unavailable,
+                    cost_sources: Vec::new(),
+                }
             }
         })
         .collect()
@@ -3518,18 +4358,55 @@ pub fn build_reports_bundle_from_roots(
     claude_roots: Vec<PathBuf>,
     codex_roots: Vec<PathBuf>,
 ) -> ReportsBundle {
+    build_reports_bundle_for_scope_from_roots(
+        provider.as_str(),
+        days,
+        sessions,
+        daily_costs,
+        claude_roots,
+        codex_roots,
+    )
+}
+
+fn build_reports_bundle_for_scope_from_roots(
+    scope: &str,
+    days: Option<i64>,
+    sessions: Vec<crate::db::HistoricalSession>,
+    daily_costs: Vec<crate::db::DailyCostRow>,
+    claude_roots: Vec<PathBuf>,
+    codex_roots: Vec<PathBuf>,
+) -> ReportsBundle {
+    let provider = Provider::parse(scope);
+    let cost_coverage = crate::db::summarize_cost_provenance(sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
     let traces = crate::analyzers::session_trace::load_session_traces_from_roots(
         &sessions,
         claude_roots,
         codex_roots,
     );
 
-    let cache_health = crate::analyzers::cache_health::analyze_for_provider(provider, &sessions);
-    let capabilities = provider.capabilities();
-    let model_routing = capabilities
-        .model_routing
-        .then(|| crate::analyzers::model_routing::analyze(&sessions));
-    let inflection_points = crate::analyzers::inflection::detect_for_provider(provider, &sessions);
+    let diagnostic_provider = provider.unwrap_or(Provider::Codex);
+    let mut cache_health =
+        crate::analyzers::cache_health::analyze_for_provider(diagnostic_provider, &sessions);
+    let capabilities = provider.map_or(
+        cc_discord_presence::provider::ProviderCapabilities {
+            cache_health: true,
+            model_routing: false,
+            extra_usage: false,
+        },
+        Provider::capabilities,
+    );
+    let model_routing = provider
+        .filter(|provider| provider.capabilities().model_routing)
+        .map(|_| crate::analyzers::model_routing::analyze(&sessions));
+    let inflection_points = provider.map_or_else(Vec::new, |provider| {
+        crate::analyzers::inflection::detect_for_provider(provider, &sessions)
+    });
     let tool_frequency = crate::analyzers::tool_frequency::analyze(&sessions, &traces);
     let prompt_complexity = crate::analyzers::prompt_complexity::analyze(&sessions, &traces);
     let session_health = crate::analyzers::session_health::analyze(
@@ -3538,29 +4415,64 @@ pub fn build_reports_bundle_from_roots(
         &tool_frequency,
         &prompt_complexity,
     );
-    let trace_overview = crate::analyzers::trace_overview::build(
-        provider,
+    let mut trace_overview = crate::analyzers::trace_overview::build(
+        diagnostic_provider,
         &sessions,
         &traces,
         cache_health.trend_weighted_ratio,
     );
-    let ctx = crate::analyzers::recommendations::AnalysisContext {
-        provider,
-        sessions: &sessions,
-        cache: &cache_health,
-        routing: model_routing.as_ref(),
-        inflections: &inflection_points,
-        tool_frequency: Some(&tool_frequency),
-        prompt_complexity: Some(&prompt_complexity),
-        session_health: Some(&session_health),
-    };
-    let recommendations = crate::analyzers::recommendations::generate(&ctx);
+    let recommendations = provider.map_or_else(Vec::new, |provider| {
+        let ctx = crate::analyzers::recommendations::AnalysisContext {
+            provider,
+            sessions: &sessions,
+            cache: &cache_health,
+            routing: model_routing.as_ref(),
+            inflections: &inflection_points,
+            tool_frequency: Some(&tool_frequency),
+            prompt_complexity: Some(&prompt_complexity),
+            session_health: Some(&session_health),
+        };
+        crate::analyzers::recommendations::generate(&ctx)
+    });
+
+    if provider.is_none() {
+        let provider_display = match scope {
+            "all" => "All providers",
+            "openai" => "OpenAI API",
+            "anthropic" => "Anthropic API",
+            _ => "Selected provider",
+        };
+        cache_health.diagnosis = if sessions.is_empty() {
+            format!("No {provider_display} session telemetry is available for this window.")
+        } else {
+            format!(
+                "Cache health is aggregated across {provider_display}; select one subscription provider for instruction-file guidance."
+            )
+        };
+        trace_overview.provider = scope.to_string();
+        trace_overview.provider_display = provider_display.to_string();
+        trace_overview.instruction_file = "Provider-specific".to_string();
+        trace_overview.fix_button_label = "Select one provider for fixes".to_string();
+        trace_overview.session_store = "Provider-scoped session stores".to_string();
+        trace_overview.global_state_source = "Provider-scoped telemetry".to_string();
+        trace_overview.telemetry_mermaid = format!(
+            "flowchart LR\n  Sources[\"Provider-scoped session stores\"] --> Pulse[\"Pulse analytics\\n{} sessions\"]\n  Pulse --> Reports[\"Aggregated reports\"]",
+            sessions.len()
+        );
+        trace_overview.cache_mermaid = format!(
+            "flowchart LR\n  Input[\"Selected provider input\"] --> Cache[\"Cache reuse\\n{:.1}% hit ratio\"]\n  Cache --> Reports[\"Aggregated reports\"]",
+            cache_health.trend_weighted_ratio
+        );
+    }
 
     ReportsBundle {
-        provider: provider.as_str().to_string(),
+        provider: scope.to_string(),
         capabilities,
         days: days.unwrap_or(30),
         total_sessions: sessions.len(),
+        priced_sessions: cost_coverage.priced_sessions,
+        cost_basis: cost_coverage.cost_basis,
+        cost_sources: cost_coverage.cost_sources,
         daily_costs: daily_cost_series(&daily_costs, days.unwrap_or(30)),
         recommendations,
         trace_overview,
@@ -3575,12 +4487,24 @@ pub fn build_reports_bundle_from_roots(
 
 #[cfg(test)]
 mod tests {
-    use super::aggregate_cost_totals;
     use super::{
+        active_access_route, active_presence_presentation, api_probe_route,
         build_claude_context_breakdown, build_claude_session_infos, build_codex_discord_preview,
-        build_codex_session_infos, codex_plan_key_from_tier, codex_total_input_tokens,
-        daily_cost_series, plan_key_from_override, semantic_snapshot_fingerprint,
+        build_codex_discord_preview_with_access, build_codex_session_infos,
+        claude_route_from_usage, codex_fallback_surface, codex_plan_key_from_tier,
+        codex_session_surface, codex_total_input_tokens, cost_availability, daily_cost_series,
+        dismiss_notification, get_notifications, get_unread_notification_count,
+        mark_all_notifications_read, mark_notification_read, merge_access_routes,
+        plan_key_from_override, route_for_provider, route_limits_for_claude_presence,
+        route_limits_for_presence, semantic_snapshot_fingerprint,
     };
+    use super::{aggregate_cost_totals, build_reports_bundle_for_scope_from_roots};
+    use crate::access::{
+        AccessAvailability, AccessFreshness, AccessProof, AccessProvenance, AccessRouteSnapshot,
+        AccessSnapshot, AccessSourceKind, AccessWindow, AuthMethod, access_route_from_usage,
+        subscription_source,
+    };
+    use crate::notifications::NotificationStore;
     use cc_discord_presence::codex::config::{
         DesktopPresenceDesign, DisplayConfig, OpenAiPlanMode,
         PresenceConfig as TestCodexPresenceConfig, PresenceSurface as TestPresenceSurface,
@@ -3595,11 +4519,200 @@ mod tests {
     };
     use cc_discord_presence::codex::telemetry::limits::RateLimits;
     use cc_discord_presence::codex::telemetry::plan::DetectedPlanTier;
+    use cc_discord_presence::codex::telemetry::plan::PlanDetector;
+    use cc_discord_presence::codex::telemetry::service_tier::resolve_service_tier;
     use cc_discord_presence::config::PresenceConfig as TestClaudePresenceConfig;
     use cc_discord_presence::cost;
+    use cc_discord_presence::provider::Provider;
     use cc_discord_presence::session::{ClaudeSessionSnapshot, DataSource, ReasoningEffort, Speed};
+    use cc_discord_presence::usage::{ExtraUsage, UsageData, UsageWindow};
+    use codex_presence_core::{
+        QuotaScope, QuotaWindow, RateLimitScope, UsageSignal, UsageSnapshot, UsageSource,
+    };
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
+
+    fn quota_usage(
+        provider: &str,
+        signal: UsageSignal,
+        windows: Vec<QuotaWindow>,
+    ) -> UsageSnapshot {
+        UsageSnapshot {
+            source: UsageSource::new(format!("{provider}-subscription:default"), [signal]),
+            scopes: vec![QuotaScope {
+                id: Some(provider.to_string()),
+                name: None,
+                kind: RateLimitScope::GlobalAccount,
+                windows,
+            }],
+            credits: None,
+            observed_at: Some(chrono::Utc::now()),
+            provenance_source: "deterministic fixture".to_string(),
+        }
+    }
+
+    fn proofed_route(
+        provider: &str,
+        signal: UsageSignal,
+        windows: Vec<QuotaWindow>,
+    ) -> AccessRouteSnapshot {
+        let mut source = subscription_source(provider, None);
+        source.proof = AccessProof::QuotaResponse;
+        access_route_from_usage(
+            source,
+            quota_usage(provider, signal, windows),
+            chrono::Utc::now(),
+            chrono::Duration::seconds(30),
+            chrono::Utc::now(),
+        )
+    }
+
+    #[test]
+    fn simultaneous_codex_and_claude_routes_are_retained() {
+        let codex = proofed_route(
+            "codex",
+            UsageSignal::CodexSubscriptionUsage,
+            vec![QuotaWindow {
+                window_minutes: 7_777,
+                used_percent: 12.0,
+                remaining_percent: 88.0,
+                resets_at: None,
+            }],
+        );
+        let claude = proofed_route(
+            "claude",
+            UsageSignal::ClaudeSubscriptionUsage,
+            vec![QuotaWindow {
+                window_minutes: 2_345,
+                used_percent: 34.0,
+                remaining_percent: 66.0,
+                resets_at: None,
+            }],
+        );
+        let snapshot = merge_access_routes(&[], [codex, claude]);
+
+        assert_eq!(snapshot.routes.len(), 2);
+        assert!(
+            snapshot
+                .routes
+                .iter()
+                .any(|route| route.source.kind == AccessSourceKind::CodexSubscription)
+        );
+        assert!(
+            snapshot
+                .routes
+                .iter()
+                .any(|route| route.source.kind == AccessSourceKind::ClaudeSubscription)
+        );
+    }
+
+    #[test]
+    fn active_provider_selection_does_not_depend_on_route_order() {
+        let codex = proofed_route(
+            "codex",
+            UsageSignal::CodexSubscriptionUsage,
+            vec![QuotaWindow {
+                window_minutes: 17,
+                used_percent: 1.0,
+                remaining_percent: 99.0,
+                resets_at: None,
+            }],
+        );
+        let claude = proofed_route(
+            "claude",
+            UsageSignal::ClaudeSubscriptionUsage,
+            vec![QuotaWindow {
+                window_minutes: 4_321,
+                used_percent: 2.0,
+                remaining_percent: 98.0,
+                resets_at: None,
+            }],
+        );
+        let mut data = super::CachedData {
+            active_provider: Provider::Claude,
+            access: AccessSnapshot {
+                routes: vec![codex, claude],
+            },
+            ..Default::default()
+        };
+        assert_eq!(active_access_route(&data).source.provider, "claude");
+        data.active_provider = Provider::Codex;
+        assert_eq!(active_access_route(&data).source.provider, "codex");
+        assert_eq!(
+            route_for_provider(&data, Provider::Codex)
+                .unwrap()
+                .source
+                .kind,
+            AccessSourceKind::CodexSubscription
+        );
+    }
+
+    #[test]
+    fn failed_api_auth_is_unavailable_and_unproofed() {
+        let mut cache = super::ApiProbeEntry::default();
+        let route = api_probe_route("openai", None, &mut cache);
+        assert_eq!(route.availability, AccessAvailability::Unavailable);
+        assert_eq!(route.source.proof, AccessProof::None);
+        assert!(route.windows.is_empty());
+        assert_eq!(route.source.kind, AccessSourceKind::OpenAiApi);
+        assert_eq!(route.source.auth_method, AuthMethod::ApiKey);
+        assert_eq!(AccessSnapshot::new(vec![route]).routes.len(), 1);
+    }
+
+    #[test]
+    fn failed_refresh_replaces_old_windows_instead_of_leaking_stale_usage() {
+        let old = proofed_route(
+            "codex",
+            UsageSignal::CodexSubscriptionUsage,
+            vec![QuotaWindow {
+                window_minutes: 300,
+                used_percent: 75.0,
+                remaining_percent: 25.0,
+                resets_at: None,
+            }],
+        );
+        let replacement = AccessRouteSnapshot::unavailable(
+            subscription_source("codex", None),
+            "account probe failed",
+        );
+        let snapshot = merge_access_routes(&[old], [replacement]);
+        assert_eq!(snapshot.routes.len(), 1);
+        assert!(snapshot.routes[0].windows.is_empty());
+        assert_eq!(
+            snapshot.routes[0].availability,
+            AccessAvailability::Unavailable
+        );
+    }
+
+    #[test]
+    fn provider_windows_keep_arbitrary_durations_without_synthetic_buckets() {
+        let route = proofed_route(
+            "claude",
+            UsageSignal::ClaudeSubscriptionUsage,
+            vec![
+                QuotaWindow {
+                    window_minutes: 17,
+                    used_percent: 11.0,
+                    remaining_percent: 89.0,
+                    resets_at: None,
+                },
+                QuotaWindow {
+                    window_minutes: 4_321,
+                    used_percent: 22.0,
+                    remaining_percent: 78.0,
+                    resets_at: None,
+                },
+            ],
+        );
+        assert_eq!(
+            route
+                .windows
+                .iter()
+                .map(|window| window.quota.window_minutes)
+                .collect::<Vec<_>>(),
+            vec![17, 4_321]
+        );
+    }
 
     #[test]
     fn snapshot_fingerprint_ignores_wall_clock_fields_but_not_telemetry() {
@@ -3636,19 +4749,50 @@ mod tests {
     #[test]
     fn usage_snapshot_transport_uses_public_scope_labels() {
         let snapshot = codex_presence_core::UsageSnapshot {
-            provider: "codex".to_string(),
+            source: UsageSource::new("codex-session-jsonl", [UsageSignal::CodexSessionJsonl]),
             scopes: vec![codex_presence_core::QuotaScope {
                 id: Some("codex".to_string()),
                 name: None,
-                kind: codex_presence_core::RateLimitScope::GlobalCodex,
+                kind: codex_presence_core::RateLimitScope::GlobalAccount,
                 windows: Vec::new(),
             }],
             credits: None,
             observed_at: None,
-            source: "fixture".to_string(),
+            provenance_source: "fixture".to_string(),
         };
-        let value = serde_json::to_value(snapshot).expect("usage snapshot JSON");
-        assert_eq!(value["scopes"][0]["kind"], "global");
+        let value = serde_json::to_value(super::UsageSnapshotTransport::from_snapshot(
+            "codex", snapshot,
+        ))
+        .expect("usage snapshot JSON");
+        assert_eq!(value["provider"], "codex");
+        assert_eq!(value["source"], "fixture");
+        assert_eq!(value["usage_source"]["stream_id"], "codex-session-jsonl");
+        assert_eq!(value["scopes"][0]["kind"], "global_account");
+    }
+
+    #[test]
+    fn legacy_model_distribution_transport_remains_tuple_shaped() {
+        let rows = vec![crate::db::ModelStat {
+            model: "gpt-5.6-sol".to_string(),
+            session_count: 2,
+            priced_sessions: 1,
+            cost_basis: crate::db::CostBasis::Partial,
+            cost_sources: vec!["provider_billed".to_string()],
+            total_cost: 4.25,
+        }];
+
+        assert_eq!(
+            super::legacy_model_distribution(rows),
+            vec![("gpt-5.6-sol".to_string(), 2, 4.25)]
+        );
+    }
+
+    #[test]
+    fn budget_validation_rejects_invalid_values_before_persistence() {
+        assert!(super::set_budget(-1.0, Some(80.0)).is_err());
+        assert!(super::set_budget(f64::NAN, Some(80.0)).is_err());
+        assert!(super::set_budget(10.0, Some(101.0)).is_err());
+        assert!(super::set_budget(10.0, Some(f64::INFINITY)).is_err());
     }
 
     fn sample_claude_snapshot(model_id: &str) -> ClaudeSessionSnapshot {
@@ -3727,7 +4871,7 @@ mod tests {
     #[test]
     fn claude_rich_presence_toggle_survives_a_restart() {
         let (_guard, _claude_home, _codex_home) = isolated_homes("claude-rp-toggle");
-        super::set_active_provider("claude".to_string());
+        super::set_active_provider("claude".to_string()).expect("save Claude provider");
 
         let settings = super::set_discord_enabled(false).expect("disable Claude presence");
         assert!(!settings.enabled, "the command must report the new state");
@@ -3766,7 +4910,7 @@ mod tests {
     #[test]
     fn claude_display_prefs_persist_even_when_the_codex_mirror_write_fails() {
         let (_guard, _claude_home, codex_home) = isolated_homes("mirror-failure");
-        super::set_active_provider("claude".to_string());
+        super::set_active_provider("claude".to_string()).expect("save Claude provider");
 
         // Make the Codex home unusable: a regular file where a directory is
         // expected, so `CodexPresenceConfig::load_or_init` cannot succeed.
@@ -3794,7 +4938,7 @@ mod tests {
         let (_guard, _claude_home, _codex_home) = isolated_homes("credits-mirror");
 
         // Codex owns Credits and has it on.
-        super::set_active_provider("codex".to_string());
+        super::set_active_provider("codex".to_string()).expect("save Codex provider");
         super::set_discord_display_prefs(
             true, true, true, true, true, true, true, true, true, true,
         )
@@ -3808,7 +4952,7 @@ mod tests {
 
         // Claude has no Credits field, so its payload always carries `false`.
         // Saving an unrelated Claude toggle must not disable Codex Credits.
-        super::set_active_provider("claude".to_string());
+        super::set_active_provider("claude".to_string()).expect("save Claude provider");
         super::set_discord_display_prefs(
             true, false, true, true, true, true, true, false, true, true,
         )
@@ -3833,7 +4977,7 @@ mod tests {
             true, false, true, true, true, true, false, true, false, true,
         )
         .expect("save display preferences");
-        super::set_active_provider("codex".to_string());
+        super::set_active_provider("codex".to_string()).expect("save Codex provider");
         let settings = super::set_discord_enabled(false).expect("disable Codex presence");
 
         let claude = TestClaudePresenceConfig::load_or_init().expect("claude config");
@@ -3852,6 +4996,170 @@ mod tests {
         assert!(codex.privacy.show_systems);
         assert!(!codex.presence_enabled);
         assert!(!settings.enabled);
+    }
+
+    #[test]
+    fn switching_provider_keeps_lane_diagnostics_without_selecting_old_provider() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("provider-switch-access");
+        if let Ok(mut data) = super::shared().lock() {
+            data.access = super::AccessSnapshot {
+                routes: vec![crate::access::AccessRouteSnapshot::unavailable(
+                    crate::access::subscription_source("codex", None),
+                    "fixture",
+                )],
+            };
+        }
+
+        super::seed_discord_state_for(Provider::Claude);
+
+        let routes = super::shared()
+            .lock()
+            .expect("shared state")
+            .access
+            .routes
+            .clone();
+        assert_eq!(routes.len(), 1, "independent lane diagnostics stay cached");
+        assert_eq!(routes[0].source.provider, "codex");
+        let data = super::shared().lock().expect("shared state");
+        assert_eq!(super::active_access_route(&data).source.provider, "claude");
+    }
+
+    #[test]
+    fn switching_to_claude_does_not_leak_a_stale_codex_plan_info() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("provider-switch-plan");
+        let mut codex = TestCodexPresenceConfig::load_or_init().expect("codex config");
+        codex.openai_plan.mode = OpenAiPlanMode::Manual;
+        codex.openai_plan.tier = cc_discord_presence::codex::config::OpenAiPlanTier::Pro20x;
+        codex.save().expect("codex plan override");
+
+        super::set_active_provider("codex".to_string()).expect("save Codex provider");
+        assert_eq!(super::get_plan_info().plan_key, "pro_20x");
+
+        super::set_active_provider("claude".to_string()).expect("save Claude provider");
+        let claude_plan = super::get_plan_info();
+        assert_eq!(claude_plan.provider, "claude");
+        assert_ne!(claude_plan.plan_key, "pro_20x");
+        assert_eq!(claude_plan.plan_name, "Unknown");
+        assert!(
+            !claude_plan.detected,
+            "no Claude plan proof must be Unknown"
+        );
+    }
+
+    #[test]
+    fn invalid_claude_max_override_is_not_reported_as_a_plan() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("invalid-claude-plan");
+        super::set_active_provider("claude".to_string()).expect("save Claude provider");
+
+        let mut config = TestClaudePresenceConfig::load_or_init().expect("Claude config");
+        config.plan = Some("max".to_string());
+        config.save().expect("save invalid plan fixture");
+
+        let plan = super::get_plan_info();
+        assert_eq!(plan.provider, "claude");
+        assert_eq!(plan.plan_key, "");
+        assert_eq!(plan.plan_name, "Unknown");
+        assert!(!plan.detected);
+    }
+
+    #[test]
+    fn notification_commands_share_the_durable_store_lifecycle() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("notification-commands");
+        let connection = crate::notifications::open_default_database().expect("notification db");
+        let record = NotificationStore::new(&connection)
+            .observe(
+                crate::notifications::NotificationSpec {
+                    kind: crate::notifications::NotificationKind::ProviderHealth,
+                    provider: "codex".to_string(),
+                    key: "account".to_string(),
+                    title: "Codex provider".to_string(),
+                    body: "Provider unavailable".to_string(),
+                    action: None,
+                },
+                chrono::Utc::now(),
+            )
+            .expect("record notification")
+            .expect("new notification");
+
+        assert_eq!(get_unread_notification_count(), 1);
+        assert_eq!(
+            get_notifications(Some(10))
+                .expect("list notifications")
+                .len(),
+            1
+        );
+        assert!(mark_notification_read(record.id).expect("mark notification read"));
+        assert_eq!(get_unread_notification_count(), 0);
+        assert_eq!(
+            mark_all_notifications_read().expect("mark all notifications read"),
+            0
+        );
+        assert!(dismiss_notification(record.id).expect("dismiss notification"));
+        assert!(
+            get_notifications(Some(10))
+                .expect("list notifications after dismiss")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn access_diagnostics_never_become_native_health_or_threshold_alerts() {
+        let connection = rusqlite::Connection::open_in_memory().expect("notification sqlite");
+        NotificationStore::initialize(&connection).expect("notification schema");
+        let store = NotificationStore::new(&connection);
+
+        let mut authenticated = subscription_source("claude", None);
+        authenticated.proof = AccessProof::QuotaResponse;
+        let healthy = AccessRouteSnapshot {
+            source: authenticated,
+            availability: AccessAvailability::Available,
+            freshness: AccessFreshness::Fresh,
+            provenance: AccessProvenance::ProviderApi,
+            observed_at: None,
+            fetched_at: None,
+            expires_at: None,
+            windows: Vec::new(),
+            credits: None,
+            rate_limit_reset_credits: None,
+            individual_limits: Vec::new(),
+            extra_usage: None,
+            local_history: Default::default(),
+            error: None,
+            unavailable_reason: None,
+            usage: None,
+        };
+
+        // A proofed healthy sample is still only a baseline.
+        super::observe_access_notifications(None, Some(&store), Provider::Claude, &healthy);
+        assert!(store.list_all(Some(20)).expect("baseline rows").is_empty());
+
+        // A recent cache can be displayable but has no provider proof. It must
+        // not replace the authenticated baseline or emit quota/health alerts.
+        let mut cached = healthy.clone();
+        cached.source.proof = AccessProof::None;
+        cached.provenance = AccessProvenance::MemoryCache;
+        cached.windows = vec![AccessWindow {
+            key: "weekly".to_string(),
+            label: None,
+            quota: QuotaWindow {
+                window_minutes: 10_080,
+                used_percent: 95.0,
+                remaining_percent: 5.0,
+                resets_at: None,
+            },
+        }];
+        super::observe_access_notifications(None, Some(&store), Provider::Claude, &cached);
+        assert!(store.list_all(Some(20)).expect("cached rows").is_empty());
+
+        // A later unavailable route remains structured diagnostics. Native
+        // health alerts are intentionally retired; only reset transitions emit.
+        let unavailable = AccessRouteSnapshot::unavailable(
+            subscription_source("claude", None),
+            "no credentials — check .credentials.json",
+        );
+        super::observe_access_notifications(None, Some(&store), Provider::Claude, &unavailable);
+        let rows = store.list_all(Some(20)).expect("edge rows");
+        assert!(rows.is_empty());
     }
 
     #[test]
@@ -3920,6 +5228,19 @@ mod tests {
     }
 
     #[test]
+    fn claude_session_cost_provenance_distinguishes_jsonl_estimates_from_statusline() {
+        let jsonl = sample_claude_snapshot("claude-opus-4-8");
+        let mut statusline = jsonl.clone();
+        statusline.source = DataSource::Statusline;
+
+        let estimated = build_claude_session_infos(&[jsonl]);
+        let exact = build_claude_session_infos(&[statusline]);
+
+        assert_eq!(estimated[0].cost_basis, "estimated");
+        assert_eq!(exact[0].cost_basis, "exact");
+    }
+
+    #[test]
     fn discord_preview_uses_the_same_claude_presence_lines_as_publish() {
         let mut snapshot = sample_claude_snapshot("claude-opus-4-8");
         snapshot.project_name = "PropertyAlpha-Agent".to_string();
@@ -3960,6 +5281,57 @@ mod tests {
         assert!(!preview.state.contains("5h"));
         assert!(!preview.state.contains("7d"));
         assert!(!preview.state.contains("Ctx"));
+    }
+
+    #[test]
+    fn claude_preview_and_live_share_extra_usage_from_the_access_route() {
+        let now = chrono::Utc::now();
+        let snapshot = sample_claude_snapshot("claude-opus-4-8");
+        let usage = UsageData {
+            five_hour: UsageWindow {
+                utilization: 20.0,
+                resets_at: None,
+            },
+            seven_day: UsageWindow {
+                utilization: 35.0,
+                resets_at: None,
+            },
+            sonnet_free: None,
+            limits: Vec::new(),
+            extra_usage: Some(ExtraUsage {
+                is_enabled: true,
+                monthly_limit: Some(75.0),
+                used_credits: Some(10.0),
+                utilization: Some(13.333),
+            }),
+        };
+        let route = claude_route_from_usage(
+            subscription_source("claude", None),
+            &usage,
+            now,
+            now,
+            chrono::Duration::seconds(300),
+            now,
+            "OAuth usage API",
+        );
+        let mut config = TestClaudePresenceConfig::default();
+        config.privacy.show_cost = true;
+        config.privacy.show_limits = true;
+
+        let preview = super::build_claude_discord_preview_with_access(
+            std::slice::from_ref(&snapshot),
+            &config,
+            Some(&route),
+            Some(&usage),
+        );
+        let limits = route_limits_for_claude_presence(Some(&route));
+        let (_details, live_state, _tooltip) =
+            super::claude_presence_lines(&snapshot, limits.as_ref(), Some(&usage), &config);
+
+        assert_eq!(preview.state, live_state);
+        assert!(preview.state.contains("5h 20% used"));
+        assert!(preview.state.contains("7d 35% used"));
+        assert!(preview.state.contains("Extra $10.00/$75.00"));
     }
 
     #[test]
@@ -4091,11 +5463,11 @@ mod tests {
     fn plan_key_from_override_accepts_display_labels_and_auto() {
         assert_eq!(plan_key_from_override("Max 20x ($200/mo)"), Some("max_20x"));
         assert_eq!(plan_key_from_override("Max 5x ($100/mo)"), Some("max_5x"));
-        assert_eq!(plan_key_from_override("  Team plan  "), Some("team"));
+        assert_eq!(plan_key_from_override("  Teams plan  "), Some("team"));
         assert_eq!(plan_key_from_override("enterprise"), Some("enterprise"));
         assert_eq!(plan_key_from_override("pro monthly"), Some("pro"));
         assert_eq!(plan_key_from_override("free"), Some("free"));
-        assert_eq!(plan_key_from_override("Max"), Some("max"));
+        assert_eq!(plan_key_from_override("Max"), None);
         assert_eq!(plan_key_from_override("auto"), None);
         assert_eq!(plan_key_from_override(""), None);
     }
@@ -4239,6 +5611,155 @@ mod tests {
     }
 
     #[test]
+    fn discord_preview_and_live_share_access_route_for_quota_and_cost() {
+        let now = chrono::Utc::now();
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.known_cost_usd = Some(4.25);
+        snapshot.pricing_status = PricingStatus::Exact;
+        snapshot.cost_breakdown = TokenCostBreakdown {
+            input_cost_usd: 1.25,
+            cache_write_cost_usd: 0.0,
+            cached_input_cost_usd: 1.0,
+            output_cost_usd: 2.0,
+            cached_input_savings_usd: 0.0,
+        };
+        snapshot.limits = RateLimits::new(vec![
+            cc_discord_presence::codex::telemetry::limits::UsageWindow {
+                used_percent: 99.0,
+                remaining_percent: 1.0,
+                window_minutes: 300,
+                resets_at: None,
+            },
+            cc_discord_presence::codex::telemetry::limits::UsageWindow {
+                used_percent: 88.0,
+                remaining_percent: 12.0,
+                window_minutes: 10_080,
+                resets_at: None,
+            },
+        ]);
+        let route = access_route_from_usage(
+            subscription_source("codex", Some("Pro 20x".to_string())),
+            UsageSnapshot {
+                source: UsageSource::new(
+                    "codex-subscription:default",
+                    [UsageSignal::CodexSubscriptionUsage],
+                ),
+                scopes: vec![QuotaScope {
+                    id: Some("codex".to_string()),
+                    name: Some("Global account quota".to_string()),
+                    kind: RateLimitScope::GlobalAccount,
+                    windows: vec![
+                        QuotaWindow {
+                            window_minutes: 300,
+                            used_percent: 17.0,
+                            remaining_percent: 83.0,
+                            resets_at: None,
+                        },
+                        QuotaWindow {
+                            window_minutes: 10_080,
+                            used_percent: 42.0,
+                            remaining_percent: 58.0,
+                            resets_at: None,
+                        },
+                    ],
+                }],
+                credits: None,
+                observed_at: Some(now),
+                provenance_source: "app_server".to_string(),
+            },
+            now,
+            chrono::Duration::seconds(30),
+            now,
+        );
+        let mut config = TestCodexPresenceConfig::default();
+        config.privacy.show_limits = true;
+        config.privacy.show_cost = true;
+        let preview = build_codex_discord_preview_with_access(
+            &[snapshot.clone()],
+            &config,
+            false,
+            Some(&route),
+        );
+        let plan =
+            PlanDetector::new().resolve_from_sessions(&[snapshot.clone()], &config.openai_plan);
+        let service_tier = resolve_service_tier();
+        let live = active_presence_presentation(
+            codex_session_surface(&snapshot, codex_fallback_surface(false)),
+            &snapshot,
+            route_limits_for_presence(Some(&route)).as_ref(),
+            &plan,
+            &service_tier,
+            &config,
+        );
+
+        assert_eq!(preview.details, live.details);
+        assert_eq!(preview.state, live.state);
+        assert!(preview.state.contains("5h 83%"));
+        assert!(preview.state.contains("7d 58%"));
+        assert!(preview.state.contains("$4.25"));
+
+        let mut stale = route.clone();
+        stale.freshness = AccessFreshness::Stale;
+        let stale_preview =
+            build_codex_discord_preview_with_access(&[snapshot], &config, false, Some(&stale));
+        assert!(!stale_preview.state.contains("5h"));
+        assert!(!stale_preview.state.contains("7d"));
+        assert!(stale_preview.state.contains("$4.25"));
+    }
+
+    #[test]
+    fn codex_weekly_and_model_weekly_do_not_duplicate_the_global_window() {
+        let now = chrono::Utc::now();
+        let route = access_route_from_usage(
+            subscription_source("codex", None),
+            UsageSnapshot {
+                source: UsageSource::new(
+                    "codex-subscription:default",
+                    [UsageSignal::CodexSubscriptionUsage],
+                ),
+                scopes: vec![
+                    QuotaScope {
+                        id: Some("codex".to_string()),
+                        name: None,
+                        kind: RateLimitScope::GlobalAccount,
+                        windows: vec![QuotaWindow {
+                            window_minutes: 10_080,
+                            used_percent: 52.0,
+                            remaining_percent: 48.0,
+                            resets_at: Some(now + chrono::Duration::days(5)),
+                        }],
+                    },
+                    QuotaScope {
+                        id: Some("codex_bengalfox".to_string()),
+                        name: Some("GPT-5.3-Codex-Spark".to_string()),
+                        kind: RateLimitScope::ModelScoped,
+                        windows: vec![QuotaWindow {
+                            window_minutes: 10_080,
+                            used_percent: 0.0,
+                            remaining_percent: 100.0,
+                            resets_at: Some(now + chrono::Duration::days(7)),
+                        }],
+                    },
+                ],
+                credits: None,
+                observed_at: Some(now),
+                provenance_source: "app_server".to_string(),
+            },
+            now,
+            chrono::Duration::seconds(30),
+            now,
+        );
+
+        let (primary, secondary) = super::route_window_slots(&route);
+        assert!(primary.is_none(), "weekly must not be reused as a 5h slot");
+        assert_eq!(secondary.map(|window| window.key.as_str()), Some("weekly"));
+
+        let legacy = super::rate_limit_info_from_access(&route);
+        assert_eq!(legacy.five_hour_window_minutes, None);
+        assert_eq!(legacy.seven_day_window_minutes, Some(10_080));
+    }
+
+    #[test]
     fn context_recommendation_maps_each_tier_at_boundaries() {
         use super::{
             CONTEXT_COMPACT_NOW_PCT, CONTEXT_COMPACT_SOON_PCT, CONTEXT_WATCH_PCT,
@@ -4294,7 +5815,34 @@ mod tests {
         assert!((info[0].input_cost - 1.0).abs() < 0.0001);
         assert!((info[0].output_cost - 2.5).abs() < 0.0001);
         assert!((info[0].cache_read_cost - 0.5).abs() < 0.0001);
+        assert!(info[0].cost_available);
+        assert_eq!(info[0].cost_basis, "exact");
         assert!(info[0].fast);
+    }
+
+    #[test]
+    fn codex_session_info_omits_partial_cost_from_shared_metrics() {
+        let mut snapshot = sample_codex_snapshot();
+        snapshot.known_cost_usd = Some(0.454);
+        snapshot.total_cost_usd = 0.454;
+        snapshot.pricing_status = PricingStatus::Partial;
+        snapshot.cost_breakdown = TokenCostBreakdown {
+            input_cost_usd: 0.2,
+            output_cost_usd: 0.254,
+            ..TokenCostBreakdown::default()
+        };
+
+        let info = build_codex_session_infos(
+            &[snapshot],
+            &TestCodexPresenceConfig::default(),
+            TestPresenceSurface::Cli,
+        );
+
+        assert_eq!(info[0].cost, 0.0);
+        assert_eq!(info[0].input_cost, 0.0);
+        assert_eq!(info[0].output_cost, 0.0);
+        assert!(!info[0].cost_available);
+        assert_eq!(info[0].cost_basis, "unavailable");
     }
 
     // ---- Reports cost timeline ---------------------------------------
@@ -4307,6 +5855,9 @@ mod tests {
             date: date.format("%Y-%m-%d").to_string(),
             cost,
             sessions,
+            priced_sessions: sessions,
+            cost_basis: crate::db::CostBasis::Exact,
+            cost_sources: vec!["fixture".to_string()],
         }
     }
 
@@ -4316,6 +5867,9 @@ mod tests {
         crate::db::HistoricalSession {
             started_at: Some(format!("{}T12:00:00Z", date.format("%Y-%m-%d"))),
             total_cost: cost,
+            cost_basis: crate::db::CostBasis::Exact,
+            cost_source: "fixture".to_string(),
+            known_cost: Some(cost),
             ..Default::default()
         }
     }
@@ -4349,6 +5903,58 @@ mod tests {
         let day = series.iter().find(|p| p.sessions > 0).expect("busy day");
         assert!((day.cost - 8.0).abs() < 0.000_001);
         assert_eq!(day.sessions, 3);
+        assert_eq!(day.priced_sessions, 3);
+        assert_eq!(day.cost_basis, crate::db::CostBasis::Exact);
+        assert_eq!(day.cost_sources, vec!["fixture".to_string()]);
+    }
+
+    #[test]
+    fn report_windows_preserve_cost_coverage_for_7_30_90_and_365_days() {
+        for days in [7, 30, 90, 365] {
+            let series = daily_cost_series(&[cost_row(0, 4.25, 2)], days);
+            assert_eq!(series.len(), days as usize);
+            let current = series.last().expect("current day");
+            assert_eq!(current.cost, 4.25);
+            assert_eq!(current.sessions, 2);
+            assert_eq!(current.priced_sessions, 2);
+            assert_eq!(current.cost_basis, crate::db::CostBasis::Exact);
+        }
+    }
+
+    #[test]
+    fn all_provider_report_bundle_aggregates_without_cross_provider_guidance() {
+        let mut codex = session_on_day(0, 2.0);
+        codex.id = "codex:scope".to_string();
+        codex.provider = "codex".to_string();
+        codex.model = "GPT-5.6 Sol".to_string();
+        let mut claude = session_on_day(0, 7.0);
+        claude.id = "claude:scope".to_string();
+        claude.provider = "claude".to_string();
+        claude.model = "Claude Opus 5".to_string();
+
+        let bundle = build_reports_bundle_for_scope_from_roots(
+            "all",
+            Some(7),
+            vec![codex, claude],
+            vec![cost_row(0, 9.0, 2)],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert_eq!(bundle.provider, "all");
+        assert_eq!(bundle.total_sessions, 2);
+        assert_eq!(bundle.priced_sessions, 2);
+        assert_eq!(bundle.cost_basis, crate::db::CostBasis::Exact);
+        assert_eq!(bundle.daily_costs.last().expect("today").cost, 9.0);
+        assert!(bundle.model_routing.is_none());
+        assert!(bundle.recommendations.is_empty());
+        assert_eq!(bundle.trace_overview.provider_display, "All providers");
+        assert!(
+            bundle
+                .cache_health
+                .diagnosis
+                .contains("aggregated across All providers")
+        );
     }
 
     #[test]
@@ -4393,6 +5999,7 @@ mod tests {
         a.cache_write_cost = 0.75;
         a.cache_read_cost = 0.25;
         a.total_cost = 4.5;
+        a.known_cost = Some(4.5);
 
         let totals = aggregate_cost_totals(30, &[a]);
         let by_category = totals.input_cost
@@ -4408,6 +6015,72 @@ mod tests {
         assert_eq!(totals.sessions, 0);
         assert_eq!(totals.total_cost, 0.0);
         assert_eq!(totals.days, 7);
+        assert_eq!(
+            totals.cost_basis,
+            crate::db::CostBasis::Unavailable,
+            "an empty window is not an exact zero-cost observation"
+        );
+    }
+
+    #[test]
+    fn cost_totals_keep_partial_coverage_and_ignore_unavailable_raw_costs() {
+        let mut exact = session_on_day(1, 2.5);
+        exact.cost_basis = crate::db::CostBasis::Exact;
+        exact.cost_source = "session-calculated".to_string();
+        exact.known_cost = Some(2.5);
+
+        let mut unavailable = session_on_day(1, 99.0);
+        unavailable.cost_basis = crate::db::CostBasis::Unavailable;
+        unavailable.cost_source = "unknown".to_string();
+        unavailable.known_cost = None;
+
+        let totals = aggregate_cost_totals(30, &[exact, unavailable]);
+
+        assert_eq!(totals.cost_basis, crate::db::CostBasis::Partial);
+        assert_eq!(totals.sessions, 2);
+        assert_eq!(totals.priced_sessions, 1);
+        assert_eq!(totals.total_cost, 2.5);
+        assert_eq!(totals.cost_sources, vec!["session-calculated".to_string()]);
+    }
+
+    #[test]
+    fn cost_totals_keep_usage_breakdown_when_cost_is_unavailable() {
+        let mut unavailable = session_on_day(1, 99.0);
+        unavailable.cost_basis = crate::db::CostBasis::Unavailable;
+        unavailable.cost_source = "unknown".to_string();
+        unavailable.known_cost = None;
+        unavailable.input_tokens = 100_000;
+        unavailable.output_tokens = 20_000;
+        unavailable.cache_write_tokens = 5_000;
+        unavailable.cache_read_tokens = 75_000;
+        unavailable.total_tokens = 200_000;
+
+        let totals = aggregate_cost_totals(30, &[unavailable]);
+
+        assert_eq!(totals.cost_basis, crate::db::CostBasis::Unavailable);
+        assert_eq!(totals.input_tokens, 100_000);
+        assert_eq!(totals.output_tokens, 20_000);
+        assert_eq!(totals.cache_write_tokens, 5_000);
+        assert_eq!(totals.cache_read_tokens, 75_000);
+        assert_eq!(totals.total_tokens, 200_000);
+    }
+
+    #[test]
+    fn metrics_cost_availability_distinguishes_empty_partial_and_exact_zero() {
+        assert_eq!(
+            cost_availability(&[]),
+            (false, "unavailable".to_string()),
+            "an empty session set has no cost observation"
+        );
+
+        let mut exact = build_claude_session_infos(&[sample_claude_snapshot("claude-opus-4-8")]);
+        exact[0].cost = 0.0;
+        assert_eq!(cost_availability(&exact), (true, "exact".to_string()));
+
+        let mut mixed = build_claude_session_infos(&[sample_claude_snapshot("claude-opus-4-8")]);
+        mixed[0].cost_available = false;
+        mixed[0].cost_basis = "unavailable".to_string();
+        assert_eq!(cost_availability(&mixed), (false, "partial".to_string()));
     }
 
     /// The cache-savings estimate multiplies a token count by a per-token rate.

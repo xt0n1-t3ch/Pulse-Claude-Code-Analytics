@@ -1,0 +1,8 @@
+{
+  "fixture_version": 1,
+  "raw_payload": null,
+  "status": "no_data",
+  "source_contract": "aggregate.v1",
+  "captured_at": "2026-08-01T00:00:00Z",
+  "expected_dto": { "routes": [] }
+}

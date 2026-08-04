@@ -1123,7 +1123,7 @@ fn print_active_summary(
     }
 
     let limits = effective_limits.unwrap_or(&active.limits);
-    if let Some(primary) = &limits.primary {
+    if let Some(primary) = limits.primary() {
         println!(
             "  {} remaining: {:.0}% (reset {})",
             codex_presence_core::format_window_label(primary.window_minutes),
@@ -1131,7 +1131,7 @@ fn print_active_summary(
             format_time_until(primary.resets_at)
         );
     }
-    if let Some(secondary) = &limits.secondary {
+    if let Some(secondary) = limits.secondary() {
         println!(
             "  {} remaining: {:.0}% (reset {})",
             codex_presence_core::format_window_label(secondary.window_minutes),

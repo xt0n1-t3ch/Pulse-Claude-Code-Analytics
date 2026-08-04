@@ -669,8 +669,7 @@ mod tests {
         assert_eq!(
             snapshot
                 .limits
-                .primary
-                .as_ref()
+                .primary()
                 .expect("primary")
                 .remaining_percent,
             60.0
@@ -678,8 +677,7 @@ mod tests {
         assert_eq!(
             snapshot
                 .limits
-                .secondary
-                .as_ref()
+                .secondary()
                 .expect("secondary")
                 .remaining_percent,
             16.0
@@ -699,8 +697,7 @@ mod tests {
         assert_eq!(
             envelope
                 .limits
-                .primary
-                .as_ref()
+                .primary()
                 .expect("weekly quota")
                 .window_minutes,
             10_080
@@ -712,6 +709,47 @@ mod tests {
                 .and_then(|credits| credits.balance.as_deref()),
             Some("2500")
         );
+    }
+
+    #[test]
+    fn provider_window_removal_is_not_resurrected_by_previous_session_state() {
+        let snapshot = parse_one(
+            r#"{"type":"session_meta","payload":{"id":"window-removal","cwd":"C:\\repo\\app"}}
+{"timestamp":"2026-07-16T16:34:13Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":4.0,"window_minutes":300},"secondary":{"used_percent":12.0,"window_minutes":10080}}}}
+{"timestamp":"2026-07-16T16:35:13Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":null,"secondary":{"used_percent":18.0,"window_minutes":10080}}}}"#,
+        );
+
+        let envelope = snapshot
+            .rate_limit_envelopes
+            .first()
+            .expect("rate limit envelope");
+        assert_eq!(envelope.limits.windows.len(), 1);
+        assert_eq!(
+            envelope
+                .limits
+                .primary()
+                .expect("remaining weekly window")
+                .window_minutes,
+            10_080
+        );
+    }
+
+    #[test]
+    fn provider_total_window_removal_clears_previous_quota_state() {
+        let snapshot = parse_one(
+            r#"{"type":"session_meta","payload":{"id":"window-total-removal","cwd":"C:\\repo\\app"}}
+{"timestamp":"2026-07-16T16:34:13Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":4.0,"window_minutes":300},"secondary":{"used_percent":12.0,"window_minutes":10080}}}}
+{"timestamp":"2026-07-16T16:35:13Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":null,"secondary":null}}}"#,
+        );
+
+        let envelope = snapshot
+            .rate_limit_envelopes
+            .first()
+            .expect("rate limit tombstone");
+        assert!(envelope.limits.primary().is_none());
+        assert!(envelope.limits.secondary().is_none());
+        assert!(snapshot.limits.primary().is_none());
+        assert!(snapshot.limits.secondary().is_none());
     }
 
     #[test]
@@ -741,7 +779,7 @@ mod tests {
         assert!(sessions.is_empty());
         let usage = parse_cache.rate_limit_envelopes();
         assert_eq!(usage.len(), 1);
-        assert_eq!(usage[0].scope, RateLimitScope::GlobalCodex);
+        assert_eq!(usage[0].scope, RateLimitScope::GlobalAccount);
         assert_eq!(
             usage[0]
                 .credits
@@ -752,7 +790,7 @@ mod tests {
         assert_eq!(
             parse_cache
                 .latest_limits_source()
-                .and_then(|selected| selected.limits.primary)
+                .and_then(|selected| selected.limits.primary().cloned())
                 .map(|window| window.window_minutes),
             Some(10_080)
         );
@@ -857,8 +895,8 @@ mod tests {
             r#"{"type":"session_meta","payload":{"id":"clamp","cwd":"C:\\repo\\app"}}
 {"timestamp":"2026-02-09T16:34:13Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":133.0,"window_minutes":300,"resets_at":1770671532},"secondary":{"used_percent":-12.0,"window_minutes":10080,"resets_at":1771091103}}}}"#,
         );
-        let primary = snapshot.limits.primary.expect("primary");
-        let secondary = snapshot.limits.secondary.expect("secondary");
+        let primary = snapshot.limits.primary().expect("primary");
+        let secondary = snapshot.limits.secondary().expect("secondary");
         assert_eq!(primary.used_percent, 100.0);
         assert_eq!(primary.remaining_percent, 0.0);
         assert_eq!(secondary.used_percent, 0.0);
@@ -1348,30 +1386,24 @@ mod tests {
             cost_attribution: CostAttribution::SingleModel,
             cost_breakdown_reconciled: false,
             context_window: None,
-            limits: RateLimits {
-                primary: Some(UsageWindow {
-                    used_percent: 50.0,
-                    remaining_percent: 50.0,
-                    window_minutes: 300,
-                    resets_at: None,
-                }),
-                secondary: None,
-            },
+            limits: RateLimits::new(vec![UsageWindow {
+                used_percent: 50.0,
+                remaining_percent: 50.0,
+                window_minutes: 300,
+                resets_at: None,
+            }]),
             rate_limit_envelopes: vec![RateLimitEnvelope {
                 limit_id: Some("codex".to_string()),
                 limit_name: None,
                 plan_type: None,
                 observed_at: Utc.timestamp_opt(1000, 0).single(),
-                scope: RateLimitScope::GlobalCodex,
-                limits: RateLimits {
-                    primary: Some(UsageWindow {
-                        used_percent: 50.0,
-                        remaining_percent: 50.0,
-                        window_minutes: 300,
-                        resets_at: None,
-                    }),
-                    secondary: None,
-                },
+                scope: RateLimitScope::GlobalAccount,
+                limits: RateLimits::new(vec![UsageWindow {
+                    used_percent: 50.0,
+                    remaining_percent: 50.0,
+                    window_minutes: 300,
+                    resets_at: None,
+                }]),
                 credits: None,
             }],
             activity: None,
@@ -1409,30 +1441,24 @@ mod tests {
             cost_attribution: CostAttribution::SingleModel,
             cost_breakdown_reconciled: false,
             context_window: None,
-            limits: RateLimits {
-                primary: Some(UsageWindow {
-                    used_percent: 20.0,
-                    remaining_percent: 80.0,
-                    window_minutes: 300,
-                    resets_at: None,
-                }),
-                secondary: None,
-            },
+            limits: RateLimits::new(vec![UsageWindow {
+                used_percent: 20.0,
+                remaining_percent: 80.0,
+                window_minutes: 300,
+                resets_at: None,
+            }]),
             rate_limit_envelopes: vec![RateLimitEnvelope {
                 limit_id: Some("codex".to_string()),
                 limit_name: None,
                 plan_type: None,
                 observed_at: Utc.timestamp_opt(2000, 0).single(),
-                scope: RateLimitScope::GlobalCodex,
-                limits: RateLimits {
-                    primary: Some(UsageWindow {
-                        used_percent: 20.0,
-                        remaining_percent: 80.0,
-                        window_minutes: 300,
-                        resets_at: None,
-                    }),
-                    secondary: None,
-                },
+                scope: RateLimitScope::GlobalAccount,
+                limits: RateLimits::new(vec![UsageWindow {
+                    used_percent: 20.0,
+                    remaining_percent: 80.0,
+                    window_minutes: 300,
+                    resets_at: None,
+                }]),
                 credits: None,
             }],
             activity: None,

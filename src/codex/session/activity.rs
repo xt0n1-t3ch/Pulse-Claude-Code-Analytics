@@ -12,8 +12,9 @@ use crate::codex::model::{
     SessionSpeed, SpeedMode, SpeedSource, canonical_model_key, model_requests_fast, resolve_model,
 };
 use crate::codex::telemetry::limits::{
-    RateLimitEnvelope, RateLimits, limits_present as telemetry_limits_present,
-    parse_rate_limit_envelope, select_session_envelope_global_first,
+    RateLimitEnvelope, RateLimits, classify_limit_scope,
+    limits_present as telemetry_limits_present, parse_rate_limit_envelope,
+    select_session_envelope_global_first,
 };
 
 use super::is_working_activity_kind;
@@ -68,6 +69,55 @@ struct PendingActivity {
 }
 
 const IDLE_DEBOUNCE_SECS: i64 = 45;
+
+fn parse_rate_limit_update(
+    value: Option<&Value>,
+    observed_at: Option<DateTime<Utc>>,
+) -> Option<RateLimitEnvelope> {
+    let value = value?;
+    if let Some(parsed) = parse_rate_limit_envelope(Some(value), observed_at) {
+        return Some(parsed);
+    }
+
+    // The shared parser intentionally omits an envelope with no live windows
+    // or credits. At the session seam, however, an explicit `null` is a
+    // provider removal signal; retain a tombstone so stale windows cannot be
+    // resurrected from the previous event. An omitted field is handled by the
+    // caller as an unchanged value.
+    let object = value.as_object();
+    let explicit_empty = value.is_null() || object.is_some_and(|value| value.is_empty());
+    let has_explicit_window = object
+        .is_some_and(|value| value.contains_key("primary") || value.contains_key("secondary"));
+    let has_explicit_credits = object.is_some_and(|value| value.contains_key("credits"));
+    if !explicit_empty && !has_explicit_window && !has_explicit_credits {
+        return None;
+    }
+    let limit_id = object
+        .and_then(|value| value.get("limit_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    Some(RateLimitEnvelope {
+        scope: classify_limit_scope(limit_id.as_deref()),
+        limit_id,
+        limit_name: object
+            .and_then(|value| value.get("limit_name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        plan_type: object
+            .and_then(|value| value.get("plan_type"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        observed_at,
+        limits: RateLimits::default(),
+        credits: None,
+    })
+}
 
 #[derive(Debug, Default)]
 struct ActivityTracker {
@@ -368,22 +418,51 @@ impl SessionAccumulator {
                     }
 
                     if let Some(mut parsed_limit) =
-                        parse_rate_limit_envelope(payload.get("rate_limits"), event_timestamp)
+                        parse_rate_limit_update(payload.get("rate_limits"), event_timestamp)
                     {
+                        let anonymous_tombstone = parsed_limit.limit_id.is_none()
+                            && parsed_limit.limit_name.is_none()
+                            && parsed_limit.limits.windows.is_empty()
+                            && parsed_limit.credits.is_none();
+                        if anonymous_tombstone {
+                            self.rate_limit_envelopes
+                                .retain(|_, envelope| envelope.scope != parsed_limit.scope);
+                        }
                         let key = parsed_limit
                             .limit_id
                             .clone()
                             .or_else(|| parsed_limit.limit_name.clone())
                             .unwrap_or_else(|| format!("scope:{}", parsed_limit.scope.as_slug()));
                         if let Some(previous) = self.rate_limit_envelopes.get(&key) {
-                            if parsed_limit.limits.primary.is_none() {
-                                parsed_limit.limits.primary = previous.limits.primary.clone();
-                            }
-                            if parsed_limit.limits.secondary.is_none() {
-                                parsed_limit.limits.secondary = previous.limits.secondary.clone();
-                            }
-                            if parsed_limit.credits.is_none() {
-                                parsed_limit.credits = previous.credits.clone();
+                            // An omitted field means "unchanged"; an explicit null/empty
+                            // field means the provider removed that window. Merging per field
+                            // preserves credits-only updates without resurrecting removals.
+                            if let Some(rate_limits) =
+                                payload.get("rate_limits").and_then(Value::as_object)
+                            {
+                                let (current_primary, current_secondary) =
+                                    parsed_limit.limits.clone().into_primary_secondary();
+                                let (previous_primary, previous_secondary) =
+                                    previous.limits.clone().into_primary_secondary();
+                                let primary = if !rate_limits.is_empty()
+                                    && !rate_limits.contains_key("primary")
+                                {
+                                    previous_primary
+                                } else {
+                                    current_primary
+                                };
+                                let secondary = if !rate_limits.is_empty()
+                                    && !rate_limits.contains_key("secondary")
+                                {
+                                    previous_secondary
+                                } else {
+                                    current_secondary
+                                };
+                                parsed_limit.limits =
+                                    RateLimits::from_primary_secondary(primary, secondary);
+                                if !rate_limits.is_empty() && !rate_limits.contains_key("credits") {
+                                    parsed_limit.credits = previous.credits.clone();
+                                }
                             }
                         }
                         self.rate_limit_envelopes.insert(key, parsed_limit);
@@ -392,6 +471,8 @@ impl SessionAccumulator {
                             self.rate_limit_envelopes.values().cloned().collect();
                         if let Some(selected) = select_session_envelope_global_first(&envelopes) {
                             self.limits = selected.limits;
+                        } else {
+                            self.limits = RateLimits::default();
                         }
                     }
 

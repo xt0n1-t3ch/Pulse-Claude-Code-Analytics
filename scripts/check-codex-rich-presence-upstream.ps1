@@ -146,7 +146,8 @@ if ($null -ne $schemaVersionProperty -and $schemaVersionProperty.Value -eq 3) {
     throw "Cargo core version does not match src/codex/UPSTREAM.json"
   }
   if ($mode -eq "local-path") {
-    if ($manifest.PSObject.Properties["canonical_commit"].Value -ne $null) { throw "Local-path integration must not claim a canonical commit" }
+    $canonicalCommitProperty = $manifest.PSObject.Properties["canonical_commit"]
+    if ($null -ne $canonicalCommitProperty -and $canonicalCommitProperty.Value -ne $null) { throw "Local-path integration must not claim a canonical commit" }
     $path = Get-RequiredString $manifest.integration "path" '^[^\r\n"]+$'
     if ($body -notmatch ('\bpath\s*=\s*"' + [regex]::Escape($path) + '"')) { throw "Cargo core path does not match src/codex/UPSTREAM.json" }
     if ([string]$manifest.integration.promotion_status -ne "pending-local-validation") { throw "Local-path integration must remain pending-local-validation" }

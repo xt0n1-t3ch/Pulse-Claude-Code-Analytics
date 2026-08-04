@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "fixture_version": 1,
+  "fixtures": [
+    { "name": "true_zero", "path": "true_zero.json", "source_contract": "session_metrics.v1" },
+    { "name": "unavailable", "path": "unavailable.json", "source_contract": "session_metrics.v1" }
+  ]
+}

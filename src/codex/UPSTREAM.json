@@ -1,19 +1,18 @@
 {
   "schema_version": 3,
   "repository": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
-  "canonical_release": "v1.8.0",
-  "canonical_commit": "b085c3dcc2ba75b5e54ec7e6252c90120ec04b0e",
+  "canonical_release": "v1.9.0",
+  "canonical_commit": "e95e2b1573eb86da945d03412f57b6a18cc28c50",
   "integration": {
     "mode": "git-rev",
     "package": "codex-presence-core",
-    "version": "1.0.0",
-    "git": "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence",
-    "rev": "b085c3dcc2ba75b5e54ec7e6252c90120ec04b0e",
+    "version": "2.0.0",
+    "rev": "e95e2b1573eb86da945d03412f57b6a18cc28c50",
     "promotion_mode": "git-rev",
-    "promotion_status": "canonical-release-verified"
+    "promotion_status": "promoted"
   },
   "compatibility": {
-    "pulse": "1.6.0",
+    "pulse": "1.7.0",
     "presence_config_schema": 13,
     "usage_snapshot_revision": 1,
     "app_snapshot_revision": 1

@@ -838,8 +838,8 @@ mod tests {
         assert_eq!(cfg.plan_badge_name(), Some("MAX 5x"));
 
         cfg.plan = Some("team".to_string());
-        assert_eq!(cfg.plan_display_name(), Some("Team"));
-        assert_eq!(cfg.plan_badge_name(), Some("TEAM"));
+        assert_eq!(cfg.plan_display_name(), Some("Teams"));
+        assert_eq!(cfg.plan_badge_name(), Some("TEAMS"));
 
         cfg.plan = None;
         assert_eq!(cfg.plan_display_name(), None);

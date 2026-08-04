@@ -13,6 +13,8 @@ function makeSession(id: string, project: string, cost: number): SessionInfo {
     provider: "claude",
     context_window: "200K",
     cost,
+    cost_available: true,
+    cost_basis: "exact",
     tokens: 120_000,
     input_tokens: 40_000,
     output_tokens: 20_000,
@@ -45,6 +47,7 @@ function makeSession(id: string, project: string, cost: number): SessionInfo {
 function hist(id: string, project: string, cost: number): HistoricalSession {
   return {
     id,
+    provider: "claude",
     session_name: null,
     project,
     model: "Claude Opus 4.8",
@@ -56,6 +59,9 @@ function hist(id: string, project: string, cost: number): HistoricalSession {
     ended_at: "2026-05-20T10:30:00Z",
     duration_secs: 1800,
     total_cost: cost,
+    cost_basis: "exact",
+    cost_source: "anthropic_api_equivalent",
+    known_cost: cost,
     input_tokens: 50_000,
     output_tokens: 20_000,
     cache_write_tokens: 10_000,
@@ -74,7 +80,10 @@ function hist(id: string, project: string, cost: number): HistoricalSession {
 
 const summary: AnalyticsSummary = {
   total_sessions: 5,
+  priced_sessions: 5,
   total_cost: 25,
+  cost_basis: "exact",
+  cost_sources: ["anthropic_api_equivalent"],
   total_tokens: 2_000_000,
   total_cache_read: 1_000_000,
   total_cache_write: 100_000,
@@ -87,7 +96,6 @@ const summary: AnalyticsSummary = {
 };
 
 const getAnalyticsSummary = vi.fn(async () => summary);
-const getTopSessions = vi.fn(async () => [] as HistoricalSession[]);
 const getSessionHistory = vi.fn(async () => [hist("h1", "pulse", 6), hist("h2", "other", 4)]);
 const getSessionHistoryFiltered = vi.fn(async () => [] as HistoricalSession[]);
 const searchSessions = vi.fn(async () => [] as HistoricalSession[]);
@@ -97,7 +105,6 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     getAnalyticsSummary: () => getAnalyticsSummary(),
-    getTopSessions: () => getTopSessions(),
     getSessionHistory: () => getSessionHistory(),
     getSessionHistoryFiltered: () => getSessionHistoryFiltered(),
     searchSessions: () => searchSessions(),
@@ -107,7 +114,6 @@ vi.mock("@/lib/api", async (importOriginal) => {
 describe("Sessions.svelte", () => {
   beforeEach(() => {
     getAnalyticsSummary.mockClear();
-    getTopSessions.mockClear();
     getSessionHistory.mockClear();
   });
 
@@ -120,7 +126,7 @@ describe("Sessions.svelte", () => {
     await tick();
 
     const labels = [...container.querySelectorAll(".stat-label")].map((e) => e.textContent?.trim());
-    expect(labels).toEqual(["Total Tokens", "Total Cost", "Avg Duration", "Avg Cost/Session"]);
+    expect(labels).toEqual(["Active sessions", "Live tokens", "Live cost", "Avg throughput"]);
 
     await waitFor(() => {
       expect(container.querySelectorAll(".session-list .session-card").length).toBe(2);
@@ -140,26 +146,93 @@ describe("Sessions.svelte", () => {
     await waitFor(() => {
       expect(container.querySelectorAll(".ht-row").length).toBe(2);
     });
-    expect(getByText("Session History")).toBeTruthy();
+    expect(getByText("Session history")).toBeTruthy();
   });
 
-  it("renders the most-costly sessions sorted by cost without mutating state", async () => {
+  it("keeps historical cost ranking in the single sortable history ledger", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([]);
-    getTopSessions.mockResolvedValueOnce([
-      hist("low", "alpha", 2),
-      hist("high", "beta", 9),
-      hist("mid", "gamma", 5),
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container, queryByText } = render(Sessions);
+    await tick();
+
+    await waitFor(() => expect(container.querySelectorAll(".ht-row").length).toBe(2));
+    expect(queryByText("Most Costly Sessions (30 days)")).toBeNull();
+  });
+
+  it("excludes retained idle snapshots from live KPIs and rows", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([
+      makeSession("live", "active-project", 3),
+      { ...makeSession("idle", "idle-project", 99), is_idle: true },
     ]);
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container, getByText } = render(Sessions);
+    await tick();
+
+    expect(getByText("1 active")).toBeTruthy();
+    expect(container.querySelectorAll(".session-list .session-card")).toHaveLength(1);
+    expect(container.textContent).not.toContain("idle-project");
+  });
+
+  it("marks an unpriced historical session unavailable instead of rendering its raw estimate", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([]);
+    getSessionHistory.mockResolvedValueOnce([
+      {
+        ...hist("unpriced", "unpriced-project", 99),
+        cost_basis: "unavailable",
+        cost_source: "unknown",
+        known_cost: null,
+      },
+    ]);
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container } = render(Sessions);
+
+    await waitFor(() => expect(container.querySelectorAll(".ht-row").length).toBe(1));
+    const row = container.querySelector(".ht-row");
+    expect(row?.textContent).toContain("Unavailable");
+    expect(row?.textContent).not.toContain("$99.00");
+  });
+
+  it("labels API-equivalent historical cost as estimated", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([]);
+    getSessionHistory.mockResolvedValueOnce([{
+      ...hist("estimated", "estimated-project", 2.5),
+      cost_basis: "estimated",
+      cost_source: "api_equivalent",
+    }]);
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container } = render(Sessions);
+
+    await waitFor(() => expect(container.querySelectorAll(".ht-row")).toHaveLength(1));
+    expect(container.querySelector(".ht-row")?.textContent).toContain("$2.50 estimated");
+  });
+
+  it("marks an unavailable all-time cost as unavailable instead of zero dollars", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([]);
+    getAnalyticsSummary.mockResolvedValueOnce({
+      ...summary,
+      priced_sessions: 0,
+      total_cost: 0,
+      avg_cost_per_session: 0,
+      cost_basis: "unavailable",
+      cost_sources: [],
+    });
 
     const Sessions = (await import("@/views/Sessions.svelte")).default;
     const { container } = render(Sessions);
     await tick();
 
     await waitFor(() => {
-      expect(container.querySelectorAll(".top-row").length).toBe(3);
+      expect(container.querySelector(".history-summary")?.textContent).toContain("Cost: Unavailable");
     });
-    const projects = [...container.querySelectorAll(".top-row .project")].map((e) => e.textContent?.trim());
-    expect(projects).toEqual(["beta", "gamma", "alpha"]);
+    expect(container.querySelector(".history-summary")?.textContent).not.toContain("Cost: $0.00");
   });
 });

@@ -2,6 +2,59 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.7.0] - 2026-08-01
+
+Pulse 1.7.0 adds provider-neutral authenticated access routes, freshness-aware
+quota presentation, and exact-cost provenance across the Pulse runtime.
+
+### Added
+
+- Canonical access snapshots that keep subscription and API routes separate,
+  carry proof/provenance metadata, and fail closed for unproved API keys.
+- A local-history capability on access routes, allowing stored Claude and Codex
+  analytics to remain selectable without treating filesystem presence as
+  authenticated provider proof.
+- Freshness-gated quota output shared by Pulse previews and live Discord
+  presence, including sparse provider windows and Extra Usage metadata.
+
+### Changed
+
+- Pulse now consumes the typed Codex Presence Core 2.0 usage contract and
+  reports unavailable or partial costs without presenting fabricated exact
+  totals.
+- Costs now leads with a Subscription Value Ledger: provider-scoped token
+  totals, token mix, daily trend, sessions, cache reuse, and explicit cost
+  coverage remain visible when subscription spend is unavailable.
+- Pulse carries the canonical Codex `rateLimitResetCredits` summary separately
+  from spend `credits`, preserving the provider count and optional detail
+  records without a duplicate parser in the Tauri host.
+
+### Fixed
+
+- Native quota notifications now require a fresh authenticated reset transition:
+  Codex `remaining < 100 -> 100` or Claude `used > 0 -> 0`. Timestamp drift,
+  first samples, stale/cache/unproved reads, thresholds, provider health, and
+  Discord diagnostics stay silent; legacy timestamp-only reset rows are kept
+  but dismissed once during migration.
+- Claude subscription metrics no longer promote local cache data as an
+  authenticated provider response when credentials are missing or invalid.
+- Claude local history remains visible as an analytics source when its token is
+  expired, while allowance, notification, plan, and Discord surfaces continue
+  to require fresh provider proof.
+- Billion-scale token totals render with a `B` suffix instead of four-digit
+  millions.
+- Pulse registers Tauri single-instance handling before the background poller,
+  focusing the existing window on a second launch instead of duplicating the
+  poller; the independent Discord publisher lease remains unchanged.
+
+### Validated
+
+- Rust workspace tests, Clippy with warnings denied, formatting, and route
+  parity coverage pass on the release candidate.
+- Live bridge and browser QA cover all seven routes at `1488 x 1058` and
+  `390 x 844`, including Codex unavailable cost, Claude partial local history,
+  zero page overflow, and an empty durable notification center.
+
 ## [1.6.5] - 2026-07-25
 
 Pulse 1.6.5 makes the redesigned UI obey the same rule as the backend: one current owner per fact, with freshness and provider provenance visible at the point of use.

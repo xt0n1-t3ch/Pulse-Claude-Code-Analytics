@@ -10,6 +10,10 @@ function forecast(overrides: Partial<CostForecast> = {}): CostForecast {
     days_in_month: 31,
     projected_monthly: 9521.32,
     daily_average: 307.14,
+    cost_basis: "exact",
+    cost_sources: ["anthropic_api_equivalent"],
+    sessions: 4,
+    priced_sessions: 4,
     ...overrides,
   };
 }
@@ -22,6 +26,10 @@ function budget(monthly: number): BudgetStatus {
     pct_used: (7371.35 / monthly) * 100,
     projected_monthly: 9521.32,
     over_budget: 9521.32 > monthly,
+    cost_basis: "exact",
+    cost_sources: ["anthropic_api_equivalent"],
+    sessions: 4,
+    priced_sessions: 4,
   };
 }
 
@@ -139,16 +147,64 @@ describe("BudgetCockpit.svelte", () => {
     expect(capLeft).toBeLessThanOrEqual(100);
   });
 
-  it("states plainly when nothing has been spent this month", () => {
+  it("states plainly when nothing has been spent this month, even after the first day", () => {
     const { getByText } = render(BudgetCockpit, {
       props: {
-        forecast: forecast({ spent_this_month: 0, days_elapsed: 0, projected_monthly: 0 }),
+        forecast: forecast({
+          spent_this_month: 0,
+          days_elapsed: 3,
+          projected_monthly: 0,
+          daily_average: 0,
+        }),
         budget: null,
         onSetBudget: noop,
       },
     });
 
     expect(getByText("No spend recorded this month yet.")).toBeTruthy();
+  });
+
+  it("does not render unknown spend and projection as zero dollars", () => {
+    const { container, getByText } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({
+          spent_this_month: 0,
+          projected_monthly: 0,
+          daily_average: 0,
+          cost_basis: "unavailable",
+          cost_sources: [],
+          sessions: 4,
+          priced_sessions: 0,
+        }),
+        budget: null,
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".ck-figure")?.textContent?.trim()).toBe("—");
+    expect(getByText("Cost unavailable for this month.")).toBeTruthy();
+    expect(container.querySelector(".ck-track")).toBeNull();
+  });
+
+  it("shows known lower-bound spend when forecast coverage is partial", () => {
+    const { container, getByText } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({
+          spent_this_month: 85,
+          projected_monthly: 95,
+          daily_average: 3.5,
+          cost_basis: "partial",
+          sessions: 4,
+          priced_sessions: 3,
+        }),
+        budget: null,
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".ck-figure")?.textContent).toContain("$85");
+    expect(getByText(/Known spend only:/)).toBeTruthy();
+    expect(container.querySelector(".ck-track")).not.toBeNull();
   });
 
   it("uses no hardcoded colours", async () => {

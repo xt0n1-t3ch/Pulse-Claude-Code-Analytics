@@ -3,6 +3,8 @@ import { render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { get } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
+import Dashboard from "@/views/Dashboard.svelte";
+import * as stores from "@/lib/stores";
 import type {
   HealthResponse,
   MetricsResponse,
@@ -16,6 +18,7 @@ import type {
   DailyStat,
   ProjectStat,
 } from "@/lib/api";
+import type { AccessSnapshot } from "@/lib/access";
 
 const health: HealthResponse = {
   version: "0.1.0",
@@ -85,7 +88,11 @@ const liveSessions = [makeSession("s1", "pulse"), makeSession("s2", "other")];
 const rateLimitInfo: RateLimitInfo = {
   provider: "claude",
   usage: {
-    provider: "claude",
+    source: {
+      lane: "claude_subscription",
+      stream_id: "claude-subscription:usage",
+      signals: ["claude_subscription_usage"],
+    },
     scopes: [{
       id: "global",
       name: "Claude account",
@@ -97,7 +104,7 @@ const rateLimitInfo: RateLimitInfo = {
     }],
     credits: null,
     observed_at: "2026-05-28T12:00:00Z",
-    source: "Anthropic usage API",
+    provenance_source: "Anthropic usage API",
   },
   five_hour_pct: 40,
   five_hour_resets: "2026-05-28T18:00:00Z",
@@ -123,9 +130,42 @@ const planInfoFixture: PlanInfo = {
   detected: true,
 };
 
+const accessFixture: AccessSnapshot = {
+  routes: [{
+    source: {
+      id: "claude-subscription:default",
+      kind: "claude_subscription",
+      provider: "claude",
+      auth_method: "oauth",
+      proof: "quota_response",
+      plan: "Max 20x",
+    },
+    availability: "available",
+    freshness: "fresh",
+    provenance: "provider_api",
+    observed_at: "2026-05-28T12:00:00Z",
+    fetched_at: "2026-05-28T12:00:01Z",
+    expires_at: "2026-05-28T12:00:31Z",
+    windows: [{
+      key: "weekly",
+      label: "Weekly",
+      window_minutes: 10080,
+      used_percent: 55,
+      remaining_percent: 45,
+      resets_at: "2026-06-01T00:00:00Z",
+    }],
+    credits: null,
+    extra_usage: null,
+    error: null,
+  }],
+};
+
 const summary: AnalyticsSummary = {
   total_sessions: 2,
+  priced_sessions: 2,
   total_cost: 8,
+  cost_basis: "exact",
+  cost_sources: ["anthropic_api_equivalent"],
   total_tokens: 600_000,
   total_cache_read: 300_000,
   total_cache_write: 40_000,
@@ -140,6 +180,7 @@ const summary: AnalyticsSummary = {
 function hist(id: string, project: string): HistoricalSession {
   return {
     id,
+    provider: "claude",
     session_name: null,
     project,
     model: "Claude Opus 4.8",
@@ -151,6 +192,9 @@ function hist(id: string, project: string): HistoricalSession {
     ended_at: "2026-05-20T10:30:00Z",
     duration_secs: 1800,
     total_cost: 6,
+    cost_basis: "exact",
+    cost_source: "anthropic_api_equivalent",
+    known_cost: 6,
     input_tokens: 50_000,
     output_tokens: 20_000,
     cache_write_tokens: 10_000,
@@ -173,14 +217,18 @@ const forecast: CostForecast = {
   days_in_month: 31,
   projected_monthly: 93,
   daily_average: 3,
+  cost_basis: "exact",
+  cost_sources: ["anthropic_api_equivalent"],
+  sessions: 1,
+  priced_sessions: 1,
 };
 
-const hourly: HourlyActivity[] = [{ hour: 9, session_count: 2, total_cost: 5 }];
+const hourly: HourlyActivity[] = [{ hour: 9, session_count: 2, priced_sessions: 2, total_cost: 5, cost_basis: "exact", cost_sources: ["anthropic_api_equivalent"] }];
 const daily: DailyStat[] = [
-  { date: "2026-05-20", project: "pulse", model: "Claude Opus 4.8", session_count: 2, total_cost: 6, total_tokens: 500_000, input_tokens: 100_000, output_tokens: 50_000, cache_write_tokens: 40_000, cache_read_tokens: 310_000 },
+  { date: "2026-05-20", project: "pulse", model: "Claude Opus 4.8", session_count: 2, priced_sessions: 2, total_cost: 6, cost_basis: "exact", cost_sources: ["anthropic_api_equivalent"], total_tokens: 500_000, input_tokens: 100_000, output_tokens: 50_000, cache_write_tokens: 40_000, cache_read_tokens: 310_000 },
 ];
 const projects: ProjectStat[] = [
-  { project: "pulse", session_count: 2, total_cost: 8, total_tokens: 600_000, avg_session_cost: 4, avg_duration_secs: 600, cache_read_tokens: 300_000, cache_write_tokens: 40_000, top_model: "Claude Opus 4.8" },
+  { project: "pulse", session_count: 2, priced_sessions: 2, total_cost: 8, cost_basis: "exact", cost_sources: ["anthropic_api_equivalent"], total_tokens: 600_000, avg_session_cost: 4, avg_duration_secs: 600, cache_read_tokens: 300_000, cache_write_tokens: 40_000, top_model: "Claude Opus 4.8" },
 ];
 
 const getHealth = vi.fn(async () => health);
@@ -219,6 +267,7 @@ const getAppSnapshot = vi.fn(async () => ({
     field_order: [],
   },
   plan: planInfoFixture,
+  access: accessFixture,
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -250,21 +299,21 @@ describe("poll() to stores to Dashboard full flow", () => {
     getRateLimits.mockClear();
     getPlanInfo.mockClear();
     getAppSnapshot.mockClear();
-    const { health: h, metrics: m, sessions: s, discordPresencePreview: dp, rateLimits: r, planInfo: p } = await import("@/lib/stores");
-    (await import("@/lib/stores")).stopSnapshotSync();
+    const { health: h, metrics: m, sessions: s, discordPresencePreview: dp, rateLimits: r, planInfo: p, accessSnapshot: a } = stores;
+    stores.stopSnapshotSync();
     h.set(null);
     m.set(null);
     s.set([]);
     dp.set(null);
     r.set(null);
     p.set(null);
+    a.set(null);
     await Promise.resolve();
     await Promise.resolve();
     getDiscordPreview.mockClear();
   });
 
   it("hydrates every global store from a single poll() pass", async () => {
-    const stores = await import("@/lib/stores");
     await stores.poll();
 
     expect(getAppSnapshot).toHaveBeenCalledTimes(1);
@@ -281,7 +330,105 @@ describe("poll() to stores to Dashboard full flow", () => {
     expect(get(stores.discordPresencePreview)?.details).toBe("Editing · pulse");
     expect(get(stores.rateLimits)).toEqual(rateLimitInfo);
     expect(get(stores.planInfo)).toEqual(planInfoFixture);
+    expect(get(stores.accessSnapshot)).toEqual(accessFixture);
     expect(get(stores.activeSessions)).toHaveLength(2);
+  });
+
+  it("fails closed when the real backend becomes unreachable", async () => {
+    await stores.poll();
+    expect(get(stores.backendConnection)).toBe("live");
+
+    getAppSnapshot.mockRejectedValueOnce(new Error("bridge offline"));
+    await stores.poll();
+
+    expect(get(stores.backendConnection)).toBe("disconnected");
+    expect(get(stores.health)).toBeNull();
+    expect(get(stores.metrics)).toBeNull();
+    expect(get(stores.sessions)).toEqual([]);
+    expect(get(stores.rateLimits)).toBeNull();
+    expect(get(stores.planInfo)).toBeNull();
+    expect(get(stores.accessSnapshot)).toBeNull();
+  });
+
+  it("ignores an older poll response that resolves after a newer snapshot", async () => {
+    let resolveOlder!: (snapshot: Awaited<ReturnType<typeof getAppSnapshot>>) => void;
+    const older = new Promise<Awaited<ReturnType<typeof getAppSnapshot>>>((resolve) => {
+      resolveOlder = resolve;
+    });
+    const newer = {
+      revision: 2,
+      health: { ...health, version: "newer" },
+      metrics,
+      sessions: liveSessions,
+      rate_limits: rateLimitInfo,
+      discord_preview: await getDiscordPreview(),
+      discord_settings: {
+        provider: "claude" as const,
+        enabled: true,
+        status: "Connected",
+        publisher: "pulse",
+        display_prefs: {
+          show_project: true, show_branch: true, show_model: true, show_activity: true,
+          show_tokens: false, show_cost: false, show_limits: true, show_credits: false,
+          show_context: true, show_systems: true,
+        },
+        desktop_design: null,
+        supports_desktop_design: false,
+        supports_field_order: false,
+        field_order: [],
+      },
+      plan: planInfoFixture,
+      access: accessFixture,
+    };
+
+    getAppSnapshot
+      .mockImplementationOnce(() => older)
+      .mockResolvedValueOnce(newer);
+
+    const olderPoll = stores.poll();
+    const queuedPoll = stores.poll();
+    expect(queuedPoll).toBe(olderPoll);
+    resolveOlder({ ...newer, revision: 1, health: { ...health, version: "older" } });
+    await olderPoll;
+
+    await waitFor(() => expect(getAppSnapshot).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(get(stores.health)?.version).toBe("newer"));
+    expect(get(stores.backendConnection)).toBe("live");
+  });
+
+  it("invalidates provider-bound state and rejects an in-flight snapshot from the prior provider", async () => {
+    let resolvePrior!: (snapshot: Awaited<ReturnType<typeof getAppSnapshot>>) => void;
+    const prior = new Promise<Awaited<ReturnType<typeof getAppSnapshot>>>((resolve) => {
+      resolvePrior = resolve;
+    });
+    const current = {
+      ...(await getAppSnapshot()),
+      revision: 3,
+      health: { ...health, version: "current-provider" },
+    };
+    getAppSnapshot
+      .mockImplementationOnce(() => prior)
+      .mockResolvedValueOnce(current);
+
+    const priorPoll = stores.poll();
+    stores.invalidateLiveSnapshotForProviderChange();
+    const currentPoll = stores.poll();
+
+    expect(currentPoll).toBe(priorPoll);
+    expect(get(stores.backendConnection)).toBe("connecting");
+    expect(get(stores.accessSnapshot)).toBeNull();
+    expect(get(stores.rateLimits)).toBeNull();
+
+    resolvePrior({
+      ...current,
+      revision: 2,
+      health: { ...health, version: "prior-provider" },
+    });
+    await priorPoll;
+
+    await waitFor(() => expect(getAppSnapshot).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(get(stores.health)?.version).toBe("current-provider"));
+    expect(get(stores.backendConnection)).toBe("live");
   });
 
   it("attaches the snapshot listener before initial hydration", async () => {
@@ -315,10 +462,9 @@ describe("poll() to stores to Dashboard full flow", () => {
           field_order: [],
         },
         plan: planInfoFixture,
+        access: accessFixture,
       };
     });
-    const stores = await import("@/lib/stores");
-
     stores.startSnapshotSync();
     await waitFor(() => expect(getAppSnapshot).toHaveBeenCalledTimes(1));
 
@@ -327,19 +473,32 @@ describe("poll() to stores to Dashboard full flow", () => {
   });
 
   it("renders the Dashboard against the polled store state end to end", async () => {
-    const stores = await import("@/lib/stores");
     await stores.poll();
     await tick();
 
-    const Dashboard = (await import("@/views/Dashboard.svelte")).default;
     const { container, getByText } = render(Dashboard);
     await tick();
 
-    await waitFor(() => expect(getByText(/Account quota/)).toBeTruthy());
-    const kpiValues = [...container.querySelectorAll(".stats-row .stat-value")].map((e) => e.textContent?.trim());
-    expect(kpiValues[0]).toBe("$8.00");
+    await waitFor(() => expect(getByText("Provider limits")).toBeTruthy());
+    expect(getByText("Live workspace")).toBeTruthy();
+    expect(container.querySelector(".stats-row")).toBeNull();
     await waitFor(() => {
       expect(container.querySelectorAll("[data-session-instance]").length).toBe(2);
     });
+  });
+
+  it("does not fabricate frontend threshold notifications from ordinary usage changes", async () => {
+    stores.toasts.set([]);
+    const before = { ...rateLimitInfo, five_hour_pct: 79, seven_day_pct: 94 };
+    const after = { ...rateLimitInfo, five_hour_pct: 81, seven_day_pct: 96 };
+    const baseSnapshot = await getAppSnapshot();
+    getAppSnapshot
+      .mockResolvedValueOnce({ ...baseSnapshot, rate_limits: before })
+      .mockResolvedValueOnce({ ...baseSnapshot, rate_limits: after });
+
+    await stores.poll();
+    await stores.poll();
+
+    expect(get(stores.toasts)).toEqual([]);
   });
 });

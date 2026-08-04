@@ -1,0 +1,23 @@
+{
+  "build": {
+    "devUrl": null,
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Pulse E2E",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 720,
+        "minHeight": 560,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "center": true,
+        "dataDirectory": "pulse-e2e-webview2"
+      }
+    ]
+  }
+}

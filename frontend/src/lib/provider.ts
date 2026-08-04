@@ -138,34 +138,65 @@ export const providerProfile = derived(
     },
 );
 
-export async function setProvider(p: Provider): Promise<void> {
+let providerGeneration = 0;
+let confirmedProvider: Provider = initialProvider;
+let providerMutation: Promise<void> = Promise.resolve();
+
+function publishProvider(p: Provider): void {
     provider.set(p);
     providerResolved.set(true);
     try {
         document.documentElement.setAttribute("data-provider", p);
     } catch {}
-    await persistActiveProvider(p);
-    const copy = await getProviderCopy();
-    providerCopy.set(copy);
-    providerRevision.update((value) => value + 1);
 }
 
-void getActiveProvider()
-    .then((info) => {
-        const p = info.active_provider === "codex" ? "codex" : "claude";
-        if (p !== get(provider)) provider.set(p);
-        providerResolved.set(true);
+export function setProvider(p: Provider): Promise<void> {
+    const generation = ++providerGeneration;
+    const mutation = providerMutation.then(async () => {
+        let persisted = false;
         try {
-            document.documentElement.setAttribute("data-provider", p);
-        } catch {}
-        return getProviderCopy();
-    })
-    .then((copy) => {
-        if (copy) providerCopy.set(copy);
+            await persistActiveProvider(p);
+            persisted = true;
+            confirmedProvider = p;
+            const copy = await getProviderCopy();
+            if (generation === providerGeneration) {
+                publishProvider(p);
+                providerCopy.set(copy);
+                providerRevision.update((value) => value + 1);
+            }
+        } catch (error) {
+            if (generation === providerGeneration) {
+                if (persisted) {
+                    publishProvider(p);
+                    providerCopy.set(null);
+                    providerRevision.update((value) => value + 1);
+                } else {
+                    publishProvider(confirmedProvider);
+                }
+            }
+            throw error;
+        }
+    });
+    providerMutation = mutation.catch(() => undefined);
+    return mutation;
+}
+
+const bootstrapGeneration = providerGeneration;
+void (async () => {
+    try {
+        const info = await getActiveProvider();
+        if (bootstrapGeneration !== providerGeneration) return;
+        const p = info.active_provider === "codex" ? "codex" : "claude";
+        confirmedProvider = p;
+        publishProvider(p);
+        const copy = await getProviderCopy();
+        if (bootstrapGeneration !== providerGeneration) return;
+        providerCopy.set(copy);
         providerRevision.update((value) => value + 1);
-    })
-    .catch(() => {
+    } catch {
+        if (bootstrapGeneration !== providerGeneration) return;
         // Backend unreachable — promote whatever we have so the UI doesn't
         // stay stuck in neutral branding forever.
         providerResolved.set(true);
-    });
+    }
+})();

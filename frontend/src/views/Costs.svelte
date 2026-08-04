@@ -1,11 +1,25 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import StatCard from "../components/StatCard.svelte";
   import Chart from "../components/Chart.svelte";
-  import { sessions, metrics } from "../lib/stores";
+  import { sessions, selectedAnalyticsProviderScope } from "../lib/stores";
+  import { providerMatchesAnalyticsScope } from "../lib/access";
   import { fmtCost, fmtTokens, fmtPct } from "../lib/utils";
-  import { getSessionHistory, getCostForecast, getCostTotals, getBudgetStatus, setBudget } from "../lib/api";
-  import type { HistoricalSession, CostForecast, CostTotals, BudgetStatus } from "../lib/api";
+  import {
+    getSessionHistory,
+    getCostForecast,
+    getCostTotals,
+    getBudgetStatus,
+    getDailyStats,
+    setBudget,
+  } from "../lib/api";
+  import type {
+    HistoricalSession,
+    CostBasis,
+    CostForecast,
+    CostTotals,
+    BudgetStatus,
+    DailyStat,
+  } from "../lib/api";
   import type { ChartConfiguration, Chart as ChartType } from "chart.js/auto";
   import ExportModal from "../components/ExportModal.svelte";
   import type { ExportColumn } from "../lib/export";
@@ -17,8 +31,22 @@
    *  from here instead of summing the visible rows. */
   let totals = $state<CostTotals | null>(null);
   let budgetStatus = $state<BudgetStatus | null>(null);
+  let dailyUsage = $state<DailyStat[]>([]);
   let editingBudget = $state(false);
   let budgetInput = $state("");
+  let loading = $state(true);
+  let hasLoaded = $state(false);
+  let loadError = $state<string | null>(null);
+
+  function costSourceLabel(source: string): string {
+    const normalized = source.trim().toLowerCase();
+    if (normalized === "provider_billed" || normalized === "provider-billed") return "Provider billing";
+    if (normalized.includes("codex")) return "Codex API-equivalent rates";
+    if (normalized.includes("anthropic")) return "Anthropic API-equivalent rates";
+    if (normalized.includes("pricing")) return "Versioned pricing";
+    if (normalized === "legacy-calculated") return "Migrated calculated history";
+    return source.replaceAll("_", " ");
+  }
 
   function themeColor(token: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(token).trim();
@@ -41,16 +69,52 @@
   ];
 
   let histSessions = $state<HistoricalSession[]>([]);
+  let loadGeneration = 0;
+  let totalsGeneration = 0;
 
-  // `totals` is owned by the effect below, which reacts to the project filter
-  // and to live-session deltas; fetching it here too would only duplicate the
-  // first request.
   async function loadData(): Promise<void> {
-    [histSessions, forecast, budgetStatus] = await Promise.all([
-      getSessionHistory(30, undefined, 200),
-      getCostForecast(),
-      getBudgetStatus(),
-    ]);
+    const generation = ++loadGeneration;
+    const provider = $selectedAnalyticsProviderScope;
+    const project = projectFilter;
+    loading = true;
+    loadError = null;
+    histSessions = [];
+    forecast = null;
+    budgetStatus = null;
+    dailyUsage = [];
+    totals = null;
+    showExport = false;
+    try {
+      const [nextHistory, nextForecast, nextBudget, nextTotals, nextDailyUsage] = await Promise.all([
+        getSessionHistory(30, undefined, 200, provider),
+        getCostForecast(provider),
+        getBudgetStatus(provider),
+        getCostTotals(30, project || undefined, provider),
+        getDailyStats(30, provider),
+      ]);
+      if (
+        generation !== loadGeneration
+        || provider !== $selectedAnalyticsProviderScope
+        || project !== projectFilter
+      ) {
+        return;
+      }
+      histSessions = nextHistory;
+      forecast = nextForecast;
+      budgetStatus = nextBudget;
+      totals = nextTotals;
+      dailyUsage = nextDailyUsage;
+    } catch (error) {
+      if (generation !== loadGeneration) return;
+      loadError = error instanceof Error && error.message
+        ? `Cost data unavailable. ${error.message}`
+        : "Cost data unavailable. Pulse could not load your usage ledger.";
+    } finally {
+      if (generation === loadGeneration) {
+        loading = false;
+        hasLoaded = true;
+      }
+    }
   }
 
   /**
@@ -61,17 +125,42 @@
    * describing whatever the first `onMount` fetch saw, and a filtered project
    * would fall back to summing the capped table page.
    */
-  async function refreshTotals(project: string): Promise<void> {
-    const next = await getCostTotals(30, project || undefined);
-    // Ignore a response that lost the race against a newer filter selection.
-    if (project === projectFilter) totals = next;
+  async function refreshTotals(
+    project: string,
+    provider: typeof $selectedAnalyticsProviderScope,
+  ): Promise<void> {
+    const generation = ++totalsGeneration;
+    if (project === projectFilter && provider === $selectedAnalyticsProviderScope) {
+      totals = null;
+      loadError = null;
+    }
+    try {
+      const next = await getCostTotals(30, project || undefined, provider);
+      // Ignore a response that lost the race against a newer filter selection.
+      if (
+        generation === totalsGeneration
+        && project === projectFilter
+        && provider === $selectedAnalyticsProviderScope
+      ) totals = next;
+    } catch (error) {
+      if (
+        generation === totalsGeneration
+        && project === projectFilter
+        && provider === $selectedAnalyticsProviderScope
+      ) {
+        totals = null;
+        loadError = error instanceof Error && error.message
+          ? `Cost data unavailable. ${error.message}`
+          : "Cost data unavailable. Pulse could not load your usage ledger.";
+      }
+    }
   }
 
   async function saveBudget(): Promise<void> {
     const val = parseFloat(budgetInput);
     if (!isNaN(val) && val >= 0) {
       await setBudget(val);
-      budgetStatus = await getBudgetStatus();
+      budgetStatus = await getBudgetStatus($selectedAnalyticsProviderScope);
     }
     editingBudget = false;
   }
@@ -79,28 +168,70 @@
   let projectFilter = $state("");
 
   onMount(() => { loadData(); });
+  let previousProviderScope: string | undefined;
+  $effect(() => {
+    const provider = $selectedAnalyticsProviderScope;
+    if (previousProviderScope !== undefined && provider !== previousProviderScope) {
+      void loadData();
+    }
+    previousProviderScope = provider;
+  });
 
   // Live session deltas and filter changes both invalidate the aggregate.
   $effect(() => {
     const project = projectFilter;
+    const provider = $selectedAnalyticsProviderScope;
     void $sessions;
-    void refreshTotals(project);
+    if (hasLoaded && !loadError) void refreshTotals(project, provider);
   });
 
   let allSessions = $derived.by(() => {
-    const live = $sessions.map((s) => ({
+    const live = $sessions
+      .filter((session) =>
+        providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
+      )
+      .map((s) => ({
       id: s.session_id, project: s.project, model: s.model, branch: s.branch,
-      cost: s.cost, tokens: s.tokens, input_tokens: s.input_tokens, output_tokens: s.output_tokens,
+      cost: s.cost_available === true ? s.cost : null,
+      cost_basis: s.cost_basis ?? "unavailable",
+      cost_source: s.cost_available === true ? "live_session" : "unknown",
+      tokens: s.tokens, input_tokens: s.input_tokens, output_tokens: s.output_tokens,
       cache_write_tokens: s.cache_write_tokens, cache_read_tokens: s.cache_read_tokens,
       input_cost: s.input_cost, output_cost: s.output_cost,
       cache_write_cost: s.cache_write_cost, cache_read_cost: s.cache_read_cost,
       is_active: true,
     }));
+    const consumedHistory = new Set<number>();
+    for (const liveSession of live) {
+      const exactIndex = histSessions.findIndex(
+        (history, index) => !consumedHistory.has(index) && history.id === liveSession.id,
+      );
+      if (exactIndex >= 0) {
+        consumedHistory.add(exactIndex);
+        continue;
+      }
+      const structuralMatches = histSessions
+        .map((history, index) => ({ history, index }))
+        .filter(({ history, index }) =>
+          !consumedHistory.has(index)
+          && history.is_active
+          && history.project === liveSession.project
+          && history.model === liveSession.model
+          && (history.branch ?? "") === (liveSession.branch ?? ""),
+        );
+      // A single active structural match is the database mirror of this live
+      // session. Multiple matches are ambiguous and must remain visible rather
+      // than silently discarding a potentially distinct session.
+      if (structuralMatches.length === 1) {
+        consumedHistory.add(structuralMatches[0].index);
+      }
+    }
     const hist = histSessions
-      .filter((h) => !live.some((l) => l.id === h.id))
+      .filter((_, index) => !consumedHistory.has(index))
       .map((h) => ({
         id: h.id, project: h.project, model: h.model, branch: h.branch,
-        cost: h.total_cost, tokens: h.total_tokens, input_tokens: h.input_tokens, output_tokens: h.output_tokens,
+        cost: h.known_cost, cost_basis: h.cost_basis, cost_source: h.cost_source,
+        tokens: h.total_tokens, input_tokens: h.input_tokens, output_tokens: h.output_tokens,
         cache_write_tokens: h.cache_write_tokens, cache_read_tokens: h.cache_read_tokens,
         input_cost: h.input_cost, output_cost: h.output_cost,
         cache_write_cost: h.cache_write_cost, cache_read_cost: h.cache_read_cost,
@@ -111,18 +242,36 @@
 
   let projects = $derived([...new Set(allSessions.map((s) => s.project))].sort());
   let filtered = $derived(projectFilter ? allSessions.filter((s) => s.project === projectFilter) : allSessions);
-  let costExportRows = $derived([...filtered].sort((a, b) => b.cost - a.cost).map((s) => ({ ...s } as Record<string, unknown>)));
+  let costExportRows = $derived(
+    [...filtered]
+      .sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1))
+      .map((s) => ({ ...s } as Record<string, unknown>)),
+  );
 
   /** The aggregate is fetched for the active filter, so it always describes
    *  the same population the KPIs claim. Summing `filtered` is only a fallback
    *  for the first paint, before the aggregate arrives. */
   let hasTotals = $derived(totals !== null && totals.days > 0);
+  let costAvailable = $derived(
+    totals !== null
+      && totals.cost_basis !== "unavailable"
+      && totals.priced_sessions > 0,
+  );
   let totalCost = $derived(
-    hasTotals && totals ? totals.total_cost : filtered.reduce((sum, s) => sum + s.cost, 0),
+    hasTotals && totals ? totals.total_cost : filtered.reduce((sum, s) => sum + (s.cost ?? 0), 0),
   );
   let sessionCount = $derived(hasTotals && totals ? totals.sessions : filtered.length);
-  let avgCost = $derived(sessionCount ? totalCost / sessionCount : 0);
-  let maxCost = $derived(filtered.reduce((m, s) => Math.max(m, s.cost), 0));
+  let pricedSessionCount = $derived(
+    hasTotals && totals
+      ? totals.priced_sessions
+      : filtered.filter((session) => session.cost !== null).length,
+  );
+  let avgCost = $derived(pricedSessionCount ? totalCost / pricedSessionCount : 0);
+  let derivedRatesAvailable = $derived(
+    totals
+      ? totals.cost_basis === "exact"
+      : filtered.every((session) => session.cost !== null),
+  );
   // Per 1M tokens: at real usage the per-1K figure rounds to $0.00, so 1M is the
   // meaningful unit (e.g. $0.67 / 1M rather than $0.00 / 1K).
   let costPerMToken = $derived.by(() => {
@@ -131,6 +280,63 @@
       : filtered.reduce((s, x) => s + x.tokens, 0);
     return tot > 0 ? (totalCost / tot) * 1_000_000 : 0;
   });
+
+  let usageTotalTokens = $derived(
+    hasTotals && totals
+      ? totals.total_tokens
+      : filtered.reduce((sum, session) => sum + session.tokens, 0),
+  );
+  let usageInputTokens = $derived(
+    hasTotals && totals
+      ? totals.input_tokens
+      : filtered.reduce((sum, session) => sum + session.input_tokens, 0),
+  );
+  let usageOutputTokens = $derived(
+    hasTotals && totals
+      ? totals.output_tokens
+      : filtered.reduce((sum, session) => sum + session.output_tokens, 0),
+  );
+  let usageCacheWriteTokens = $derived(
+    hasTotals && totals
+      ? totals.cache_write_tokens
+      : filtered.reduce((sum, session) => sum + session.cache_write_tokens, 0),
+  );
+  let usageCacheReadTokens = $derived(
+    hasTotals && totals
+      ? totals.cache_read_tokens
+      : filtered.reduce((sum, session) => sum + session.cache_read_tokens, 0),
+  );
+  let cacheReusePct = $derived(
+    usageTotalTokens > 0 ? (usageCacheReadTokens / usageTotalTokens) * 100 : 0,
+  );
+  let usageTokenMix = $derived([
+    {
+      label: "Input",
+      value: Math.max(0, usageInputTokens - usageCacheWriteTokens - usageCacheReadTokens),
+      className: "input",
+    },
+    { label: "Output", value: usageOutputTokens, className: "output" },
+    { label: "Cache write", value: usageCacheWriteTokens, className: "cache-w" },
+    { label: "Cache read", value: usageCacheReadTokens, className: "cache-r" },
+  ]);
+  let tokenTrend = $derived.by(() => {
+    const byDate = new Map<string, number>();
+    for (const day of dailyUsage) {
+      if (projectFilter && day.project !== projectFilter) continue;
+      byDate.set(day.date, (byDate.get(day.date) ?? 0) + day.total_tokens);
+    }
+    return [...byDate.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([date, tokens]) => ({ date, tokens }));
+  });
+  let tokenTrendMax = $derived(Math.max(0, ...tokenTrend.map((point) => point.tokens)));
+
+  function costCoverageLabel(basis: CostBasis): string {
+    if (basis === "exact") return "Complete cost coverage";
+    if (basis === "partial") return "Partial cost coverage";
+    if (basis === "estimated") return "API-equivalent estimate";
+    return "Cost not reported by provider";
+  }
 
   let totalInputCost = $derived(
     hasTotals && totals ? totals.input_cost : filtered.reduce((s, x) => s + x.input_cost, 0),
@@ -167,26 +373,29 @@
     }
     const cacheReadTokens = filtered.reduce((s, x) => s + x.cache_read_tokens, 0);
     const pureInput = filtered.reduce((s, x) => s + Math.max(0, x.input_tokens - x.cache_write_tokens - x.cache_read_tokens), 0);
-    const inputCostRate = pureInput > 0 && totalInputCost > 0 ? totalInputCost / pureInput : 5 / 1_000_000;
+    if (pureInput <= 0 || totalInputCost <= 0) return 0;
+    const inputCostRate = totalInputCost / pureInput;
     return Math.max(0, cacheReadTokens * inputCostRate - totalCacheRCost);
   });
 
   let costByProject = $derived.by(() => {
+    if (!costAvailable) return [];
     // Window-wide when unfiltered, so the bars reconcile with Total Spent.
     if (hasTotals && totals) {
       return totals.by_project.map((p) => [p.label, p.cost] as [string, number]);
     }
     const map: Record<string, number> = {};
-    filtered.forEach((s) => (map[s.project] = (map[s.project] || 0) + s.cost));
+    filtered.forEach((s) => (map[s.project] = (map[s.project] || 0) + (s.cost ?? 0)));
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   });
 
   let modelCosts = $derived.by(() => {
+    if (!costAvailable) return [];
     if (hasTotals && totals) {
       return totals.by_model.map((m) => [m.label, m.cost] as [string, number]);
     }
     const map: Record<string, number> = {};
-    filtered.forEach((s) => (map[s.model] = (map[s.model] || 0) + s.cost));
+    filtered.forEach((s) => (map[s.model] = (map[s.model] || 0) + (s.cost ?? 0)));
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   });
 
@@ -206,9 +415,12 @@
   }
 </script>
 
-<div class="costs-view">
+<div class="costs-view app-view">
   <div class="view-header">
-    <h2 class="view-title">Costs</h2>
+    <div>
+      <h2 class="view-title">Usage &amp; cost</h2>
+      <p class="view-subtitle">Subscription value ledger</p>
+    </div>
     <div class="filters">
       <!-- Explicit handler rather than `bind:value`: the selection drives a
            backend refetch, so the assignment needs to be visible at the seam
@@ -223,52 +435,187 @@
     </div>
   </div>
 
-  <BudgetCockpit
-    {forecast}
-    budget={budgetStatus}
-    onSetBudget={() => {
-      editingBudget = true;
-      budgetInput = String(budgetStatus?.monthly_budget || 200);
-    }}
-  />
+  {#if loading}
+    <section class="load-state" aria-live="polite">
+      <strong>Loading cost ledger</strong>
+      <span>Adding up the current month and previous 30 days.</span>
+    </section>
+  {:else if loadError}
+    <section class="load-state error" role="alert">
+      <strong>Cost data unavailable</strong>
+      <span>{loadError.replace(/^Cost data unavailable\.\s*/, "")}</span>
+      <button type="button" onclick={loadData}>Retry</button>
+    </section>
+  {:else}
+    <section class="value-ledger" aria-label="Subscription value ledger">
+      <header class="ledger-head">
+        <div>
+          <span class="ledger-eyebrow">30-day subscription value</span>
+          <h3>Subscription value ledger</h3>
+          <p>Your usage stays visible even when a provider doesn't report exact spend.</p>
+        </div>
+        <span
+          class="coverage-pill"
+          class:partial={totals?.cost_basis === "partial"}
+          class:estimated={totals?.cost_basis === "estimated"}
+          class:unavailable={totals?.cost_basis === "unavailable"}
+        >
+          {costCoverageLabel(totals?.cost_basis ?? "unavailable")}
+        </span>
+      </header>
 
-  {#if editingBudget}
-    <div class="budget-edit">
-      <input type="number" min="0" step="10" bind:value={budgetInput} placeholder="Monthly budget ($)" class="budget-input" />
-      <button class="budget-save-btn" onclick={saveBudget}>Save</button>
-      <button class="budget-cancel-btn" onclick={() => editingBudget = false}>Cancel</button>
-    </div>
-  {/if}
+      <div class="ledger-metrics">
+        <div class="ledger-metric">
+          <span class="ledger-label">Total tokens</span>
+          <strong class="ledger-value">{fmtTokens(usageTotalTokens)}</strong>
+          <small>Across the selected scope</small>
+        </div>
+        <div class="ledger-metric">
+          <span class="ledger-label">Sessions</span>
+          <strong class="ledger-value">{sessionCount}</strong>
+          <small>{projectFilter || "All projects"}</small>
+        </div>
+        <div class="ledger-metric">
+          <span class="ledger-label">Cache reuse</span>
+          <strong class="ledger-value">{fmtPct(cacheReusePct)}</strong>
+          <small>{fmtTokens(usageCacheReadTokens)} cache-read tokens</small>
+        </div>
+        <div class="ledger-metric">
+          <span class="ledger-label">Cost coverage</span>
+          <strong class="ledger-value">{pricedSessionCount} / {sessionCount}</strong>
+          <small>
+            {#if !costAvailable}
+              Not reported
+            {:else if totals?.cost_basis === "estimated"}
+              {fmtCost(totalCost)} estimated
+            {:else}
+              {fmtCost(totalCost)} known spend
+            {/if}
+          </small>
+        </div>
+      </div>
+
+      <div class="usage-ledger-grid">
+        <section class="usage-token-mix">
+          <div class="ledger-section-head">
+            <h4>Token mix</h4>
+            <span>{fmtTokens(usageTotalTokens)} observed</span>
+          </div>
+          <div class="token-mix-bar" aria-label="Token mix">
+            {#each usageTokenMix as item}
+              <span
+                class={item.className}
+                style="width:{usageTotalTokens > 0 ? (item.value / usageTotalTokens) * 100 : 0}%"
+              ></span>
+            {/each}
+          </div>
+          <div class="token-mix-legend">
+            {#each usageTokenMix as item}
+              <div>
+                <span class="mix-dot {item.className}"></span>
+                <small>{item.label}</small>
+                <strong>{fmtTokens(item.value)}</strong>
+              </div>
+            {/each}
+          </div>
+        </section>
+
+        <section class="token-trend">
+          <div class="ledger-section-head">
+            <h4>Token trend</h4>
+            <span>Provider scope · 30d</span>
+          </div>
+          {#if tokenTrend.length > 0}
+            <div class="trend-bars" aria-label="Daily token trend">
+              {#each tokenTrend as point}
+                <span
+                  class="trend-bar"
+                  style="height:{tokenTrendMax > 0 ? Math.max(4, (point.tokens / tokenTrendMax) * 100) : 0}%"
+                  title={`${point.date} · ${fmtTokens(point.tokens)} tokens`}
+                ></span>
+              {/each}
+            </div>
+          {:else}
+            <div class="trend-empty">Daily token trend appears once history builds up.</div>
+          {/if}
+        </section>
+      </div>
+    </section>
+
+    {#if costAvailable}
+      <BudgetCockpit
+        {forecast}
+        budget={budgetStatus}
+        onSetBudget={() => {
+          editingBudget = true;
+          budgetInput = budgetStatus?.monthly_budget
+            ? String(budgetStatus.monthly_budget)
+            : "";
+        }}
+      />
+
+      {#if totals && totals.cost_basis === "partial"}
+        <section class="coverage-strip" aria-live="polite">
+          <div>
+            <strong>Coverage details</strong>
+            <span>
+              {totals.priced_sessions} of {totals.sessions} sessions have a known cost; totals exclude unpriced sessions.
+            </span>
+          </div>
+          {#if totals.cost_sources.length > 0}
+            <span class="coverage-source">{totals.cost_sources.map(costSourceLabel).join(" · ")}</span>
+          {/if}
+        </section>
+      {/if}
+
+      {#if forecast?.priced_sessions && forecast.spent_this_month === 0 && totalCost > 0}
+        <p class="window-context">
+          No month-to-date spend is stored. The previous 30 days include {fmtCost(totalCost)}
+          from earlier sessions.
+        </p>
+      {/if}
+
+      {#if editingBudget}
+        <div class="budget-edit">
+          <input type="number" min="0" step="10" bind:value={budgetInput} placeholder="Monthly budget ($)" class="budget-input" />
+          <button class="budget-save-btn" onclick={saveBudget}>Save</button>
+          <button class="budget-cancel-btn" onclick={() => editingBudget = false}>Cancel</button>
+        </div>
+      {/if}
 
   <!-- Supporting figures: spacing and rules only, no boxes competing with the
        cockpit above. -->
-  <div class="inline-stats">
+      <div class="inline-stats">
     <div class="is-item">
       <span class="is-label">Avg / session</span>
-      <span class="is-value">{fmtCost(avgCost)}</span>
-      <span class="is-meta">{sessionCount} {sessionCount === 1 ? "session" : "sessions"}</span>
+      <span class="is-value">{costAvailable ? fmtCost(avgCost) : "—"}</span>
+       <span class="is-meta">
+         {costAvailable
+           ? `${pricedSessionCount}/${sessionCount} priced`
+           : "cost not reported"}
+       </span>
     </div>
     <div class="is-item">
       <span class="is-label">Cost / 1M tokens</span>
-      <span class="is-value">{fmtCost(costPerMToken)}</span>
-      <span class="is-meta">blended rate</span>
+      <span class="is-value">{costAvailable && derivedRatesAvailable ? fmtCost(costPerMToken) : "—"}</span>
+      <span class="is-meta">{costAvailable && derivedRatesAvailable ? "blended rate" : "requires complete coverage"}</span>
     </div>
     <div class="is-item">
       <span class="is-label">Cache savings</span>
-      <span class="is-value">{fmtCost(cacheSavings)}</span>
-      <span class="is-meta">vs uncached input</span>
+      <span class="is-value">{costAvailable && derivedRatesAvailable ? fmtCost(cacheSavings) : "—"}</span>
+      <span class="is-meta">{costAvailable && derivedRatesAvailable ? "vs uncached input" : "requires complete coverage"}</span>
     </div>
     <div class="is-item">
       <span class="is-label">Total spent (30d)</span>
-      <span class="is-value">{fmtCost(totalCost)}</span>
-      <span class="is-meta">window total</span>
+      <span class="is-value">{costAvailable ? fmtCost(totalCost) : "—"}</span>
+      <span class="is-meta">{costAvailable ? "window total" : "cost not reported"}</span>
     </div>
-  </div>
+      </div>
 
-  <div class="charts-row">
+      <div class="charts-row">
     <section class="pane">
-      <h3 class="pane-title">Cost by Type</h3>
-      {#if costTotal > 0}
+      <h3 class="pane-title">Cost by type</h3>
+      {#if costAvailable && costTotal > 0}
         <div class="cost-type-bar">
           <div class="cost-seg input" style="width:{(totalInputCost / costTotal) * 100}%"></div>
           <div class="cost-seg output" style="width:{(totalOutputCost / costTotal) * 100}%"></div>
@@ -282,13 +629,15 @@
           <div class="ct-row"><span class="dot cache-r"></span><span class="ct-label">Cache Read</span><span class="ct-val">{fmtCost(totalCacheRCost)}</span></div>
         </div>
       {:else}
-        <div class="empty-hint">No cost data yet</div>
+        <div class="empty-hint">
+          {costAvailable ? "No cost recorded in this window" : "Cost not reported for this window"}
+        </div>
       {/if}
     </section>
 
     {#if modelCosts.length > 0}
       <section class="pane">
-        <h3 class="pane-title">Cost per Model</h3>
+        <h3 class="pane-title">Cost per model</h3>
         <div class="model-cost-list">
           {#each modelCosts as [model, cost]}
             <div class="mc-row">
@@ -302,23 +651,32 @@
         </div>
       </section>
     {/if}
-  </div>
-
-  {#if costByProject.length > 0}
-    <div class="card surface-matte">
-      <h3 class="card-title">Cost by Project</h3>
-      <div
-        class="chart-container"
-        style="height: {Math.max(140, Math.min(360, 44 + costByProject.length * 44))}px"
-      >
-        <Chart config={costChartConfig} updateData={updateCostChart} />
       </div>
-    </div>
-  {/if}
 
-  <div class="card surface-matte">
+      {#if costByProject.length > 0}
+        <div class="card surface-matte">
+          <h3 class="card-title">Cost by project</h3>
+          <div
+            class="chart-container"
+            style="height: {Math.max(140, Math.min(360, 44 + costByProject.length * 44))}px"
+          >
+            <Chart config={costChartConfig} updateData={updateCostChart} />
+          </div>
+        </div>
+      {/if}
+    {:else}
+      <section class="cost-boundary" aria-live="polite">
+        <div>
+          <strong>Cost not reported by provider</strong>
+          <span>Pulse keeps the usage ledger complete and does not guess subscription spend.</span>
+        </div>
+        <span>{pricedSessionCount} of {sessionCount} sessions priced</span>
+      </section>
+    {/if}
+
+    <div class="card surface-matte">
     <div class="card-title-row">
-      <h3 class="card-title">Session Details</h3>
+      <h3 class="card-title">Session details</h3>
       {#if filtered.length > 0}
         <button class="export-btn" onclick={() => showExport = true}>Export</button>
       {/if}
@@ -334,7 +692,7 @@
         <span class="dt-col">Tokens</span>
         <span class="dt-col cost">Cost</span>
       </div>
-      {#each [...filtered].sort((a, b) => b.cost - a.cost) as s (s.id)}
+      {#each [...filtered].sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1)) as s (s.id)}
         <div class="dt-row">
           <span class="dt-col status"><span class="status-dot" class:active={s.is_active}></span></span>
           <span class="dt-col project">{s.project}{s.branch ? " · " + s.branch : ""}</span>
@@ -343,13 +701,16 @@
           <span class="dt-col">{fmtTokens(s.cache_write_tokens)}</span>
           <span class="dt-col">{fmtTokens(s.cache_read_tokens)}</span>
           <span class="dt-col">{fmtTokens(s.tokens)}</span>
-          <span class="dt-col cost">{fmtCost(s.cost)}</span>
+          <span class="dt-col cost" class:unavailable={s.cost === null}>
+            {s.cost === null ? "Not reported" : fmtCost(s.cost)}
+          </span>
         </div>
       {:else}
         <div class="dt-empty">No session data yet</div>
       {/each}
     </div>
-  </div>
+    </div>
+  {/if}
 </div>
 
 <ExportModal
@@ -362,10 +723,276 @@
 />
 
 <style>
-  .costs-view { display: flex; flex-direction: column; gap: 16px; }
-  .view-header { display: flex; align-items: flex-end; gap: 20px; }
+  .costs-view { display: flex; flex-direction: column; gap: var(--page-gap); }
+  .view-header { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
   .view-title { font-size: 20px; font-weight: 700; }
+  .view-subtitle { margin-top: 3px; color: var(--text-muted); font-size: var(--fs-xs); }
   .filters { margin-left: auto; }
+  .value-ledger {
+    display: grid;
+    gap: 22px;
+    padding: 22px;
+    /* Matte hero surface only. The old info-tinted gradient fill broke the
+       "matte is the only app-panel fill" contract and read as a different
+       product from the rest of the app. */
+    position: relative;
+    background:
+      var(--panel-sheen-strong),
+      var(--surface-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-2);
+  }
+  .value-ledger::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: var(--panel-edge);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    pointer-events: none;
+  }
+  .ledger-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .ledger-head > div { min-width: 0; }
+  .ledger-eyebrow,
+  .ledger-label {
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: var(--letter-wider);
+    text-transform: uppercase;
+  }
+  .ledger-head h3 {
+    margin-top: 6px;
+    font-size: clamp(20px, 2.4vw, 28px);
+    letter-spacing: var(--letter-tight);
+  }
+  .ledger-head p {
+    max-width: 680px;
+    margin-top: 7px;
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-relaxed);
+  }
+  .coverage-pill {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    color: var(--success);
+    background: var(--success-dim);
+    border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border));
+    border-radius: var(--radius-full);
+    font-size: var(--fs-xs);
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .coverage-pill.partial {
+    color: var(--warning);
+    background: var(--warning-dim);
+    border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+  }
+  .coverage-pill.estimated {
+    color: var(--info);
+    background: var(--info-dim);
+    border-color: color-mix(in srgb, var(--info) 35%, var(--border));
+  }
+  .coverage-pill.unavailable {
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border-color: var(--border);
+  }
+  .ledger-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border-block: 1px solid var(--divider);
+  }
+  .ledger-metric {
+    min-width: 0;
+    display: grid;
+    gap: 5px;
+    padding: 16px 18px;
+    border-left: 1px solid var(--divider);
+  }
+  .ledger-metric:first-child { padding-left: 0; border-left: none; }
+  .ledger-value {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: clamp(22px, 2.5vw, 31px);
+    line-height: 1.05;
+    letter-spacing: var(--letter-tight);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ledger-metric small { color: var(--text-muted); font-size: var(--fs-xs); }
+  .usage-ledger-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
+    gap: 28px;
+  }
+  .usage-token-mix,
+  .token-trend {
+    min-width: 0;
+    display: grid;
+    align-content: start;
+    gap: 13px;
+  }
+  .usage-ledger-grid > section + section {
+    padding-left: 28px;
+    border-left: 1px solid var(--divider);
+  }
+  .ledger-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .ledger-section-head h4 {
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+  }
+  .ledger-section-head span {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .token-mix-bar {
+    width: 100%;
+    height: 10px;
+    display: flex;
+    overflow: hidden;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-full);
+  }
+  .token-mix-bar > span { min-width: 0; height: 100%; }
+  .token-mix-bar > .input,
+  .mix-dot.input { background: var(--info); }
+  .token-mix-bar > .output,
+  .mix-dot.output { background: var(--token-output); }
+  .token-mix-bar > .cache-w,
+  .mix-dot.cache-w { background: var(--token-cache-write); }
+  .token-mix-bar > .cache-r,
+  .mix-dot.cache-r { background: var(--token-cache-read); }
+  .token-mix-legend {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px 20px;
+  }
+  .token-mix-legend > div {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 7px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 7px;
+  }
+  .mix-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .token-mix-legend small {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .token-mix-legend strong {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+  }
+  .trend-bars {
+    height: 74px;
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    padding-top: 4px;
+    border-bottom: 1px solid var(--divider);
+  }
+  .trend-bar {
+    min-width: 2px;
+    flex: 1 1 0;
+    background: color-mix(in srgb, var(--info) 72%, var(--text-primary));
+    border-radius: 2px 2px 0 0;
+  }
+  .trend-empty {
+    min-height: 74px;
+    display: grid;
+    place-items: center;
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    text-align: center;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .cost-boundary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 14px 16px;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .cost-boundary > div { display: grid; gap: 4px; }
+  .cost-boundary strong { color: var(--text-primary); font-size: var(--fs-sm); }
+  .cost-boundary span { font-size: var(--fs-xs); line-height: 1.45; }
+  .cost-boundary > span {
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+  }
+  .load-state {
+    min-height: 170px;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 8px;
+    padding: 28px;
+    color: var(--text-muted);
+    text-align: center;
+    border-block: 1px solid var(--border);
+  }
+  .load-state strong { color: var(--text-primary); font-size: var(--fs-lg); }
+  .load-state span { max-width: 540px; font-size: var(--fs-sm); line-height: 1.55; }
+  .load-state.error strong { color: var(--danger); }
+  .load-state button {
+    margin-top: 6px;
+    padding: 7px 14px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .window-context {
+    margin-top: -4px;
+    padding: 10px 0;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    border-bottom: 1px solid var(--divider);
+  }
+  .coverage-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 12px 0;
+    color: var(--text-secondary);
+    border-block: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  }
+  .coverage-strip > div { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .coverage-strip strong { flex: 0 0 auto; color: var(--warning); font-size: var(--fs-sm); }
+  .coverage-strip span { color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.45; }
+  .coverage-source { flex: 0 0 auto; font-family: var(--font-mono); text-align: right; }
   /* Supporting figures read as one row of text, separated by rules rather
      than four boxes competing with the cockpit gauge above them. */
   .inline-stats {
@@ -400,6 +1027,10 @@
   }
   .is-meta { font-size: var(--fs-xs); color: var(--text-muted); }
   @media (max-width: 900px) {
+    .ledger-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ledger-metric:nth-child(3) { padding-left: 0; border-left: none; }
+    .usage-ledger-grid { grid-template-columns: 1fr; }
+    .usage-ledger-grid > section + section { padding: 20px 0 0; border-left: none; border-top: 1px solid var(--divider); }
     .inline-stats { grid-template-columns: repeat(2, 1fr); row-gap: 18px; }
     .is-item:nth-child(3) { padding-left: 0; border-left: none; }
   }
@@ -488,6 +1119,12 @@
   @media (max-width: 1050px) {
     .charts-row { grid-template-columns: 1fr; }
     .charts-row .pane + .pane { padding-left: 0; border-left: none; }
+  }
+
+  @media (max-width: 800px) {
+    .view-header { align-items: stretch; flex-direction: column; gap: 10px; }
+    .filters { width: 100%; margin-left: 0; }
+    .filters select { width: 100%; }
   }
 
   @media (max-width: 620px) {

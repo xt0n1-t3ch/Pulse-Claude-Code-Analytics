@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SessionInfo } from "../lib/api";
-  import { fmtTokens, fmtCost, fmtDuration, fmtTps, classifyActivity, fmtPromoEndDate } from "../lib/utils";
+  import { fmtTokens, fmtCost, fmtExactCost, fmtDuration, fmtTps, classifyActivity, fmtPromoEndDate } from "../lib/utils";
   import { slide } from "svelte/transition";
 
   let { session }: { session: SessionInfo } = $props();
@@ -84,7 +84,7 @@
       {#if session.tokens_per_sec > 0}
         <span class="stat tps">{fmtTps(session.tokens_per_sec)}</span>
       {/if}
-      <span class="stat cost">{fmtCost(session.cost)}</span>
+      <span class="stat cost">{fmtExactCost(session.cost, session.cost_available === true)}</span>
     </div>
   </div>
 
@@ -108,12 +108,16 @@
 
       <div class="detail-section">
         <h4 class="detail-title">Cost Breakdown</h4>
-        <div class="cost-grid">
-          <span class="cost-label">Input</span><span class="cost-val">{fmtCost(session.input_cost)}</span>
-          <span class="cost-label">Output</span><span class="cost-val">{fmtCost(session.output_cost)}</span>
-          <span class="cost-label">Cache Write</span><span class="cost-val">{fmtCost(session.cache_write_cost)}</span>
-          <span class="cost-label">Cache Read</span><span class="cost-val">{fmtCost(session.cache_read_cost)}</span>
-        </div>
+        {#if session.cost_available === true}
+          <div class="cost-grid">
+            <span class="cost-label">Input</span><span class="cost-val">{fmtCost(session.input_cost)}</span>
+            <span class="cost-label">Output</span><span class="cost-val">{fmtCost(session.output_cost)}</span>
+            <span class="cost-label">Cache Write</span><span class="cost-val">{fmtCost(session.cache_write_cost)}</span>
+            <span class="cost-label">Cache Read</span><span class="cost-val">{fmtCost(session.cache_read_cost)}</span>
+          </div>
+        {:else}
+          <span class="cost-unavailable">Exact cost is unavailable for this session.</span>
+        {/if}
       </div>
 
       <div class="detail-section">
@@ -138,7 +142,7 @@
               <span class="badge model sa-model">{sa.model}</span>
               <span class="sa-activity">{sa.activity}</span>
               <span class="sa-tokens">{fmtTokens(sa.tokens)}</span>
-              <span class="sa-cost">{fmtCost(sa.cost)}</span>
+              <span class="sa-cost" title="Per-subagent cost provenance is unavailable">—</span>
             </div>
           {/each}
         </div>
@@ -210,12 +214,16 @@
   }
 
   .session-body {
+    min-width: 0;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 16px;
   }
 
   .session-activity {
+    min-width: 0;
+    flex: 1;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -242,11 +250,16 @@
   .session-activity.running .activity-dot { background: var(--warning); }
 
   .activity-target {
+    min-width: 0;
+    overflow: hidden;
     color: var(--text-muted);
     font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .session-stats {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 14px;
@@ -353,4 +366,50 @@
   .sa-activity { flex: 1; color: var(--text-secondary); }
   .sa-tokens { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 50px; text-align: right; }
   .sa-cost { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; min-width: 50px; text-align: right; }
+
+  @media (max-width: 620px) {
+    .session-body {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .session-activity {
+      width: 100%;
+    }
+
+    .session-stats {
+      width: 100%;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+    }
+
+    .detail {
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .perf-val,
+    .mono-sm {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .subagent-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .sa-type,
+    .sa-activity {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .sa-cost {
+      grid-column: 1 / -1;
+      min-width: 0;
+      text-align: left;
+    }
+  }
 </style>

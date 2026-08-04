@@ -1,4 +1,5 @@
 export function fmtTokens(n: number): string {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return String(n);
@@ -6,6 +7,12 @@ export function fmtTokens(n: number): string {
 
 export function fmtCost(n: number): string {
   return "$" + n.toFixed(2);
+}
+
+/** Exact-cost renderer shared by every consumer surface. A transport-level
+ * zero is not evidence of a measured zero, so unproved values stay neutral. */
+export function fmtExactCost(n: number, available: boolean): string {
+  return available ? fmtCost(n) : "—";
 }
 
 export function fmtDuration(secs: number): string {

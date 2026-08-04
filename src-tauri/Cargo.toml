@@ -1,8 +1,9 @@
 [package]
 name = "pulse"
-version = "1.6.5"
+version = "1.7.0"
 edition = "2024"
 description = "Pulse — Codex & Claude analytics"
+default-run = "pulse"
 license = "Apache-2.0"
 repository = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
 homepage = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"
@@ -10,13 +11,15 @@ authors = ["xt0n1-t3ch"]
 
 [dependencies]
 cc-discord-presence = { path = ".." }
-codex-presence-core = { git = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence", rev = "b085c3dcc2ba75b5e54ec7e6252c90120ec04b0e", version = "1.0.0" }
+codex-presence-core = { git = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence", rev = "e95e2b1573eb86da945d03412f57b6a18cc28c50", version = "2.0.0" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-notification = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

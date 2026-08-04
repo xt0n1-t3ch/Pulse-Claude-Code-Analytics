@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -41,6 +41,11 @@ pub struct UsageData {
     // API returns "seven_day_sonnet"; keep alias for forward-compat
     #[serde(rename = "seven_day_sonnet", alias = "sonnet_free", default)]
     pub sonnet_free: Option<UsageWindow>,
+    /// Current Anthropic responses also expose a structured `limits` array.
+    /// Keep every provider-reported bucket here so new model-scoped windows
+    /// (for example Fable) are not silently discarded by a fixed schema.
+    #[serde(default, deserialize_with = "deserialize_usage_limits")]
+    pub limits: Vec<UsageLimit>,
     #[serde(default)]
     pub extra_usage: Option<ExtraUsage>,
 }
@@ -65,6 +70,50 @@ pub struct UsageWindow {
     /// Must be Optional to avoid breaking the whole UsageData parse.
     #[serde(default)]
     pub resets_at: Option<DateTime<Utc>>,
+}
+
+/// One provider-reported quota bucket from the structured Claude usage API.
+/// Unknown kinds and missing percentages are retained during decoding but are
+/// ignored by the access adapter rather than turned into fabricated windows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UsageLimit {
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_usage_percent")]
+    pub percent: Option<f64>,
+    #[serde(default)]
+    pub resets_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub scope: Option<UsageLimitScope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UsageLimitScope {
+    #[serde(default)]
+    pub model: Option<UsageLimitModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UsageLimitModel {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+fn deserialize_usage_limits<'de, D>(deserializer: D) -> Result<Vec<UsageLimit>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<UsageLimit>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn deserialize_usage_percent<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f64>::deserialize(deserializer)?
+        .filter(|value| value.is_finite() && (0.0..=100.0).contains(value)))
 }
 
 /// Pay-per-use (extra) usage beyond the plan's included quota.
@@ -93,6 +142,10 @@ struct UsageCacheFile {
     /// the tier is simply not claimed.
     #[serde(default)]
     subscription: Option<String>,
+    /// Exact Claude Max multiplier observed with the cached subscription.
+    /// Without this field, a legacy `subscriptionType=max` cache is unclaimed.
+    #[serde(default)]
+    rate_limit_tier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,6 +196,8 @@ struct ApiUsageData {
     seven_day: UsageWindow,
     #[serde(rename = "seven_day_sonnet", alias = "sonnet_free", default)]
     sonnet_free: Option<UsageWindow>,
+    #[serde(default, deserialize_with = "deserialize_usage_limits")]
+    limits: Vec<UsageLimit>,
     #[serde(default)]
     extra_usage: Option<ApiExtraUsage>,
 }
@@ -162,6 +217,7 @@ impl From<ApiUsageData> for UsageData {
             five_hour: value.five_hour,
             seven_day: value.seven_day,
             sonnet_free: value.sonnet_free,
+            limits: value.limits,
             extra_usage: value.extra_usage.map(|extra| ExtraUsage {
                 is_enabled: extra.is_enabled,
                 monthly_limit: extra.monthly_limit.map(|v| v / 100.0),
@@ -178,27 +234,101 @@ pub fn detect_plan_key(
 ) -> Option<&'static str> {
     let sub = subscription_type.unwrap_or("").trim().to_ascii_lowercase();
     let tier = rate_limit_tier.unwrap_or("").trim().to_ascii_lowercase();
+    let sub_signal = classify_claude_plan_signal(&sub);
+    let tier_signal = classify_claude_plan_signal(&tier);
 
-    if sub.is_empty() && tier.is_empty() {
+    // `subscriptionType=max` is only a family label. Do not turn it into a
+    // plan claim until the credentials also carry the exact 5x/20x tier. A
+    // conflicting pair is equally unknown; neither provider field wins by
+    // precedence because that would make an accidental cross-tier claim.
+    match (sub_signal, tier_signal) {
+        (Some(ClaudePlanSignal::Max), Some(ClaudePlanSignal::Max5x)) => Some("max_5x"),
+        (Some(ClaudePlanSignal::Max), Some(ClaudePlanSignal::Max20x)) => Some("max_20x"),
+        (Some(ClaudePlanSignal::Max), _) => None,
+        (Some(subscription), None) => subscription.key(),
+        (Some(subscription), Some(tier)) if subscription == tier => subscription.key(),
+        (None, Some(tier)) => tier.key(),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaudePlanSignal {
+    Free,
+    Pro,
+    Teams,
+    Enterprise,
+    Max,
+    Max5x,
+    Max20x,
+}
+
+impl ClaudePlanSignal {
+    fn key(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Free => "free",
+            Self::Pro => "pro",
+            Self::Teams => "team",
+            Self::Enterprise => "enterprise",
+            // A bare Max family signal is intentionally not a claim.
+            Self::Max => return None,
+            Self::Max5x => "max_5x",
+            Self::Max20x => "max_20x",
+        })
+    }
+}
+
+fn classify_claude_plan_signal(raw: &str) -> Option<ClaudePlanSignal> {
+    if raw.is_empty() {
         return None;
     }
-    if sub.contains("team") || tier.contains("team") {
-        return Some("team");
+    // Match complete provider identifiers rather than substrings. This keeps
+    // `professional`, `freedom`, and `myteam-preview` from becoming false
+    // Pro/Free/Team claims while accepting canonical underscore/hyphen IDs.
+    let tokens = raw
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let has = |token: &str| tokens.contains(&token);
+    let families = [
+        has("max"),
+        has("enterprise"),
+        has("team") || has("teams"),
+        has("pro"),
+        has("free"),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if families != 1 || (has("20x") && has("5x")) {
+        return None;
     }
-    if sub.contains("20x") || tier.contains("20x") {
-        return Some("max_20x");
+
+    // Multiplier syntax belongs to Claude Max only. A Codex-style `pro_20x`
+    // must not collapse into Claude's ordinary Pro plan.
+    if (has("20x") || has("5x")) && !has("max") {
+        return None;
     }
-    if sub.contains("5x") || tier.contains("5x") {
-        return Some("max_5x");
+    if has("20x") && has("max") {
+        return Some(ClaudePlanSignal::Max20x);
     }
-    if sub.contains("pro") || tier.contains("pro") {
-        return Some("pro");
+    if has("5x") && has("max") {
+        return Some(ClaudePlanSignal::Max5x);
     }
-    if sub == "max" || sub.contains("claude_max") || tier.contains("max") {
-        return Some("max");
+    if has("max") {
+        return Some(ClaudePlanSignal::Max);
     }
-    if sub.contains("free") || tier.contains("free") {
-        return Some("free");
+    if has("enterprise") {
+        return Some(ClaudePlanSignal::Enterprise);
+    }
+    if has("team") || has("teams") {
+        return Some(ClaudePlanSignal::Teams);
+    }
+    if has("pro") {
+        return Some(ClaudePlanSignal::Pro);
+    }
+    if has("free") {
+        return Some(ClaudePlanSignal::Free);
     }
     None
 }
@@ -217,6 +347,8 @@ pub struct UsageOrigin {
     pub endpoint: String,
     /// Subscription tier reported by the credentials Pulse authenticated with.
     pub subscription: Option<String>,
+    /// Rate-limit tier reported alongside the subscription family.
+    pub rate_limit_tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,7 +368,12 @@ impl UsageOrigin {
             UsageAuth::OAuth => "OAuth",
             UsageAuth::Cache => "Cached",
         };
-        match self.subscription.as_deref().map(pretty_subscription) {
+        match crate::usage::detect_plan_key(
+            self.subscription.as_deref(),
+            self.rate_limit_tier.as_deref(),
+        )
+        .map(crate::plan::name_from_key)
+        {
             Some(plan) => format!("{scheme} · {plan}"),
             None => scheme.to_string(),
         }
@@ -255,21 +392,17 @@ fn usage_endpoint_host() -> &'static str {
         .unwrap_or(USAGE_API_URL)
 }
 
-/// Title-cases the raw `subscriptionType` (`max`, `pro`, `team`) for display.
-fn pretty_subscription(raw: &str) -> String {
-    let trimmed = raw.trim();
-    let mut chars = trimmed.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => trimmed.to_string(),
-    }
-}
+type FileUsageCache = (UsageData, Option<String>, Option<String>, DateTime<Utc>);
 
 pub struct UsageManager {
     cached_usage: Option<UsageData>,
     last_fetch: Option<Instant>,
     /// Set only when a request or cache read actually produced the figures.
     last_usage_origin: Option<UsageOrigin>,
+    /// Timestamp attached to the response/cache that produced the figures.
+    /// Keeping it separate from `last_fetch` prevents a cache read from
+    /// masquerading as a fresh provider observation.
+    last_usage_observed_at: Option<DateTime<Utc>>,
     credentials: Option<CredentialsFile>,
     subscription_type_cache: Option<String>,
     last_refresh_attempt: Option<Instant>,
@@ -291,6 +424,7 @@ impl UsageManager {
             cached_usage: None,
             last_fetch: None,
             last_usage_origin: None,
+            last_usage_observed_at: None,
             credentials: None,
             subscription_type_cache: None,
             last_refresh_attempt: None,
@@ -305,20 +439,35 @@ impl UsageManager {
     /// Returns the cached figures together with the subscription they were
     /// fetched for, so the caller can report provenance without borrowing the
     /// tier from whatever credentials happen to be loaded now.
-    fn try_read_file_cache() -> Option<(UsageData, Option<String>)> {
+    fn try_read_file_cache() -> Option<FileUsageCache> {
         let path = crate::config::usage_cache_path();
         let raw = std::fs::read_to_string(path).ok()?;
         let cache: UsageCacheFile = serde_json::from_str(&raw).ok()?;
         let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-        if now_unix.saturating_sub(cache.fetched_at_unix) < USAGE_CACHE_TTL.as_secs() {
+        if cache.fetched_at_unix > now_unix || cache.fetched_at_unix > i64::MAX as u64 {
+            return None;
+        }
+        if now_unix - cache.fetched_at_unix < USAGE_CACHE_TTL.as_secs() {
             let subscription = cache.subscription.filter(|plan| !plan.trim().is_empty());
-            Some((cache.data.normalize_cached_units(), subscription))
+            let observed_at = Utc
+                .timestamp_opt(cache.fetched_at_unix as i64, 0)
+                .single()?;
+            Some((
+                cache.data.normalize_cached_units(),
+                subscription,
+                cache.rate_limit_tier.filter(|tier| !tier.trim().is_empty()),
+                observed_at,
+            ))
         } else {
             None
         }
     }
 
-    fn write_file_cache(data: &UsageData, subscription: Option<String>) {
+    fn write_file_cache(
+        data: &UsageData,
+        subscription: Option<String>,
+        rate_limit_tier: Option<String>,
+    ) {
         let path = crate::config::usage_cache_path();
         let fetched_at_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -328,6 +477,7 @@ impl UsageManager {
             fetched_at_unix,
             data: data.clone(),
             subscription,
+            rate_limit_tier,
         }) else {
             return;
         };
@@ -354,16 +504,20 @@ impl UsageManager {
             return Some(usage.clone());
         }
 
-        if let Some((cached, cached_subscription)) = Self::try_read_file_cache() {
+        if let Some((cached, cached_subscription, cached_rate_limit_tier, observed_at)) =
+            Self::try_read_file_cache()
+        {
             // No request was made this cycle; say so instead of implying a live
             // read, and name only the tier stored alongside these very figures.
             self.last_usage_origin = Some(UsageOrigin {
                 auth: UsageAuth::Cache,
                 endpoint: crate::config::usage_cache_path().display().to_string(),
                 subscription: cached_subscription,
+                rate_limit_tier: cached_rate_limit_tier,
             });
             self.cached_usage = Some(cached.clone());
             self.last_fetch = Some(Instant::now());
+            self.last_usage_observed_at = Some(observed_at);
             self.rate_limit_until = None;
             return Some(cached);
         }
@@ -407,6 +561,12 @@ impl UsageManager {
         self.last_usage_origin.as_ref()
     }
 
+    /// Timestamp observed on the provider response or stored alongside the
+    /// file cache. Consumers use this to classify cache data as fresh/stale.
+    pub fn last_usage_observed_at(&self) -> Option<DateTime<Utc>> {
+        self.last_usage_observed_at
+    }
+
     /// Describes the request `call_usage_api` just made. The scheme is not a
     /// guess: that function has exactly one code path, an OAuth bearer token
     /// plus the `anthropic-beta: oauth-2025-04-20` header. The subscription is
@@ -420,6 +580,11 @@ impl UsageManager {
                 .as_ref()
                 .and_then(|creds| creds.claude_ai_oauth.subscription_type.clone())
                 .filter(|plan| !plan.trim().is_empty()),
+            rate_limit_tier: self
+                .credentials
+                .as_ref()
+                .and_then(|creds| creds.claude_ai_oauth.rate_limit_tier.clone())
+                .filter(|tier| !tier.trim().is_empty()),
         }
     }
 
@@ -501,6 +666,7 @@ impl UsageManager {
                         // Recorded here, on an observed 200, so the footer states
                         // the handshake that actually produced these numbers.
                         self.last_usage_origin = Some(self.observed_oauth_origin());
+                        self.last_usage_observed_at = Some(Utc::now());
                         self.cached_usage = Some(usage.clone());
                         self.last_fetch = Some(Instant::now());
                         self.last_error_hint = None;
@@ -510,6 +676,9 @@ impl UsageManager {
                             self.last_usage_origin
                                 .as_ref()
                                 .and_then(|origin| origin.subscription.clone()),
+                            self.last_usage_origin
+                                .as_ref()
+                                .and_then(|origin| origin.rate_limit_tier.clone()),
                         );
                         Some(usage)
                     }
@@ -963,7 +1132,11 @@ mod tests {
         assert_eq!(origin.auth, UsageAuth::OAuth);
         assert_eq!(origin.endpoint, "api.anthropic.com");
         assert_eq!(origin.subscription.as_deref(), Some("max"));
-        assert_eq!(origin.label(), "OAuth · Max");
+        assert_eq!(
+            origin.rate_limit_tier.as_deref(),
+            Some("default_claude_max_20x")
+        );
+        assert_eq!(origin.label(), "OAuth · Max 20x");
         assert_ne!(
             origin.label().to_ascii_lowercase(),
             "api",
@@ -986,6 +1159,26 @@ mod tests {
         let origin = manager.last_usage_origin().expect("origin recorded");
 
         assert_eq!(origin.subscription, None);
+        assert_eq!(origin.label(), "OAuth");
+    }
+
+    #[test]
+    fn usage_origin_does_not_claim_bare_claude_max() {
+        let _home = IsolatedClaudeHome::new();
+        let mut manager = UsageManager::new();
+        manager.credentials = Some(
+            serde_json::from_str(
+                r#"{"claudeAiOauth":{"accessToken":"token","expiresAt":9999999999999,
+                    "subscriptionType":"max"}}"#,
+            )
+            .expect("credentials without Max multiplier"),
+        );
+
+        manager.handle_usage_response(Ok(usage_response_fixture()));
+        let origin = manager.last_usage_origin().expect("origin recorded");
+
+        assert_eq!(origin.subscription.as_deref(), Some("max"));
+        assert_eq!(origin.rate_limit_tier, None);
         assert_eq!(origin.label(), "OAuth");
     }
 
@@ -1029,6 +1222,63 @@ mod tests {
     }
 
     #[test]
+    fn structured_usage_limits_preserve_model_scoped_fable_bucket() {
+        let parsed: ApiUsageData = serde_json::from_str(
+            r#"{
+                "five_hour": { "utilization": 1.0, "resets_at": null },
+                "seven_day": { "utilization": 2.0, "resets_at": null },
+                "limits": [
+                    { "kind": "session", "percent": 1.0, "resets_at": null },
+                    { "kind": "weekly_all", "percent": 2.0, "resets_at": null },
+                    { "kind": "weekly_scoped", "percent": 68.0, "resets_at": null,
+                      "scope": { "model": { "display_name": "Fable", "id": "fable" } } }
+                ]
+            }"#,
+        )
+        .expect("structured limits fixture");
+
+        let usage: UsageData = parsed.into();
+        assert_eq!(usage.limits.len(), 3);
+        assert_eq!(
+            usage.limits[2]
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.model.as_ref())
+                .and_then(|model| model.display_name.as_deref()),
+            Some("Fable")
+        );
+        assert_eq!(usage.limits[2].percent, Some(68.0));
+    }
+
+    #[test]
+    fn structured_usage_limits_drop_out_of_range_percentages() {
+        let parsed: ApiUsageData = serde_json::from_str(
+            r#"{
+                "five_hour": { "utilization": 1.0, "resets_at": null },
+                "seven_day": { "utilization": 2.0, "resets_at": null },
+                "limits": [
+                    { "kind": "session", "percent": -1.0 },
+                    { "kind": "weekly_all", "percent": 150.0 }
+                ]
+            }"#,
+        )
+        .expect("structured limits fixture");
+
+        let usage: UsageData = parsed.into();
+        assert_eq!(usage.limits[0].percent, None);
+        assert_eq!(usage.limits[1].percent, None);
+    }
+
+    #[test]
+    fn conflicting_claude_plan_signals_fail_closed() {
+        assert_eq!(
+            classify_claude_plan_signal("default_claude_max_5x_20x"),
+            None
+        );
+        assert_eq!(classify_claude_plan_signal("claude_team_pro"), None);
+    }
+
+    #[test]
     fn cached_usage_cents_are_normalized_once() {
         let usage = UsageData {
             five_hour: UsageWindow {
@@ -1040,6 +1290,7 @@ mod tests {
                 resets_at: None,
             },
             sonnet_free: None,
+            limits: Vec::new(),
             extra_usage: Some(ExtraUsage {
                 is_enabled: true,
                 monthly_limit: Some(20000.0),
@@ -1098,5 +1349,78 @@ mod tests {
         );
         assert_eq!(detect_plan_key(Some("claude_pro_2025"), None), Some("pro"));
         assert_eq!(detect_plan_key(Some("team"), None), Some("team"));
+    }
+
+    #[test]
+    fn ambiguous_or_conflicting_claude_max_signals_are_unknown() {
+        assert_eq!(detect_plan_key(Some("max"), None), None);
+        assert_eq!(
+            detect_plan_key(Some("max"), Some("default_claude_max")),
+            None
+        );
+        assert_eq!(
+            detect_plan_key(Some("pro"), Some("default_claude_max_20x")),
+            None
+        );
+        assert_eq!(detect_plan_key(Some("pro_20x"), None), None);
+    }
+
+    #[test]
+    fn plan_detection_requires_delimited_known_ids() {
+        assert_eq!(detect_plan_key(Some("professional"), None), None);
+        assert_eq!(detect_plan_key(Some("freedom"), None), None);
+        assert_eq!(detect_plan_key(Some("myteam-preview"), None), None);
+        assert_eq!(detect_plan_key(Some("claude-pro"), None), Some("pro"));
+        assert_eq!(
+            detect_plan_key(None, Some("default_claude_max_20x")),
+            Some("max_20x")
+        );
+    }
+
+    #[test]
+    fn file_cache_rejects_future_and_out_of_range_timestamps() {
+        let _home = IsolatedClaudeHome::new();
+        let data = UsageData {
+            five_hour: UsageWindow {
+                utilization: 1.0,
+                resets_at: None,
+            },
+            seven_day: UsageWindow {
+                utilization: 2.0,
+                resets_at: None,
+            },
+            sonnet_free: None,
+            limits: Vec::new(),
+            extra_usage: None,
+        };
+        let write_cache = |fetched_at_unix| {
+            let cache = UsageCacheFile {
+                fetched_at_unix,
+                data: data.clone(),
+                subscription: None,
+                rate_limit_tier: None,
+            };
+            std::fs::write(
+                crate::config::usage_cache_path(),
+                serde_json::to_vec(&cache).expect("cache JSON"),
+            )
+            .expect("cache write");
+        };
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        write_cache(now.saturating_add(3600));
+        assert!(
+            UsageManager::try_read_file_cache().is_none(),
+            "future cache observations must not become fresh quota"
+        );
+
+        write_cache(i64::MAX as u64 + 1);
+        assert!(
+            UsageManager::try_read_file_cache().is_none(),
+            "timestamps outside DateTime's Unix range must be rejected"
+        );
     }
 }

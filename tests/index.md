@@ -8,12 +8,18 @@ Centralized tests for the whole app. Frontend logic/integration/component-render
 
 | Layer | Command | What it covers |
 |:---|:---|:---|
-| Frontend | `npm --prefix frontend run test` | Vitest unit + integration + component render (`tests/unit`, `tests/integration`, `tests/components`) |
-| Frontend (watch) | `npm --prefix frontend run test:watch` | Same, watch mode |
+| Frontend | `bun run --cwd frontend test` | Vitest unit + integration + component render (`tests/unit`, `tests/integration`, `tests/components`) |
+| Frontend (watch) | `bun run --cwd frontend test:watch` | Same, watch mode |
 | Backend | `cargo test --workspace` | Both Rust crates (`cc-discord-presence` daemon/core + `pulse` Tauri host): inline `#[cfg(test)]` modules + the `tests/*.rs` / `src-tauri/tests/*.rs` integration tests |
-| Types | `npm --prefix frontend run check` | svelte-check, 0 errors / 0 warnings |
+| Browser bridge | `cargo test -p pulse --lib dev_bridge` | Loopback-only POST contract, Bearer-token auth, strict local CORS, real command dispatch, safe-control argument guards, and explicit unavailable/unknown behavior |
+| Real browser development runtime | `bun run --cwd frontend dev` | Starts Vite plus the authenticated Rust bridge with one generated shared token; `1420` fails closed instead of rendering fixtures when the backend is unavailable |
+| Browser Playwright | `bunx --cwd frontend playwright test` | Reuses the authenticated local bridge outside CI, validates proofed-source selection and exact metrics, then verifies the `390px` page width and viewport-bound notification panel |
+| Types | `bun run --cwd frontend check` | svelte-check, 0 errors / 0 warnings |
 | Codex mirror integrity | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-codex-rich-presence-upstream.ps1` | Verifies the pinned annotated tag, exact commit, inventory, adapters, and every vendored target hash in `src/codex/UPSTREAM.json`; the scheduled drift job tracks later upstream releases separately |
 | Windows polling consoles | `cargo test --locked --test release_scripts vendored_windows_polling_commands_use_silent_launcher -- --exact` | Rejects the old canonical pin and any five-second Git probe that bypasses the shared `CREATE_NO_WINDOW` launcher |
+| Provider/metrics fixture contract | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e/test-pulse-contract.ps1` | Parses 11 sanitized provider/Discord fixtures plus true-zero/unavailable metrics vectors; checks version/source-contract and cost exactness alignment |
+| Pulse E2E harness dry-run | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e/run-pulse.ps1 -Mode Browser -DryRun` | Stages temporary homes/DB/provider config and checks the Browser launch prerequisites without starting a server |
+| Native Tauri CDP + Playwright E2E | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e/run-pulse.ps1 -Mode Tauri -Fixture no_data -RunPlaywright` | Starts owned Vite on `1420` before the repo-owned debug binary; native Tauri alone owns IPC and polling. It isolates WebView2 user data, runs `chromium.connectOverCDP`, validates the no-data Home contract, and cleans only exact owned processes. |
 
 Vitest config: [frontend/vitest.config.ts](../frontend/vitest.config.ts) (alias `@` → `frontend/src`,
 `fs.allow` widened to the repo root so the root-level spec tree resolves). Tauri IPC, the event/app/
@@ -22,18 +28,64 @@ modules import cleanly outside a WebView; a WAAPI `Element.prototype.animate` st
 shim let Svelte transitions and media queries run headless. The fake `__TAURI_INTERNALS__.invoke`
 routes known list commands, including `get_context_breakdowns`, to `[]`, scalars to stub values, and `get_reports_bundle` to an empty bundle.
 
+## E2E boundary: Vitest, Playwright, Tauri CDP, and Discord IPC
+
+The layers intentionally prove different seams; one green layer is not a
+substitute for another:
+
+- **Vitest** (`npm --prefix frontend run test`) owns unit, integration, and
+  component rendering against the mocked Tauri bridge. It does not prove a
+  real WebView, provider authentication, or Discord IPC.
+- **Playwright** (`node tests/visual/verify-responsive.mjs`) owns the browser
+  visual matrix against a running URL (`PULSE_VISUAL_URL`, default
+  `http://127.0.0.1:1420`). The fixture runner's Browser mode only starts Vite
+  and probes `/`; it does not silently claim Playwright or Tauri coverage.
+- **Tauri CDP** is available through
+  `scripts/e2e/run-pulse.ps1 -Mode Tauri -RunPlaywright` only after a
+  repo-owned debug binary exists. The runner starts `bun run dev` from the
+  repo-owned `frontend/` directory first because the debug binary's
+  `devUrl` is `http://localhost:1420`; it verifies the bridge/Vite listeners
+  are descendants of that launcher before starting Pulse. It then uses a fresh WebView2
+  remote-debugging port plus an isolated temporary user-data folder (the
+  installed Pulse profile is never reused), probes `/json/version`, runs the
+  Playwright spec with `chromium.connectOverCDP`, and fails clearly when the
+  binary or endpoint is absent; no backend endpoint is guessed.
+- **Raw Discord IPC** is available through `-Mode Discord` only with
+  `PULSE_DISCORD_LIVE=1`, an already-running Discord desktop process, and a
+  proof JSON path. The proof must contain `SET_ACTIVITY` with an activity and a
+  clear-activity event. The runner never restarts Discord and does not treat a
+  frontend preview as raw IPC evidence.
+
+The provider vectors and expected DTO are documented in
+[adaptive-access.md](../docs/architecture/adaptive-access.md). They are
+synthetic contract inputs, not live provider snapshots.
+
+| File | Seam | Coverage |
+|:---|:---|:---|
+| [workspace.spec.ts](../frontend/tests/e2e/browser/workspace.spec.ts) | Browser E2E | proofed provider sources remain separate, unproved API lanes stay hidden, exact metrics remain exact, Home occupies over 96% of the reference viewport, the zero-proof Home contract releases the allowance rail while keeping live work visible, and all primary views are checked at `390px` without page-level overflow |
+| [pulse.spec.ts](../frontend/tests/e2e/tauri/pulse.spec.ts) | Tauri CDP E2E | repo-owned WebView renders the current Provider limits/Live workspace Home shell through the real Tauri surface |
+
+The zero-proof rail contract is enforced by the focused Vitest counterpart
+`bun run --cwd frontend test -- tests/components/Dashboard.test.ts` and the
+browser proof
+`bun run --cwd frontend test:e2e -- --grep "Home releases the allowance rail"`.
+Home keeps live session telemetry visible while releasing the allowance column
+until an authenticated provider route supplies quota proof.
+
 ## Frontend — unit (`tests/unit/`)
 
 | File | Module under test | Coverage |
 |:---|:---|:---|
-| [utils.test.ts](unit/utils.test.ts) | `lib/utils` | `fmtTokens` (M/K/unit tiers), `fmtCost` ($ two-decimal), `fmtDuration` (s/m/h+m), `fmtTps` (/s→K/s), `fmtPct` (whole-percent rounding), `usageColor` (normal/warning/danger), `classifyActivity` (thinking/editing/reading/running/waiting/idle), `fmtClock` (HH:MM passthrough + em-dash fallback on null·undefined) |
+| [utils.test.ts](unit/utils.test.ts) | `lib/utils` | `fmtTokens` (B/M/K/unit tiers), `fmtCost` ($ two-decimal), `fmtDuration` (s/m/h+m), `fmtTps` (/s→K/s), `fmtPct` (whole-percent rounding), `usageColor` (normal/warning/danger), `classifyActivity` (thinking/editing/reading/running/waiting/idle), `fmtClock` (HH:MM passthrough + em-dash fallback on null·undefined) |
+| [access.test.ts](unit/access.test.ts) | `lib/access` | provider/subscription vs API labels, authenticated-route vs local-history display projections, dynamic provider-native windows, no numeric output for stale or unavailable usage, stable source-id to provider-scope resolution, and no API-to-subscription aliasing |
+| [provider.test.ts](unit/provider.test.ts) | `lib/provider` | optimistic latest-intent provider selection, serialized persistence, stale bootstrap rejection, and provider revision publication only for the surviving selection |
 
 ## Frontend — integration (`tests/integration/`)
 
 | File | Surface | Coverage |
 |:---|:---|:---|
 | [tauri-mock.test.ts](integration/tauri-mock.test.ts) | `lib/api` over the mocked Tauri IPC | list commands resolve to `[]`, mapped scalar (`get_active_provider`→`"claude"`), unmapped command resolves to `undefined` without throwing |
-| [poll-flow.test.ts](integration/poll-flow.test.ts) | `stores.poll()` → global stores → `Dashboard.svelte` | one `poll()` pass calls each loader exactly once and hydrates `health`/`metrics`/`sessions`/`rateLimits`/`planInfo` + derived `activeSessions`; Dashboard then renders KPI values ($8.00) and two live session cards end to end |
+| [poll-flow.test.ts](integration/poll-flow.test.ts) | `stores.poll()` → global stores → `Dashboard.svelte` | one `poll()` pass calls each loader exactly once and hydrates `health`/`metrics`/`sessions`/`rateLimits`/`planInfo` + derived `activeSessions`; provider changes synchronously clear proof-bound state and reject prior-provider responses in flight; Dashboard then renders the provider/work shell and two live session cards end to end |
 | [phase5-flow.test.ts](integration/phase5-flow.test.ts) | `Context.svelte` + `Reports.svelte` data flow | multi-session context payloads hydrate active context cards; selecting a different session pill re-queries `getContextBreakdown` with the new session id (`"s2"`); Reports renders the bundle through a single `getReportsBundle` call |
 
 ## Frontend — component render (`tests/components/`)
@@ -48,15 +100,18 @@ the [fixtures/ChartStub.svelte](fixtures/ChartStub.svelte) stub so canvas-bound 
 | [PulseMark.test.ts](components/PulseMark.test.ts) | `PulseMark` | svg sized to the `size` prop, P-glyph-only when `showPulse` is false (1 path), P glyph + pulse line when true (2 paths) |
 | [SessionCard.test.ts](components/SessionCard.test.ts) | `SessionCard` | fast badge present/absent on the `fast` flag, inflated-tokenizer marker shown for opus 4.7+ and Sonnet 5 (sourced from the backend `has_inflated_tokenizer` flag, not a local regex) and omitted for 4.6, Opus 4.8 model display name, Fable/Mythos badges without tokenizer warnings, Sonnet 5 "Intro Pricing" badge presence/absence driven by `session.intro_pricing` |
 | [Dashboard.test.ts](components/Dashboard.test.ts) | `Dashboard` (view) | selectable multi-instance focus, exact Context Window fraction, unique session-status rail, flat four-KPI strip, account quota + remaining percentage, and reconciled cost/model data |
+| [AccessSourceBar.test.ts](components/AccessSourceBar.test.ts) | `AccessSourceBar` | authenticated subscription/API lanes, local-history-only provider selection, hidden unproved/no-history providers, and separation between analytics scope and the active Discord provider |
+| [WorkspaceSurfaces.test.ts](components/WorkspaceSurfaces.test.ts) | `AllowanceRail` + `DataSourceInspector` | honest empty states plus selected-provider allowances without fabricated windows |
+| [NotificationCenter.test.ts](components/NotificationCenter.test.ts) | `NotificationCenter` | durable notification loading, unread count, quota-action routing, mark-all-read refresh, last-good preservation on transport failure, stale-response rejection, persistence-failure navigation, and native tray-open events |
 | [Sessions.test.ts](components/Sessions.test.ts) | `Sessions` (view) | flat KPI strip labels, live session rows + "2 active", history table loaded from the api layer |
-| [Costs.test.ts](components/Costs.test.ts) | `Costs` (view) | budget cockpit plus flat supporting figures, Cost-by-Type legend reconciliation, window-aggregate KPIs, project refetch, and live-snapshot refresh |
+| [Costs.test.ts](components/Costs.test.ts) | `Costs` (view) | Subscription Value Ledger for unavailable money, exact/partial coverage boundaries, token mix/trend, budget cockpit for known spend, Cost-by-Type reconciliation, window-aggregate KPIs, project refetch, and live-snapshot refresh |
 | [Context.test.ts](components/Context.test.ts) | `Context` (view) | one active-session selector, click-through detail, no duplicate session-pill strip, and no stale historical utilization feed |
 | [Heatmap.test.ts](components/Heatmap.test.ts) | `Heatmap` | 24 local-hour cells, total/coverage/peak summaries, proper AM/PM labels, and accessible volume context |
-| [VersionContract.test.ts](components/VersionContract.test.ts) | release owners | v1.6.5 synchronization across Cargo, Tauri, frontend, lockfiles, release contract, README, and changelog |
+| [VersionContract.test.ts](components/VersionContract.test.ts) | release owners | v1.7.0 synchronization across Cargo, Tauri, frontend, lockfiles, release contract, README, and changelog |
 | [UpdateBanner.test.ts](components/UpdateBanner.test.ts) | `UpdateBanner` | automatic update popup, Later/Skip/Open release actions, skipped-version behavior, fake dev update, one explicit Update action followed by signed install and automatic relaunch, retryable failures |
 | [Reports.test.ts](components/Reports.test.ts) | `Reports` (view) | coherent analysis header/copy, sections populated from a single bundle call, reload feedback, and cost timeline totals/peaks |
 | [Discord.test.ts](components/Discord.test.ts) | `Discord` (view) | coherent Broadcast header, live-preview backend payload, provider capability gates, autosave saving/saved lifecycle, rollback on failed persistence, field reorder/toggles, and theme-aware preview |
-| [Settings.test.ts](components/Settings.test.ts) | `Settings` (view) | coherent Application header, identity masthead + config controls, db size + session total, plan override, two-step clear-history confirm, and theme toggle |
+| [Settings.test.ts](components/Settings.test.ts) | `Settings` (view) | coherent Application header, identity masthead + config controls, db size + session total, plan override rollback, latest-provider-wins race handling, two-step clear-history confirm, and theme toggle |
 
 ## Backend — Rust (`cargo test --workspace`)
 
@@ -68,9 +123,13 @@ Two workspace crates. `cc-discord-presence` (repo root) is the daemon + analytic
 
 | File | Crate | Coverage |
 |:---|:---|:---|
-| [daemon_e2e.rs](daemon_e2e.rs) | `cc-discord-presence` | end-to-end daemon pipeline over temp JSONL fixtures: Claude session collect accumulates speed-aware per-category cost and reconciles categories to the headline total; tracks last-turn speed/effort/service-tier and builds presence lines (project, "Opus 4.8 (1M)", fast ⚡ marker, effort label); Codex session parses meta/turn-context/token-count, resolves effort/window/totals, and builds presence state (model display, "(Extra High)", fast marker, "Pro ($200/month)") |
+| [daemon_e2e.rs](daemon_e2e.rs) | `cc-discord-presence` | end-to-end daemon pipeline over temp JSONL fixtures: Claude session collect accumulates speed-aware per-category cost and reconciles categories to the headline total; tracks last-turn speed/effort/service-tier and builds presence lines (project, "Opus 4.8 (1M)", fast ⚡ marker, effort label); Codex session parses meta/turn-context/token-count, resolves effort/window/totals, and builds presence state (model display, "(Extra High)", fast marker, "Pro 20x ($200/month)") |
 | [codex_upstream_contract.rs](codex_upstream_contract.rs) | `cc-discord-presence` | Pulse-facing contract for the mirrored Codex Rich Presence modules: config, cost, display labels, telemetry limits, active-session selection, OpenCode process compatibility, and Windows WSL opt-in/no-window subprocess safety |
-| [codex_account_usage.rs](codex_account_usage.rs) | `cc-discord-presence` | camelCase `account/rateLimits/read` parsing, coherent global quota + Credits, exact used/available arithmetic, and rejection of empty sparse responses |
+| [codex_account_usage.rs](codex_account_usage.rs) | `cc-discord-presence` | canonical `account/rateLimits/read` parsing, coherent global quota + spend Credits, structured `rateLimitResetCredits` preservation, exact used/remaining arithmetic, omission of unreported model scopes, and rejection of empty sparse responses |
+| `src/codex/account_usage.rs` unit tests | `cc-discord-presence` | Windows Codex CLI selection prefers the user-local unpackaged binary over an inaccessible AppX path while retaining the desktop GUI rejection guard |
+| [access_runtime.rs](../src-tauri/tests/access_runtime.rs) | `pulse` | provider-neutral access routes, local-history capability without authentication promotion, dynamic sparse windows, provider-plan/proof separation, freshness gating, fail-closed mismatched/unknown usage sources, and separate structured Codex reset-credit DTOs |
+| [notifications.rs](../src-tauri/tests/notifications.rs) | `pulse` | genuine Codex/Claude reset transitions, timestamp-drift silence, legacy timestamp-only row dismissal migration, provider-health silent baselines, quota deduplication, durable unread/read state, and dismissal filtering |
+| [startup_order.rs](../src-tauri/tests/startup_order.rs) | `pulse` | Tauri single-instance registration remains ahead of setup and background-poller startup, so a rejected second launch cannot create another notification/analytics producer |
 | [reports_e2e.rs](../src-tauri/tests/reports_e2e.rs) | `pulse` | `build_reports_bundle_from_roots` aggregates fixture traces (user/assistant/tool/mcp/compaction counts, cache health); regression guard that the JSONL tree is scanned exactly once per bundle (no double/8x scan); oversized JSONL over `MAX_JSONL_BYTES` is skipped while small files still trace |
 | [report_html.rs](../src-tauri/tests/report_html.rs) | `pulse` | `generate_html_report` / `generate_markdown_report`: writes a sample HTML for `/browser` visual review; offline-safe (no Google Fonts / gstatic / `@import` / `http://`, https only in w3.org+github namespaces); well-formed doctype + single `<html>`, inline `<style>`, inline SVG charts (token-composition aria-label); brand kicker + KPI strip + all eight analyzer section anchors + Speed Split; offline system/monospace font stacks; markdown is non-empty GFM with every section heading + the speed-split table header |
 
@@ -87,11 +146,13 @@ Per-crate, per-module unit tests compiled with each crate. Representative covera
 | config | `src/config.rs`, `src/codex/config.rs` | presence/pricing config defaults + round-trip + Windows WSL opt-in flag parsing |
 | util / process | `src/util.rs`, `src/process_guard.rs` | path/format helpers, single-instance process guard |
 | codex core | `src/codex/{session.rs,session/parser.rs,cost.rs,discord.rs,util.rs,process.rs}` | Codex JSONL parse, cost, presence lines, helpers |
-| codex telemetry | `src/codex/telemetry/{plan.rs,service_tier.rs,limits.rs}` | plan-tier + service-tier resolution, rate-limit window parsing |
-| db | `src-tauri/src/db.rs` | SQLite historical-session insert/query/round-trip + context snapshot storage clamped to the model window |
-| analyzers | `src-tauri/src/analyzers/{session_trace.rs,cache_health.rs,model_routing.rs,prompt_complexity.rs,inflection.rs}` | trace scan + scan-pass counting, cache-health grading, model-routing split, prompt-complexity scoring, inflection-point detection |
-| commands | `src-tauri/src/commands.rs` | reports-bundle assembly from roots; `SessionInfo.intro_pricing`/`has_inflated_tokenizer` wiring for Claude sessions (real-clock, matched against a fresh `cost::active_intro_pricing` call so the test never goes stale across the real cutoff date) and confirmed absent for Codex sessions; `SessionInfo.context_used_tokens` and `build_claude_context_breakdown`'s `used_tokens` reflect current fill (`current_context_tokens`) rather than the historical peak (`max_turn_api_input`), while `context_window_tokens`/the 1M-vs-200K decision still correctly keys off the peak |
+| codex telemetry | `src/codex/telemetry/{plan.rs,service_tier.rs,limits.rs}` | provider-scoped exact plan tiers (no Codex Max or generic Pro), service-tier resolution, rate-limit window parsing |
+| Windows test harness | `src-tauri/build.rs`, `src-tauri/src/lib.rs` | embeds the shared Common-Controls v6 + Tauri `asInvoker`/`uiAccess=false` manifest; Cargo's current Windows lib harness cannot consume a build-script test-only link flag, so packaged RT_MANIFEST readback remains a release gate |
+| db | `src-tauri/src/db.rs` | SQLite historical-session insert/query/round-trip + context snapshot storage clamped to the model window; Codex JSONL collect → upsert → 7d/month forecast integration; inclusive now-6d/exclusive now-8d window boundary; retryable write fingerprints; exact provider isolation plus explicit `all` aggregation; provider history inventory independent of cost/authentication; stored exact/partial/unavailable/provider-billed cost provenance round-trip; Summary, daily, project, hourly, model, and Reports timeline aggregates exclude unavailable raw estimates, average only priced sessions, and expose aggregate coverage |
+| analyzers | `src-tauri/src/analyzers/{session_trace.rs,cache_health.rs,model_routing.rs,prompt_complexity.rs,inflection.rs}` | trace scan + scan-pass counting, cache-health grading, provenance-aware model-routing split and inflection detection that cannot promote unavailable raw estimates, prompt-complexity scoring |
+| commands | `src-tauri/src/commands.rs` | access snapshots enriched with local-history inventory; reports-bundle assembly from roots; provenance-aware cost totals that retain token categories even when money is unavailable; daily timeline points that exclude unavailable raw estimates and report partial coverage; Codex weekly-only routes are never duplicated into the legacy 5h slot when a model-scoped weekly window is also present; `SessionInfo.intro_pricing`/`has_inflated_tokenizer` wiring for Claude sessions (real-clock, matched against a fresh `cost::active_intro_pricing` call so the test never goes stale across the real cutoff date) and confirmed absent for Codex sessions; `SessionInfo.context_used_tokens` and `build_claude_context_breakdown`'s `used_tokens` reflect current fill (`current_context_tokens`) rather than the historical peak (`max_turn_api_input`), while `context_window_tokens`/the 1M-vs-200K decision still correctly keys off the peak |
 | update checks | `src-tauri/src/update_check.rs` | SemVer tag comparison, newer-release detection, prerelease/draft suppression, release URL allowlist |
+| browser bridge | `src-tauri/src/dev_bridge.rs` | Debug-only `127.0.0.1:1421` POST transport, Bearer auth, Vite-origin allowlist, bounded request/response transport, validated safe-control arguments, real-command dispatch, and standalone poller seam |
 
 ## v1.4.1 targeted validators
 

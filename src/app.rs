@@ -399,7 +399,9 @@ fn print_active_summary(
 }
 
 fn command_available(program: &str) -> bool {
-    Command::new(program)
+    // `doctor` is also used by Windows-hosted automation; a version probe
+    // must never flash a console while checking an optional provider binary.
+    crate::util::silent_command(program)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

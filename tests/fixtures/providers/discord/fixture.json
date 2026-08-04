@@ -1,0 +1,21 @@
+{
+  "fixture_version": 1,
+  "raw_payload": {
+    "transport": "discord-ipc",
+    "events": [
+      { "op": 1, "command": "SET_ACTIVITY", "nonce": "fixture-set-activity", "args": { "pid": 4242, "activity": { "details": "Synthetic fixture session", "state": "No user data" } } },
+      { "op": 1, "command": "SET_ACTIVITY", "nonce": "fixture-clear-activity", "args": { "pid": 4242, "activity": null }, "clear_activity": true }
+    ]
+  },
+  "status": "proof",
+  "source_contract": "discord_ipc.v1",
+  "captured_at": "2026-08-01T00:00:00Z",
+  "expected_dto": {
+    "transport": "discord-ipc",
+    "events": [
+      { "op": 1, "command": "SET_ACTIVITY", "nonce": "fixture-set-activity", "clear_activity": false },
+      { "op": 1, "command": "SET_ACTIVITY", "nonce": "fixture-clear-activity", "clear_activity": true }
+    ],
+    "proof_requirements": { "set_activity": true, "clear_activity": true }
+  }
+}

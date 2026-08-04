@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 use cc_discord_presence::provider::Provider;
 use pulse::analyzers::session_trace::{self, MAX_JSONL_BYTES, load_session_traces_from_roots};
 use pulse::commands::build_reports_bundle_from_roots;
-use pulse::db::HistoricalSession;
+use pulse::db::{CostBasis, HistoricalSession};
 
 static SCAN_COUNTER_GUARD: Mutex<()> = Mutex::new(());
 
@@ -31,10 +31,14 @@ fn claude_session(id: &str, project: &str, model: &str) -> HistoricalSession {
         context_window: "200K".to_string(),
         branch: Some("main".to_string()),
         effort: "High".to_string(),
+        speed: "standard".to_string(),
         started_at: Some("2026-05-20T14:00:00+00:00".to_string()),
         ended_at: Some("2026-05-20T14:30:00+00:00".to_string()),
         duration_secs: 1_800,
         total_cost: 1.25,
+        cost_basis: CostBasis::Exact,
+        cost_source: "fixture".to_string(),
+        known_cost: Some(1.25),
         input_tokens: 120_000,
         output_tokens: 8_000,
         cache_write_tokens: 40_000,

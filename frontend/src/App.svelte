@@ -1,10 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import Sidebar from "./components/Sidebar.svelte";
   import TopBar from "./components/TopBar.svelte";
+  import AccessSourceBar from "./components/AccessSourceBar.svelte";
   import Toast from "./components/Toast.svelte";
   import UpdateBanner from "./components/UpdateBanner.svelte";
-  import { currentView, startSnapshotSync, stopSnapshotSync, loadDiscordUser, poll, health, metrics, sessions, rateLimits, planInfo } from "./lib/stores";
+  import {
+    currentView,
+    invalidateLiveSnapshotForProviderChange,
+    loadDiscordUser,
+    poll,
+    startSnapshotSync,
+    stopSnapshotSync,
+  } from "./lib/stores";
   import { providerRevision } from "./lib/provider";
   import { fly } from "svelte/transition";
   import { setTheme } from "@tauri-apps/api/app";
@@ -61,11 +68,7 @@
         firstProviderRevision = false;
         return;
       }
-      health.set(null);
-      metrics.set(null);
-      sessions.set([]);
-      rateLimits.set(null);
-      planInfo.set(null);
+      invalidateLiveSnapshotForProviderChange();
       void poll();
     });
     return () => {
@@ -75,13 +78,13 @@
   });
 </script>
 
-<Sidebar />
 <div class="main-wrapper">
   <TopBar onToggleTheme={toggleTheme} />
+  <AccessSourceBar />
   <main class="main-content">
     {#if ActiveView}
       {#key activeViewId}
-        <div in:fly={{ y: 8, duration: 200 }}>
+        <div class="view-host" in:fly={{ y: 8, duration: 200 }}>
           {#if activeViewId === "settings"}
             <ActiveView onToggleTheme={toggleTheme} currentTheme={theme} />
           {:else}
@@ -99,30 +102,32 @@
 
 <style>
   .main-wrapper {
-    margin-left: var(--sidebar-width);
-    min-height: 100vh;
+    height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
     overflow: hidden;
   }
 
   .main-content {
     flex: 1;
-    padding: 20px 24px 28px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: var(--page-padding-block) var(--page-padding-inline);
     overflow-y: auto;
     overflow-x: hidden;
-    max-height: calc(100vh - var(--topbar-height));
     min-width: 0;
+    scrollbar-gutter: stable;
   }
 
+  .view-host {
+    flex: 1 0 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 100%;
+  }
   .view-loading { color: var(--text-muted); padding: 24px 4px; font-size: var(--fs-sm); }
-
-  @media (max-width: 800px) {
-    .main-content { padding: 16px; }
-  }
-
-  @media (max-width: 740px) {
-    .main-content { padding: 10px; }
-  }
 </style>

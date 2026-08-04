@@ -7,19 +7,71 @@ struct ReportData {
     projects: Vec<db::ProjectStat>,
     forecast: db::CostForecast,
     hourly: Vec<db::HourlyActivity>,
-    models: Vec<(String, i64, f64)>,
+    models: Vec<db::ModelStat>,
 }
 
-fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
-    let sessions = db::get_session_history(Some(days), project, Some(5000));
+fn known_session_cost(session: &db::HistoricalSession) -> Option<f64> {
+    session.known_cost.filter(|cost| {
+        session.cost_basis != db::CostBasis::Unavailable && cost.is_finite() && *cost >= 0.0
+    })
+}
+
+fn merge_cost_basis(current: db::CostBasis, next: db::CostBasis) -> db::CostBasis {
+    use db::CostBasis::{Estimated, Exact, Partial, Unavailable};
+    match (current, next) {
+        (Unavailable, basis) => basis,
+        (basis, Unavailable) => basis,
+        (Exact, Exact) => Exact,
+        (Estimated, Estimated) => Estimated,
+        _ => Partial,
+    }
+}
+
+fn observe_aggregate_cost(
+    session: &db::HistoricalSession,
+    total_cost: &mut f64,
+    priced_sessions: &mut i64,
+    cost_basis: &mut db::CostBasis,
+    cost_sources: &mut Vec<String>,
+) {
+    let Some(cost) = known_session_cost(session) else {
+        return;
+    };
+    *total_cost += cost;
+    *priced_sessions += 1;
+    *cost_basis = merge_cost_basis(*cost_basis, session.cost_basis);
+    let source = session.cost_source.trim();
+    if !source.is_empty() && source != "unknown" && !cost_sources.iter().any(|item| item == source)
+    {
+        cost_sources.push(source.to_string());
+    }
+}
+
+fn finish_aggregate_cost(
+    sessions: i64,
+    priced_sessions: i64,
+    cost_basis: &mut db::CostBasis,
+    cost_sources: &mut Vec<String>,
+) {
+    if priced_sessions == 0 {
+        *cost_basis = db::CostBasis::Unavailable;
+    } else if priced_sessions != sessions {
+        *cost_basis = db::CostBasis::Partial;
+    }
+    cost_sources.sort();
+    cost_sources.dedup();
+}
+
+fn load_report_data(days: i64, project: Option<&str>, provider: &str) -> ReportData {
+    let sessions = db::get_session_history_scoped(Some(provider), Some(days), project, Some(5000));
     if project.is_none() {
         return ReportData {
-            daily: db::get_daily_stats(Some(days)),
-            summary: db::get_analytics_summary(),
-            projects: db::get_project_stats(Some(days)),
-            forecast: db::get_cost_forecast(),
-            hourly: db::get_hourly_activity(Some(days)),
-            models: db::get_model_distribution(Some(days)),
+            daily: db::get_daily_stats_scoped(Some(provider), Some(days)),
+            summary: db::get_analytics_summary_scoped(Some(provider)),
+            projects: db::get_project_stats_scoped(Some(provider), Some(days)),
+            forecast: db::get_cost_forecast_scoped(Some(provider)),
+            hourly: db::get_hourly_activity_scoped(Some(provider), Some(days)),
+            models: db::get_model_distribution_scoped(Some(provider), Some(days)),
             sessions,
         };
     }
@@ -45,7 +97,7 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
     let mut daily_map: BTreeMap<(String, String, String), db::DailyStat> = BTreeMap::new();
     let mut hourly_map: BTreeMap<i64, db::HourlyActivity> = BTreeMap::new();
     let mut project_map: HashMap<String, db::ProjectStat> = HashMap::new();
-    let mut model_map: HashMap<String, (i64, f64)> = HashMap::new();
+    let mut model_map: HashMap<String, db::ModelStat> = HashMap::new();
     let mut tracked_days: HashSet<String> = HashSet::new();
     let mut top_model_counts: HashMap<String, i64> = HashMap::new();
 
@@ -66,6 +118,9 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
             project: session.project.clone(),
             model: session.model.clone(),
             session_count: 0,
+            priced_sessions: 0,
+            cost_basis: db::CostBasis::Unavailable,
+            cost_sources: Vec::new(),
             total_cost: 0.0,
             total_tokens: 0,
             input_tokens: 0,
@@ -74,7 +129,13 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
             cache_read_tokens: 0,
         });
         entry.session_count += 1;
-        entry.total_cost += session.total_cost;
+        observe_aggregate_cost(
+            session,
+            &mut entry.total_cost,
+            &mut entry.priced_sessions,
+            &mut entry.cost_basis,
+            &mut entry.cost_sources,
+        );
         entry.total_tokens += session.total_tokens;
         entry.input_tokens += session.input_tokens;
         entry.output_tokens += session.output_tokens;
@@ -86,6 +147,9 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
             .or_insert(db::ProjectStat {
                 project: session.project.clone(),
                 session_count: 0,
+                priced_sessions: 0,
+                cost_basis: db::CostBasis::Unavailable,
+                cost_sources: Vec::new(),
                 total_cost: 0.0,
                 total_tokens: 0,
                 avg_session_cost: 0.0,
@@ -95,16 +159,36 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
                 top_model: String::new(),
             });
         project_entry.session_count += 1;
-        project_entry.total_cost += session.total_cost;
+        observe_aggregate_cost(
+            session,
+            &mut project_entry.total_cost,
+            &mut project_entry.priced_sessions,
+            &mut project_entry.cost_basis,
+            &mut project_entry.cost_sources,
+        );
         project_entry.total_tokens += session.total_tokens;
         project_entry.avg_duration_secs += session.duration_secs as f64;
         project_entry.cache_read_tokens += session.cache_read_tokens;
         project_entry.cache_write_tokens += session.cache_write_tokens;
 
-        *model_map.entry(session.model.clone()).or_insert((0, 0.0)) = {
-            let (count, cost) = model_map.get(&session.model).copied().unwrap_or((0, 0.0));
-            (count + 1, cost + session.total_cost)
-        };
+        let model_entry = model_map
+            .entry(session.model.clone())
+            .or_insert(db::ModelStat {
+                model: session.model.clone(),
+                session_count: 0,
+                priced_sessions: 0,
+                cost_basis: db::CostBasis::Unavailable,
+                cost_sources: Vec::new(),
+                total_cost: 0.0,
+            });
+        model_entry.session_count += 1;
+        observe_aggregate_cost(
+            session,
+            &mut model_entry.total_cost,
+            &mut model_entry.priced_sessions,
+            &mut model_entry.cost_basis,
+            &mut model_entry.cost_sources,
+        );
         *top_model_counts.entry(session.model.clone()).or_insert(0) += 1;
 
         if let Some(ts) = ts {
@@ -112,18 +196,51 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
             let hourly = hourly_map.entry(hour).or_insert(db::HourlyActivity {
                 hour,
                 session_count: 0,
+                priced_sessions: 0,
+                cost_basis: db::CostBasis::Unavailable,
+                cost_sources: Vec::new(),
                 total_cost: 0.0,
             });
             hourly.session_count += 1;
-            hourly.total_cost += session.total_cost;
+            observe_aggregate_cost(
+                session,
+                &mut hourly.total_cost,
+                &mut hourly.priced_sessions,
+                &mut hourly.cost_basis,
+                &mut hourly.cost_sources,
+            );
         }
     }
 
+    for stat in daily_map.values_mut() {
+        finish_aggregate_cost(
+            stat.session_count,
+            stat.priced_sessions,
+            &mut stat.cost_basis,
+            &mut stat.cost_sources,
+        );
+    }
+    for stat in hourly_map.values_mut() {
+        finish_aggregate_cost(
+            stat.session_count,
+            stat.priced_sessions,
+            &mut stat.cost_basis,
+            &mut stat.cost_sources,
+        );
+    }
     let mut projects: Vec<db::ProjectStat> = project_map
         .into_values()
         .map(|mut stat| {
+            finish_aggregate_cost(
+                stat.session_count,
+                stat.priced_sessions,
+                &mut stat.cost_basis,
+                &mut stat.cost_sources,
+            );
+            if stat.priced_sessions > 0 {
+                stat.avg_session_cost = stat.total_cost / stat.priced_sessions as f64;
+            }
             if stat.session_count > 0 {
-                stat.avg_session_cost = stat.total_cost / stat.session_count as f64;
                 stat.avg_duration_secs /= stat.session_count as f64;
             }
             stat.top_model = top_model_counts
@@ -140,14 +257,29 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut models: Vec<(String, i64, f64)> = model_map
-        .into_iter()
-        .map(|(model, (count, cost))| (model, count, cost))
+    let mut models: Vec<db::ModelStat> = model_map
+        .into_values()
+        .map(|mut stat| {
+            finish_aggregate_cost(
+                stat.session_count,
+                stat.priced_sessions,
+                &mut stat.cost_basis,
+                &mut stat.cost_sources,
+            );
+            stat
+        })
         .collect();
-    models.sort_by_key(|m| std::cmp::Reverse(m.1));
+    models.sort_by_key(|model| std::cmp::Reverse(model.session_count));
 
     let total_sessions = sessions.len() as i64;
-    let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
+    let cost_coverage = db::summarize_cost_provenance(sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
+    let total_cost: f64 = sessions.iter().filter_map(known_session_cost).sum();
     let total_tokens: i64 = sessions.iter().map(|s| s.total_tokens).sum();
     let total_cache_read: i64 = sessions.iter().map(|s| s.cache_read_tokens).sum();
     let total_cache_write: i64 = sessions.iter().map(|s| s.cache_write_tokens).sum();
@@ -161,8 +293,8 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
     } else {
         0.0
     };
-    let avg_cost_per_session = if total_sessions > 0 {
-        total_cost / total_sessions as f64
+    let avg_cost_per_session = if cost_coverage.priced_sessions > 0 {
+        total_cost / cost_coverage.priced_sessions as f64
     } else {
         0.0
     };
@@ -172,16 +304,26 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
         .unwrap_or_else(|| "—".into());
     let top_model = models
         .first()
-        .map(|m| m.0.clone())
+        .map(|model| model.model.clone())
         .unwrap_or_else(|| "—".into());
-    let spent_this_month: f64 = sessions
+    let month_sessions = sessions
         .iter()
         .filter(|s| {
             s.started_at
                 .as_deref()
                 .is_some_and(|ts| ts >= month_start.as_str())
         })
-        .map(|s| s.total_cost)
+        .collect::<Vec<_>>();
+    let month_cost_coverage = db::summarize_cost_provenance(month_sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
+    let spent_this_month: f64 = month_sessions
+        .iter()
+        .filter_map(|session| session.known_cost)
         .sum();
     let daily_average = if days_elapsed > 0 {
         spent_this_month / days_elapsed as f64
@@ -194,6 +336,9 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
         daily: daily_map.into_values().collect(),
         summary: db::AnalyticsSummary {
             total_sessions,
+            priced_sessions: cost_coverage.priced_sessions as i64,
+            cost_basis: cost_coverage.cost_basis,
+            cost_sources: cost_coverage.cost_sources,
             total_cost,
             total_tokens,
             total_cache_read,
@@ -212,6 +357,10 @@ fn load_report_data(days: i64, project: Option<&str>) -> ReportData {
             days_in_month,
             projected_monthly: daily_average * days_in_month as f64,
             daily_average,
+            cost_basis: month_cost_coverage.cost_basis,
+            cost_sources: month_cost_coverage.cost_sources,
+            sessions: month_cost_coverage.sessions,
+            priced_sessions: month_cost_coverage.priced_sessions,
         },
         hourly: hourly_map.into_values().collect(),
         models,
@@ -226,6 +375,79 @@ pub fn generate_markdown_report(days: Option<i64>, project: Option<&str>) -> Str
     generate_markdown_report_for_provider(provider, days, project)
 }
 
+pub fn generate_markdown_report_scoped(
+    provider: Option<&str>,
+    days: Option<i64>,
+    project: Option<&str>,
+) -> String {
+    let active = cc_discord_presence::provider::load_active_provider();
+    let scope = provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| active.as_str());
+    if let Some(provider) = cc_discord_presence::provider::Provider::parse(scope) {
+        return generate_markdown_report_for_provider(provider, days, project);
+    }
+
+    use std::fmt::Write as _;
+    let d = days.unwrap_or(30);
+    let data = load_report_data(d, project, scope);
+    let coverage = db::summarize_cost_provenance(data.sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
+    let label = match scope {
+        "all" => "All providers",
+        "openai" => "OpenAI API",
+        "anthropic" => "Anthropic API",
+        _ => "Selected provider",
+    };
+    let mut markdown = String::new();
+    writeln!(markdown, "# Pulse Analytics Report").unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(markdown, "- Provider scope: {label}").unwrap();
+    writeln!(markdown, "- Period: last {d} days").unwrap();
+    writeln!(
+        markdown,
+        "- Project: {}",
+        project
+            .map(markdown_escape)
+            .unwrap_or_else(|| "All projects".to_string())
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(markdown, "## Summary").unwrap();
+    writeln!(markdown, "- Sessions: {}", data.sessions.len()).unwrap();
+    writeln!(markdown, "- Tokens: {}", data.summary.total_tokens).unwrap();
+    writeln!(
+        markdown,
+        "- Cost: {} ({})",
+        format_cost(data.summary.total_cost),
+        format_cost_coverage(&coverage)
+    )
+    .unwrap();
+    if coverage.cost_basis == db::CostBasis::Unavailable {
+        writeln!(
+            markdown,
+            "- Cost note: no exact provider cost is available for this scope."
+        )
+        .unwrap();
+    }
+    writeln!(markdown).unwrap();
+    writeln!(
+        markdown,
+        "Provider-specific recommendations are available after selecting one subscription provider."
+    )
+    .unwrap();
+    writeln!(markdown).unwrap();
+    writeln!(markdown, "---").unwrap();
+    writeln!(markdown, "Generated by Pulse (cc-discord-presence)").unwrap();
+    markdown
+}
+
 pub fn generate_markdown_report_for_provider(
     provider: cc_discord_presence::provider::Provider,
     days: Option<i64>,
@@ -238,7 +460,7 @@ pub fn generate_markdown_report_for_provider(
     use std::fmt::Write as _;
 
     let d = days.unwrap_or(30);
-    let data = load_report_data(d, project);
+    let data = load_report_data(d, project, provider.as_str());
     let sessions = data.sessions;
     let projects = data.projects;
     let models = data.models;
@@ -246,7 +468,14 @@ pub fn generate_markdown_report_for_provider(
     let summary = data.summary;
 
     let total_sessions = sessions.len();
-    let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
+    let cost_coverage = db::summarize_cost_provenance(sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
+    let total_cost: f64 = sessions.iter().filter_map(known_session_cost).sum();
     let total_tokens: i64 = sessions.iter().map(|s| s.total_tokens).sum();
 
     let capabilities = provider.capabilities();
@@ -263,8 +492,9 @@ pub fn generate_markdown_report_for_provider(
 
     let mut top_sessions: Vec<_> = sessions.iter().collect();
     top_sessions.sort_by(|a, b| {
-        b.total_cost
-            .partial_cmp(&a.total_cost)
+        known_session_cost(b)
+            .unwrap_or_default()
+            .partial_cmp(&known_session_cost(a).unwrap_or_default())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
@@ -292,6 +522,12 @@ pub fn generate_markdown_report_for_provider(
     writeln!(md, "## Executive Summary\n").unwrap();
     writeln!(md, "| Metric | Value |\n|---|---|").unwrap();
     writeln!(md, "| Total cost | {} |", format_cost(total_cost)).unwrap();
+    writeln!(
+        md,
+        "| Cost coverage | {} |\n",
+        markdown_escape(&format_cost_coverage(&cost_coverage))
+    )
+    .unwrap();
     writeln!(md, "| Sessions | {} |", total_sessions).unwrap();
     writeln!(md, "| Tokens | {} |", format_tokens_short(total_tokens)).unwrap();
     writeln!(
@@ -368,18 +604,18 @@ pub fn generate_markdown_report_for_provider(
             markdown_escape(&routing.diagnosis)
         )
         .unwrap();
-        writeln!(
-            md,
-            "Estimated reroute savings: {}\n",
+        let routing_savings = if routing.savings_estimate_available {
             format_cost(routing.estimated_savings_if_rerouted)
-        )
-        .unwrap();
+        } else {
+            "Unavailable until cost coverage is exact".to_string()
+        };
+        writeln!(md, "Estimated reroute savings: {routing_savings}\n").unwrap();
 
         if !models.is_empty() {
             writeln!(md, "### Model Distribution\n").unwrap();
             writeln!(md, "| Model | Sessions | Cost |\n|---|---:|---:|").unwrap();
-            for (name, count, cost) in &models {
-                let marker = if model_label_is_fast_capable(name) {
+            for model in &models {
+                let marker = if model_label_is_fast_capable(&model.model) {
                     " ⚡"
                 } else {
                     ""
@@ -387,10 +623,10 @@ pub fn generate_markdown_report_for_provider(
                 writeln!(
                     md,
                     "| {}{} | {} | {} |",
-                    markdown_escape(name),
+                    markdown_escape(&model.model),
                     marker,
-                    count,
-                    format_cost(*cost)
+                    model.session_count,
+                    format_cost(model.total_cost)
                 )
                 .unwrap();
             }
@@ -476,7 +712,9 @@ pub fn generate_markdown_report_for_provider(
                 markdown_escape(&session.model),
                 format_tokens_short(session.total_tokens),
                 format_duration(session.duration_secs),
-                format_cost(session.total_cost)
+                known_session_cost(session)
+                    .map(format_cost)
+                    .unwrap_or_else(|| "Unavailable".to_string())
             )
             .unwrap();
         }
@@ -668,6 +906,48 @@ pub fn generate_html_report(days: Option<i64>, project: Option<&str>) -> String 
     generate_html_report_for_provider(provider, days, project)
 }
 
+pub fn generate_html_report_scoped(
+    provider: Option<&str>,
+    days: Option<i64>,
+    project: Option<&str>,
+) -> String {
+    let active = cc_discord_presence::provider::load_active_provider();
+    let scope = provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| active.as_str());
+    if let Some(provider) = cc_discord_presence::provider::Provider::parse(scope) {
+        return generate_html_report_for_provider(provider, days, project);
+    }
+
+    let d = days.unwrap_or(30);
+    let data = load_report_data(d, project, scope);
+    let coverage = db::summarize_cost_provenance(data.sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
+    let label = match scope {
+        "all" => "All providers",
+        "openai" => "OpenAI API",
+        "anthropic" => "Anthropic API",
+        _ => "Selected provider",
+    };
+    let project_label = project.unwrap_or("All projects");
+    format!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pulse Analytics Report</title><style>body{{margin:0;background:#0b0d10;color:#f5f7fa;font:15px/1.55 Inter,system-ui,sans-serif}}main{{max-width:920px;margin:0 auto;padding:56px 28px}}.kicker{{color:#8ea0b8;text-transform:uppercase;letter-spacing:.12em;font-size:12px}}h1{{font-size:36px;margin:.25rem 0 2rem}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}}.card{{border:1px solid #29313c;border-radius:12px;background:#12161c;padding:18px}}.label{{color:#8ea0b8;font-size:12px}}.value{{font-size:24px;font-weight:700;margin-top:6px}}.note{{margin-top:24px;color:#aab6c5}}code{{color:#d6e2f2}}</style></head><body><main><div class="kicker">Pulse · {label}</div><h1>Analytics Report</h1><div class="grid"><div class="card"><div class="label">Period</div><div class="value">{days} days</div></div><div class="card"><div class="label">Project</div><div class="value">{project}</div></div><div class="card"><div class="label">Sessions</div><div class="value">{sessions}</div></div><div class="card"><div class="label">Tokens</div><div class="value">{tokens}</div></div><div class="card"><div class="label">Cost</div><div class="value">{cost}</div><div class="label">{coverage}</div></div></div><p class="note">Provider-specific recommendations require selecting one subscription provider. Unknown cost remains unavailable rather than being rendered as zero.</p></main></body></html>"#,
+        label = html_escape(label),
+        days = d,
+        project = html_escape(project_label),
+        sessions = data.sessions.len(),
+        tokens = html_escape(&format_tokens_short(data.summary.total_tokens)),
+        cost = html_escape(&format_cost(data.summary.total_cost)),
+        coverage = html_escape(&format_cost_coverage(&coverage)),
+    )
+}
+
 pub fn generate_html_report_for_provider(
     provider: cc_discord_presence::provider::Provider,
     days: Option<i64>,
@@ -681,7 +961,7 @@ pub fn generate_html_report_for_provider(
     use std::fmt::Write as _;
 
     let d = days.unwrap_or(30);
-    let data = load_report_data(d, project);
+    let data = load_report_data(d, project, provider.as_str());
     let sessions = data.sessions;
     let daily = data.daily;
     let summary = data.summary;
@@ -691,7 +971,14 @@ pub fn generate_html_report_for_provider(
     let models = data.models;
 
     let total_sessions = sessions.len();
-    let total_cost: f64 = sessions.iter().map(|s| s.total_cost).sum();
+    let cost_coverage = db::summarize_cost_provenance(sessions.iter().map(|session| {
+        (
+            session.cost_basis,
+            session.cost_source.as_str(),
+            session.known_cost,
+        )
+    }));
+    let total_cost: f64 = sessions.iter().filter_map(known_session_cost).sum();
     let total_tokens: i64 = sessions.iter().map(|s| s.total_tokens).sum();
     let total_input: i64 = sessions
         .iter()
@@ -741,7 +1028,12 @@ pub fn generate_html_report_for_provider(
             let width = stats.cost_share_pct.clamp(0.0, 100.0);
             write!(routing_rows_html, r##"<div class="routing-row"><div class="routing-label-row"><span class="routing-name">{label}</span><span class="routing-share">{share:.1}%</span></div><div class="routing-meta">{sessions} sessions · {avg_cost} avg · {cost}</div><div class="routing-track"><div class="routing-fill" style="width:{width:.1}%"></div></div></div>"##, label = html_escape(label), share = stats.cost_share_pct, sessions = stats.sessions, avg_cost = format_cost(stats.avg_cost_per_session), cost = html_escape(&format_cost(stats.cost)), width = width).unwrap();
         }
-        write!(routing_section_html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div><div class="section-grid" style="margin-top:18px;">{speed_split_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&format_cost(routing.estimated_savings_if_rerouted)), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html, speed_split_html = speed_split_html).unwrap();
+        let routing_savings = if routing.savings_estimate_available {
+            format_cost(routing.estimated_savings_if_rerouted)
+        } else {
+            "Unavailable".to_string()
+        };
+        write!(routing_section_html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div><div class="section-grid" style="margin-top:18px;">{speed_split_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&routing_savings), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html, speed_split_html = speed_split_html).unwrap();
     }
 
     let mut inflections_html = String::new();
@@ -822,7 +1114,7 @@ pub fn generate_html_report_for_provider(
 
     let mut html = String::new();
     html.push_str(&crate::report_template::report_head());
-    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{period_label}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, provider_name = html_escape(provider.display_name()), period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
+    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{cost_coverage}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, provider_name = html_escape(provider.display_name()), period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), cost_coverage = html_escape(&format_cost_coverage(&cost_coverage)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
     let topology_tools_html = if trace_overview.top_tools.is_empty() {
         r#"<div class="empty-state">No traced tool mix yet.</div>"#.to_string()
     } else {
@@ -921,10 +1213,10 @@ fn compute_speed_split(sessions: &[db::HistoricalSession]) -> SpeedSplit {
     for s in sessions {
         if cc_discord_presence::cost::is_fast_capable(&s.model_id) {
             split.fast_sessions += 1;
-            split.fast_cost += s.total_cost;
+            split.fast_cost += known_session_cost(s).unwrap_or(0.0);
         } else {
             split.standard_sessions += 1;
-            split.standard_cost += s.total_cost;
+            split.standard_cost += known_session_cost(s).unwrap_or(0.0);
         }
     }
     split
@@ -960,6 +1252,24 @@ fn format_cost(c: f64) -> String {
     }
 }
 
+fn format_cost_coverage(coverage: &db::CostCoverage) -> String {
+    let basis = match coverage.cost_basis {
+        db::CostBasis::Exact => "Exact",
+        db::CostBasis::Partial => "Partial",
+        db::CostBasis::Estimated => "Estimated (API-equivalent)",
+        db::CostBasis::Unavailable => "Unavailable",
+    };
+    let sources = if coverage.cost_sources.is_empty() {
+        String::new()
+    } else {
+        format!(" · {}", coverage.cost_sources.join(", "))
+    };
+    format!(
+        "{basis} · {}/{} sessions priced{sources}",
+        coverage.priced_sessions, coverage.sessions
+    )
+}
+
 fn format_duration(secs: i64) -> String {
     if secs <= 0 {
         return "—".to_string();
@@ -974,10 +1284,14 @@ fn format_duration(secs: i64) -> String {
 }
 
 fn build_top_sessions(sessions: &[db::HistoricalSession]) -> String {
-    let mut sorted: Vec<_> = sessions.iter().collect();
+    let mut sorted: Vec<_> = sessions
+        .iter()
+        .filter(|session| known_session_cost(session).is_some())
+        .collect();
     sorted.sort_by(|a, b| {
-        b.total_cost
-            .partial_cmp(&a.total_cost)
+        known_session_cost(b)
+            .unwrap_or_default()
+            .partial_cmp(&known_session_cost(a).unwrap_or_default())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let top = &sorted[..sorted.len().min(25)];
@@ -994,7 +1308,7 @@ fn build_top_sessions(sessions: &[db::HistoricalSession]) -> String {
             &s.model,
             s.total_tokens,
             s.duration_secs,
-            s.total_cost,
+            known_session_cost(s).unwrap_or_default(),
         ));
     }
     html.push_str("</table></div>");
@@ -1030,29 +1344,30 @@ fn model_label_is_fast_capable(model_label: &str) -> bool {
     cc_discord_presence::cost::is_fast_capable(&normalized)
 }
 
-fn build_model_table(models: &[(String, i64, f64)], total: usize) -> String {
+fn build_model_table(models: &[db::ModelStat], total: usize) -> String {
     if models.is_empty() {
         return String::new();
     }
     let mut html = String::from(
         r#"<div class="card"><h2>Model Routing Analysis</h2><table><tr><th>Model</th><th>Sessions</th><th>Share</th><th style="text-align:right">Cost</th></tr>"#,
     );
-    for (m, count, cost) in models {
+    for model in models {
         let pct = if total > 0 {
-            (*count as f64 / total as f64) * 100.0
+            (model.session_count as f64 / total as f64) * 100.0
         } else {
             0.0
         };
-        let fast_tag = if model_label_is_fast_capable(m) {
+        let fast_tag = if model_label_is_fast_capable(&model.model) {
             r#"<span class="fast-tag">⚡ Fast</span>"#
         } else {
             ""
         };
         html.push_str(&format!(
             "<tr><td>{name}{fast_tag}</td><td class=\"num\">{count}</td><td class=\"num\">{pct:.0}%</td><td class=\"cost\">{cost}</td></tr>",
-            name = html_escape(m),
+            name = html_escape(&model.model),
             fast_tag = fast_tag,
-            cost = format_cost(*cost)
+            count = model.session_count,
+            cost = format_cost(model.total_cost)
         ));
     }
     html.push_str("</table></div>");
@@ -1485,6 +1800,18 @@ mod tests {
     }
 
     #[test]
+    fn homogeneous_estimated_costs_remain_estimated() {
+        assert_eq!(
+            merge_cost_basis(db::CostBasis::Estimated, db::CostBasis::Estimated),
+            db::CostBasis::Estimated
+        );
+        assert_eq!(
+            merge_cost_basis(db::CostBasis::Exact, db::CostBasis::Estimated),
+            db::CostBasis::Partial
+        );
+    }
+
+    #[test]
     fn database_session_project_and_model_fields_are_inert_html() {
         let row = render_session_row(1, HOSTILE, HOSTILE, 42, 60, 0.25);
         assert_inert(&row);
@@ -1496,6 +1823,9 @@ mod tests {
         let project = db::ProjectStat {
             project: HOSTILE.to_string(),
             session_count: 1,
+            priced_sessions: 1,
+            cost_basis: db::CostBasis::Exact,
+            cost_sources: vec!["fixture".to_string()],
             total_cost: 0.25,
             total_tokens: 42,
             avg_session_cost: 0.25,
@@ -1510,6 +1840,35 @@ mod tests {
         let daily = std::collections::BTreeMap::from([(HOSTILE.to_string(), 0.25)]);
         let daily_chart = build_daily_cost_svg(&daily);
         assert_inert(&daily_chart);
+    }
+
+    #[test]
+    fn top_sessions_never_promote_unavailable_raw_cost() {
+        let exact = db::HistoricalSession {
+            project: "priced".into(),
+            model: "gpt-5.6".into(),
+            total_cost: 2.5,
+            known_cost: Some(2.5),
+            cost_basis: db::CostBasis::Exact,
+            cost_source: "session-calculated".into(),
+            ..db::HistoricalSession::default()
+        };
+        let unavailable = db::HistoricalSession {
+            project: "unpriced".into(),
+            model: "gpt-5.6".into(),
+            total_cost: 99.0,
+            known_cost: None,
+            cost_basis: db::CostBasis::Unavailable,
+            cost_source: "unknown".into(),
+            ..db::HistoricalSession::default()
+        };
+
+        let html = build_top_sessions(&[exact, unavailable]);
+
+        assert!(html.contains("priced"));
+        assert!(html.contains("$2.50"));
+        assert!(!html.contains("unpriced"));
+        assert!(!html.contains("$99.00"));
     }
 
     #[test]
