@@ -11,11 +11,10 @@
   } from "../lib/stores";
   import { provider, providerProfile, setProvider, PROVIDERS, type Provider } from "../lib/provider";
   import { planLabelForKey, planOptionsFor } from "../lib/plans";
-  import { setPlanOverride, exportAllData, clearHistory, getDbSize, getPlanInfo, getAnalyticsSummary } from "../lib/api";
+  import { setPlanOverride, exportAllData, clearHistory, getDbSize, getPlanInfo, getAnalyticsSummary, getAppSettings, setCloseToTray } from "../lib/api";
   import type { AnalyticsSummary } from "../lib/api";
   import PulseMark from "../components/PulseMark.svelte";
   import Select from "../components/Select.svelte";
-  import DataSourceInspector from "../components/DataSourceInspector.svelte";
   import IconDownload from "@tabler/icons-svelte/icons/download";
   import IconRefresh from "@tabler/icons-svelte/icons/refresh";
   import IconTrash from "@tabler/icons-svelte/icons/trash";
@@ -37,6 +36,30 @@
   let planGeneration = 0;
   let analyticsGeneration = 0;
   let planMutation: Promise<void> = Promise.resolve();
+
+  let closeToTray = $state(true);
+  let closeToTraySaving = $state(false);
+
+  onMount(() => {
+    getAppSettings()
+      .then((settings) => { closeToTray = settings.close_to_tray; })
+      .catch(() => {});
+  });
+
+  async function handleCloseToTray(next: boolean): Promise<void> {
+    if (next === closeToTray || closeToTraySaving) return;
+    const previous = closeToTray;
+    closeToTray = next;
+    closeToTraySaving = true;
+    try {
+      await setCloseToTray(next);
+    } catch (error) {
+      closeToTray = previous;
+      addToast(`Could not save the close preference: ${String(error)}`, "danger", 4000);
+    } finally {
+      closeToTraySaving = false;
+    }
+  }
 
   $effect(() => {
     if (!$planInfo) return;
@@ -331,6 +354,28 @@
           >Light</button>
         </div>
       </div>
+
+      <div class="rail-ctrl">
+        <span class="rail-k">Window close</span>
+        <div class="theme-toggle" role="radiogroup" aria-label="Window close behavior">
+          <button
+            type="button"
+            class="theme-opt"
+            class:active={closeToTray}
+            aria-pressed={closeToTray}
+            disabled={closeToTraySaving}
+            onclick={() => handleCloseToTray(true)}
+          >Minimize to tray</button>
+          <button
+            type="button"
+            class="theme-opt"
+            class:active={!closeToTray}
+            aria-pressed={!closeToTray}
+            disabled={closeToTraySaving}
+            onclick={() => handleCloseToTray(false)}
+          >Quit</button>
+        </div>
+      </div>
     </div>
     {#if settingsError}
       <div class="settings-error" role="alert">{settingsError}</div>
@@ -421,8 +466,6 @@
       {/if}
     </section>
   </div>
-
-  <DataSourceInspector />
 
   <div class="meta-strip">
     <div class="meta-cell">

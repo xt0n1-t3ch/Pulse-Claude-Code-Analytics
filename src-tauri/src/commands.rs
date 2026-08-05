@@ -96,8 +96,12 @@ fn observe_access_notifications(
     };
     let provider_name = provider.as_str();
     // Native notifications are intentionally limited to genuine quota-reset
-    // edges. Health, threshold, Discord, stale, cache, and unproved samples
-    // remain diagnostics in the access snapshot and never become alerts.
+    // edges. Provider health, quota thresholds, and Discord connectivity are
+    // observed at the 5-second poll cadence on signals that legitimately flap
+    // (a "pending" account read, a percentage hovering at a threshold, a
+    // reconnecting IPC), so alerting on each transition spams the user with
+    // duplicate, incoherent toasts. They stay diagnostics in the access
+    // snapshot and never become native alerts.
     let now = chrono::Utc::now();
     if route.availability != AccessAvailability::Available
         || route.freshness != AccessFreshness::Fresh
@@ -420,11 +424,15 @@ fn claude_route_from_probe(
     let route = match usage.as_ref() {
         Some(usage) => {
             let mut source = subscription_source("claude", detected_plan_key.clone());
-            if usage_mgr
+            let origin_is_oauth = usage_mgr
                 .last_usage_origin()
-                .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth))
-            {
+                .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth));
+            if origin_is_oauth {
                 source.proof = AccessProof::QuotaResponse;
+            } else if usage_mgr.has_valid_oauth_credentials() {
+                // Numbers came from Pulse's local cache, but the account is still
+                // authenticated — report authenticated rather than signed out.
+                source.proof = AccessProof::AuthenticatedProbe;
             }
             claude_route_from_usage(
                 source,
@@ -454,9 +462,15 @@ fn trusted_claude_usage(
     usage_mgr: &mut UsageManager,
 ) -> Option<cc_discord_presence::usage::UsageData> {
     let usage = usage_mgr.get_usage();
-    let authenticated = usage_mgr
+    let origin_is_oauth = usage_mgr
         .last_usage_origin()
         .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth));
+    // Pulse's own short-lived usage cache is written only from a live OAuth 200,
+    // so it stays trustworthy while the same account's credentials remain valid.
+    // Only a fully unauthenticated read — no OAuth origin and no unexpired token
+    // — is dropped, which keeps a missing/expired credential at "sign in
+    // required" instead of collapsing a validly signed-in account to it.
+    let authenticated = origin_is_oauth || usage_mgr.has_valid_oauth_credentials();
     usage.filter(|_| authenticated)
 }
 
@@ -1043,11 +1057,15 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
                         Some(usage) => {
                             let mut source =
                                 subscription_source("claude", detected_plan_key.clone());
-                            if usage_mgr
+                            let origin_is_oauth = usage_mgr
                                 .last_usage_origin()
-                                .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth))
-                            {
+                                .is_some_and(|origin| matches!(origin.auth, UsageAuth::OAuth));
+                            if origin_is_oauth {
                                 source.proof = crate::access::AccessProof::QuotaResponse;
+                            } else if usage_mgr.has_valid_oauth_credentials() {
+                                // Cached numbers from a prior OAuth read, but the
+                                // account is still authenticated — not signed out.
+                                source.proof = crate::access::AccessProof::AuthenticatedProbe;
                             }
                             claude_route_from_usage(
                                 source,
@@ -3050,6 +3068,16 @@ pub fn set_active_provider(provider: String) -> Result<(), String> {
     // session — re-read them only after persistence succeeds.
     seed_discord_state_for(provider);
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_app_settings() -> crate::app_settings::AppSettings {
+    crate::app_settings::load()
+}
+
+#[tauri::command]
+pub fn set_close_to_tray(enabled: bool) -> Result<crate::app_settings::AppSettings, String> {
+    crate::app_settings::set_close_to_tray(enabled).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -5133,8 +5161,9 @@ mod tests {
         super::observe_access_notifications(None, Some(&store), Provider::Claude, &healthy);
         assert!(store.list_all(Some(20)).expect("baseline rows").is_empty());
 
-        // A recent cache can be displayable but has no provider proof. It must
-        // not replace the authenticated baseline or emit quota/health alerts.
+        // A displayable cache with no provider proof (or an unavailable route)
+        // must not emit a native quota or health alert at the poll cadence —
+        // only genuine quota-reset edges do.
         let mut cached = healthy.clone();
         cached.source.proof = AccessProof::None;
         cached.provenance = AccessProvenance::MemoryCache;
@@ -5151,15 +5180,12 @@ mod tests {
         super::observe_access_notifications(None, Some(&store), Provider::Claude, &cached);
         assert!(store.list_all(Some(20)).expect("cached rows").is_empty());
 
-        // A later unavailable route remains structured diagnostics. Native
-        // health alerts are intentionally retired; only reset transitions emit.
         let unavailable = AccessRouteSnapshot::unavailable(
             subscription_source("claude", None),
             "no credentials — check .credentials.json",
         );
         super::observe_access_notifications(None, Some(&store), Provider::Claude, &unavailable);
-        let rows = store.list_all(Some(20)).expect("edge rows");
-        assert!(rows.is_empty());
+        assert!(store.list_all(Some(20)).expect("edge rows").is_empty());
     }
 
     #[test]

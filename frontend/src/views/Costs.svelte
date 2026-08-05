@@ -401,11 +401,36 @@
 
   let costChartConfig: ChartConfiguration = {
     type: "bar",
-    data: { labels: [], datasets: [{ data: [], backgroundColor: () => themeColor("--chart-1"), borderRadius: 6, maxBarThickness: 40 }] },
+    data: { labels: [], datasets: [{
+      data: [],
+      backgroundColor: () => themeColor("--chart-1"),
+      hoverBackgroundColor: () => themeColor("--accent"),
+      borderRadius: 6,
+      borderSkipped: false,
+      maxBarThickness: 34,
+      barPercentage: 0.86,
+      categoryPercentage: 0.82,
+    }] },
     options: {
       responsive: true, maintainAspectRatio: false, indexAxis: "y",
-      scales: { x: { grid: { color: () => themeColor("--border") }, ticks: { callback: (v: any) => "$" + Number(v).toFixed(2), maxTicksLimit: 6 } }, y: { grid: { display: false } } },
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c: any) => fmtCost(c.raw as number) } } },
+      layout: { padding: { right: 10 } },
+      animation: { duration: 320 },
+      scales: {
+        x: {
+          border: { display: false },
+          grid: { color: () => themeColor("--divider"), drawTicks: false },
+          ticks: { callback: (v: any) => "$" + Number(v).toFixed(2), maxTicksLimit: 6, padding: 6 },
+        },
+        y: { border: { display: false }, grid: { display: false }, ticks: { padding: 6 } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          padding: 10,
+          displayColors: false,
+          callbacks: { label: (c: any) => fmtCost(c.raw as number) },
+        },
+      },
     },
   };
 
@@ -419,7 +444,7 @@
   <div class="view-header">
     <div>
       <h2 class="view-title">Usage &amp; cost</h2>
-      <p class="view-subtitle">Subscription value ledger</p>
+      <p class="view-subtitle">Real spend and API-equivalent value, priced from your own sessions.</p>
     </div>
     <div class="filters">
       <!-- Explicit handler rather than `bind:value`: the selection drives a
@@ -450,9 +475,9 @@
     <section class="value-ledger" aria-label="Subscription value ledger">
       <header class="ledger-head">
         <div>
-          <span class="ledger-eyebrow">30-day subscription value</span>
-          <h3>Subscription value ledger</h3>
-          <p>Your usage stays visible even when a provider doesn't report exact spend.</p>
+          <span class="ledger-eyebrow">Last 30 days · API-equivalent value</span>
+          <h3>What your subscription usage is worth</h3>
+          <p>Token-for-token value of your Claude and Codex sessions at pay-as-you-go API rates — measured from real usage, even when a provider doesn't report exact spend.</p>
         </div>
         <span
           class="coverage-pill"

@@ -2,6 +2,65 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.7.1] - 2026-08-04
+
+Pulse 1.7.1 corrects the Claude subscription route so a validly signed-in
+account is no longer reported as signed out, resolves a design-QA punch-list
+across the Dashboard, Sessions, Context, Costs, and Reports views, and hardens
+the desktop lifecycle (single-instance, close-to-tray, and notifications).
+
+### Added
+
+- A "Window close" preference in Settings ("Minimize to tray" / "Quit",
+  default minimize) that controls whether closing the window hides Pulse to the
+  system tray or exits the app.
+
+### Fixed
+
+- Claude subscription access no longer collapses to "Sign in required" when
+  valid, unexpired OAuth credentials are present but the current figures are
+  served from Pulse's own short-lived usage cache. Cached usage written by a
+  prior authenticated read is now trusted while the account's credentials
+  remain valid: the route reports as authenticated and surfaces its cached
+  quota windows instead of hiding the whole provider. A missing or expired
+  credential still resolves to "Sign in required" as before.
+- The Sessions history date-range window (Today / 7 / 30 / 90 / 365 days) now
+  composes with the advanced From/To/Min $/Model filters instead of being
+  dropped whenever an advanced filter was set.
+- Reports "Download HTML" now saves via an in-browser blob download instead of
+  the native save dialog, so a report can be saved to any location (previously
+  a path outside the `$HOME`/`$DOWNLOAD`/`$DOCUMENT`/`$DESKTOP` scope failed).
+- The Dashboard "Activity by hour" heatmap no longer overflows its panel; it now
+  spans its own full-width row instead of a fixed minimum that could not shrink.
+- The single-instance plugin is registered before all other plugins, and a
+  launching Pulse GUI reaps any stray CLI / dev-bridge poller so only one
+  process writes analytics and drives Discord presence in the background.
+- The system-tray icon now restores the window on a single left-click as well as
+  a double-click.
+- Native notifications stay limited to genuine quota-reset edges. Provider
+  health, quota thresholds, and Discord connectivity are polled every few
+  seconds on signals that legitimately flap (a pending account read, a
+  percentage hovering at a threshold, a reconnecting IPC), so alerting on each
+  transition produced duplicate, incoherent toasts; those remain diagnostics
+  only. Quota-reset copy is now human-readable (clean provider/window names and
+  a friendly local reset time instead of internal ids and a raw timestamp), and
+  a one-time cleanup dismisses any previously recorded spurious alerts.
+
+### Changed
+
+- The Dashboard "Live workspace" section header now uses the shared
+  section-eyebrow treatment (matching "This session" and "At a glance") instead
+  of a heading that rendered smaller than — and competed with — the session
+  name beneath it.
+- Context-window utilization bars use a single green / yellow / red semantic
+  scale (healthy headroom → filling → near limit), shared by the per-session
+  bars and the hero badge.
+- The Costs "Subscription value ledger" heading and description were rewritten
+  from generic copy to describe the API-equivalent value it presents; the data
+  was already real and is unchanged.
+- The Costs "Cost by project" chart was refined (fully rounded bars, tighter
+  spacing, hover state, cleaner axes).
+
 ## [1.7.0] - 2026-08-01
 
 Pulse 1.7.0 adds provider-neutral authenticated access routes, freshness-aware

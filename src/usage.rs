@@ -596,6 +596,19 @@ impl UsageManager {
             .map(|c| c.claude_ai_oauth.access_token.clone())
     }
 
+    /// True when on-disk OAuth credentials are present and not expired.
+    ///
+    /// This is proof of authentication that is independent of whether the most
+    /// recent usage figures came from a live API read or from the short-lived
+    /// local cache. Consumers use it so a validly signed-in account that is
+    /// momentarily served cached numbers is not mislabelled "sign in required".
+    pub fn has_valid_oauth_credentials(&mut self) -> bool {
+        self.ensure_credentials();
+        self.credentials
+            .as_ref()
+            .is_some_and(|c| c.claude_ai_oauth.expires_at > Utc::now().timestamp_millis())
+    }
+
     pub fn subscription_type(&mut self) -> Option<String> {
         if self.subscription_type_cache.is_some() {
             return self.subscription_type_cache.clone();

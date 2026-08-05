@@ -386,6 +386,18 @@ export function setActiveProvider(provider: string): Promise<void> {
     return invoke("set_active_provider", { provider });
 }
 
+export interface AppSettings {
+    close_to_tray: boolean;
+}
+
+export function getAppSettings(): Promise<AppSettings> {
+    return invoke("get_app_settings");
+}
+
+export function setCloseToTray(enabled: boolean): Promise<AppSettings> {
+    return invoke("set_close_to_tray", { enabled });
+}
+
 export function getProviderCopy(): Promise<ProviderCopyInfo> {
     return invoke("get_provider_copy");
 }

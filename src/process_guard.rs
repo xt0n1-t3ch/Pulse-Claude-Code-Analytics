@@ -154,6 +154,33 @@ pub fn inspect_running_instance() -> Result<RunningState> {
     }
 }
 
+/// Terminate stray background analytics pollers that would double-poll
+/// alongside a running Pulse GUI: the standalone `cc-discord-presence` CLI and
+/// the debug-only `pulse-dev-bridge`. Pulse is the single source of truth for
+/// the analytics database and Discord presence, so a second producer writing
+/// the same store is the primary cause of "duplicate background instances".
+///
+/// Best-effort and by exact executable name — the Pulse GUI (`Pulse.exe`) is
+/// never a target, so this cannot terminate the caller. Failures are ignored.
+#[cfg(windows)]
+pub fn reap_stray_pollers() {
+    for name in ["cc-discord-presence.exe", "pulse-dev-bridge.exe"] {
+        let _ = crate::util::silent_command("taskkill")
+            .arg("/F")
+            .arg("/IM")
+            .arg(name)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// No-op on non-Windows: Pulse ships as a Windows desktop app, and matching CLI
+/// pollers by name off-Windows risks colliding with the caller's own command
+/// line (the repository itself is named `cc-discord-presence`).
+#[cfg(not(windows))]
+pub fn reap_stray_pollers() {}
+
 fn wait_for_lock(timeout: Duration) -> Result<Option<InstanceGuard>> {
     let deadline = Instant::now() + timeout;
     loop {

@@ -303,6 +303,7 @@ fn dispatch(target: &BridgeTarget) -> Result<String, DispatchError> {
         "get_discord_user" => serialize(crate::commands::get_discord_user()),
         "get_plan_info" => serialize(crate::commands::get_plan_info()),
         "get_active_provider" => serialize(crate::commands::get_active_provider()),
+        "get_app_settings" => serialize(crate::commands::get_app_settings()),
         "get_provider_copy" => serialize(crate::commands::get_provider_copy()),
         "get_notifications" => crate::commands::get_notifications(target.notification_limit)
             .map_err(DispatchError::Unavailable)
@@ -534,6 +535,12 @@ fn dispatch(target: &BridgeTarget) -> Result<String, DispatchError> {
             .and_then(serialize),
         "set_active_provider" => {
             crate::commands::set_active_provider(required(target.provider.clone(), "provider")?)
+                .map_err(DispatchError::Unavailable)
+                .and_then(serialize)
+        }
+        "set_close_to_tray" => {
+            let enabled = required(target.enabled, "enabled")?;
+            crate::commands::set_close_to_tray(enabled)
                 .map_err(DispatchError::Unavailable)
                 .and_then(serialize)
         }

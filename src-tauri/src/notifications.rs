@@ -19,6 +19,11 @@ const TABLE: &str = "pulse_notifications";
 const DEDUPE_TABLE: &str = "pulse_notification_state";
 const MIGRATION_TABLE: &str = "pulse_notification_migrations";
 const LEGACY_RESET_MIGRATION: &str = "dismiss_legacy_quota_reset_rows_v2";
+/// One-time cleanup of provider-health / quota-threshold / Discord-connectivity
+/// rows written by a build that alerted on every poll-cadence transition. Those
+/// kinds are no longer emitted natively, so every existing row is spam; dismiss
+/// them (keep for audit) so the bell and native toasts start clean.
+const SPURIOUS_ALERT_MIGRATION: &str = "dismiss_spurious_poll_cadence_alerts_v1";
 const MAX_DISPLAY_TEXT_CHARS: usize = 240;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -165,6 +170,40 @@ impl<'conn> NotificationStore<'conn> {
                 params![LEGACY_RESET_MIGRATION, Utc::now().to_rfc3339()],
             )?;
         }
+
+        let spurious_applied: Option<String> = transaction
+            .query_row(
+                &format!("SELECT migration FROM {MIGRATION_TABLE} WHERE migration = ?1"),
+                [SPURIOUS_ALERT_MIGRATION],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if spurious_applied.is_none() {
+            transaction.execute(
+                &format!(
+                    "UPDATE {TABLE}
+                     SET dismissed_at = COALESCE(dismissed_at, ?1)
+                     WHERE kind IN ('provider_health', 'quota_threshold', 'discord_connectivity')"
+                ),
+                [Utc::now().to_rfc3339()],
+            )?;
+            transaction.execute(
+                &format!(
+                    "DELETE FROM {DEDUPE_TABLE}
+                     WHERE dedupe_key LIKE 'provider_health:%'
+                        OR dedupe_key LIKE 'quota_threshold:%'
+                        OR dedupe_key LIKE 'discord_connectivity:%'"
+                ),
+                [],
+            )?;
+            transaction.execute(
+                &format!(
+                    "INSERT INTO {MIGRATION_TABLE} (migration, applied_at)
+                     VALUES (?1, ?2)"
+                ),
+                params![SPURIOUS_ALERT_MIGRATION, Utc::now().to_rfc3339()],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -290,20 +329,24 @@ impl<'conn> NotificationStore<'conn> {
             }
             _ => return Ok(None),
         };
+        let display_provider = humanize_provider(&provider);
+        let display_window = humanize_window(window);
         let spec = NotificationSpec {
             kind: NotificationKind::QuotaReset,
             provider: provider.to_string(),
             key: window.to_string(),
-            title: format!("{provider} quota reset"),
+            title: format!("{display_provider} limit reset"),
             body: reset_at
                 .map(|reset| {
                     format!(
-                        "{provider} {window} quota reset observed; next reset at {}",
-                        reset.to_rfc3339()
+                        "Your {display_provider} {display_window} limit just reset. Next reset {}.",
+                        humanize_reset_at(reset)
                     )
                 })
-                .unwrap_or_else(|| format!("{provider} {window} quota reset")),
-            action: Some("Open quota details".to_string()),
+                .unwrap_or_else(|| {
+                    format!("Your {display_provider} {display_window} limit just reset.")
+                }),
+            action: Some("View quota details".to_string()),
         };
         let key = format!("quota_reset:{provider}:{window}");
         self.observe_with_key(
@@ -685,6 +728,44 @@ fn claude_reset_transition(previous: &str, current: &str) -> bool {
     previous == "used" && current == "zero"
 }
 
+/// Present a provider id as a clean, capitalized name for notification copy.
+fn humanize_provider(provider: &str) -> String {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "claude" => "Claude".to_string(),
+        "codex" => "Codex".to_string(),
+        "openai" => "OpenAI".to_string(),
+        "anthropic" => "Anthropic".to_string(),
+        other if !other.is_empty() => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => "Provider".to_string(),
+            }
+        }
+        _ => "Provider".to_string(),
+    }
+}
+
+/// Turn an internal window key into readable notification copy.
+fn humanize_window(window: &str) -> String {
+    match window.trim().to_ascii_lowercase().as_str() {
+        "five_hour" => "5-hour".to_string(),
+        "weekly" => "weekly".to_string(),
+        "sonnet_free" | "sonnet" => "Sonnet".to_string(),
+        "" => "usage".to_string(),
+        other => other.replace('_', " "),
+    }
+}
+
+/// A friendly local reset timestamp, e.g. "Aug 07, 10:39 PM" — never the raw
+/// RFC3339 string with microseconds and offset.
+fn humanize_reset_at(reset: DateTime<Utc>) -> String {
+    reset
+        .with_timezone(&chrono::Local)
+        .format("%b %d, %I:%M %p")
+        .to_string()
+}
+
 fn fingerprint_from_spec(spec: &NotificationSpec) -> String {
     format!(
         "{}\u{0}{}\u{0}{}",
@@ -1062,7 +1143,8 @@ mod tests {
             )
             .unwrap()
             .expect("reset edge");
-        assert!(reset_record.body.contains("next reset at"));
+        assert!(reset_record.body.contains("just reset"));
+        assert!(reset_record.body.contains("Next reset"));
     }
 
     #[test]

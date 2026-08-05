@@ -156,23 +156,21 @@
     try {
       const html = await generateHtmlReport(days, undefined, $selectedAnalyticsProviderScope);
       const stamp = new Date().toISOString().slice(0, 10);
-      const defaultName = `pulse-report-${stamp}.html`;
 
-      // Native OS save dialog so the user picks where the file lands instead
-      // of always defaulting to ~/Downloads.
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-
-      const path = await save({
-        defaultPath: defaultName,
-        filters: [{ name: "HTML Report", extensions: ["html"] }],
-        title: "Save Pulse report",
-      });
-
-      if (!path) return;
-
-      await writeTextFile(path, html);
-      addToast(`Saved to ${path}`, "success", 3500);
+      // Blob download (same mechanism as CSV export) instead of the native
+      // dialog + fs.writeTextFile: the OS save dialog lets the user pick any
+      // path, but writeTextFile is denied outside the fs:scope roots
+      // ($HOME/$DOWNLOAD/$DOCUMENT/$DESKTOP) — e.g. any D:\ path — which
+      // surfaced as "Download failed". A blob download needs no fs grant and
+      // works in both the packaged webview and browser review.
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `pulse-report-${stamp}.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast("Report downloaded.", "success", 3000);
     } catch (err) {
       addToast(`Download failed: ${String(err)}`, "danger", 4000);
     }

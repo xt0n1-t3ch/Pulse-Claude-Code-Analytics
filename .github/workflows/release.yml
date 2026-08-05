@@ -1,8 +1,10 @@
 name: Release
 
+# Releases are built and published locally (see scripts/release-local.ps1) to
+# keep GitHub Actions minutes for essentials only. This workflow is kept as a
+# manual fallback and never runs automatically on a tag push.
 on:
-  push:
-    tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
