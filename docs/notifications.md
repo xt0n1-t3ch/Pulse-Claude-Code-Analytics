@@ -51,6 +51,19 @@ commit, then records its marker in the same transaction; genuine transitions
 inserted afterward remain visible. This prevents timestamp-only false resets
 from resurfacing while keeping the complete audit trail.
 
+A later one-time migration, `dismiss_spurious_poll_cadence_alerts_v1`, dismisses
+every `provider_health`, `quota_threshold`, and `discord_connectivity` row and
+clears their dedupe state. A prior build briefly promoted those poll-cadence
+diagnostics to native alerts, which spammed duplicate, incoherent toasts because
+the underlying signals legitimately flap (a pending account read, a percentage
+hovering at a threshold, a reconnecting IPC). The migration lets the bell and
+native delivery start clean; the observers stay callable but the poller does not
+emit them.
+
+Reset copy is human-readable: a clean, capitalized provider name, a friendly
+window label (for example `5-hour`, `weekly`, `Sonnet`), and a local reset time
+such as `Aug 07, 10:39 PM` — never an internal id or a raw RFC3339 timestamp.
+
 ## Tauri and tray
 
 `tauri-plugin-notification` is registered by the desktop entrypoint and routes
