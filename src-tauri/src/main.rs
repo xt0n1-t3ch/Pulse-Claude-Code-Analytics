@@ -114,10 +114,19 @@ fn create_or_show_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "quit" => app.exit(0),
             _ => {}
         })
-        .on_tray_icon_event(|tray, event| {
-            if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+        .on_tray_icon_event(|tray, event| match event {
+            // Restore on a single left-click (the common Windows gesture) as
+            // well as a double-click; show_window is idempotent so the extra
+            // Click emitted during a double-click is harmless.
+            tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            }
+            | tauri::tray::TrayIconEvent::DoubleClick { .. } => {
                 show_window(tray.app_handle());
             }
+            _ => {}
         })
         .build(app)?;
     refresh_tray_presentation(app);
@@ -131,6 +140,13 @@ fn main() {
     pulse::dev_bridge::spawn();
 
     tauri::Builder::default()
+        // Register single-instance FIRST, before every other plugin and the
+        // poller. A second launch is consumed by the plugin and routed to the
+        // existing window, so it cannot briefly initialize other plugins or
+        // spin up a duplicate analytics/notification producer.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         // Native Windows/macOS/Linux notifications are delivered by the
@@ -142,13 +158,16 @@ fn main() {
         // sending the user to the GitHub releases page.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        // Register single-instance before setup starts the poller. A second
-        // launch is consumed by the plugin and routed to the existing window,
-        // so it cannot create a duplicate analytics/notification producer.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_window(app);
-        }))
         .setup(|app| {
+            // Load persisted preferences into their synchronous mirror before
+            // the window can emit a close event.
+            pulse::app_settings::init();
+            // A running Pulse GUI owns the analytics DB and Discord presence
+            // outright. Reap any stray CLI / dev-bridge poller so nothing
+            // double-writes in the background. Release-only: the dev
+            // browser-review flow intentionally runs the standalone bridge.
+            #[cfg(not(debug_assertions))]
+            cc_discord_presence::process_guard::reap_stray_pollers();
             commands::start_background_poller(app.handle().clone());
             commands::refresh_usage();
             let tray_app = app.handle().clone();
@@ -194,6 +213,8 @@ fn main() {
             commands::get_active_provider,
             commands::get_provider_copy,
             commands::set_active_provider,
+            commands::get_app_settings,
+            commands::set_close_to_tray,
             commands::get_session_history,
             commands::get_session_history_filtered,
             commands::get_sessions_by_hour_range,
@@ -232,6 +253,12 @@ fn main() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !pulse::app_settings::close_to_tray_enabled() {
+                    // Preference is "quit on close": exit the whole app so no
+                    // poller/thread lingers in the background.
+                    window.app_handle().exit(0);
+                    return;
+                }
                 api.prevent_close();
                 match create_or_show_tray(window.app_handle()) {
                     Ok(()) => {

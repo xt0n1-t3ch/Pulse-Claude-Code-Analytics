@@ -139,10 +139,13 @@
     if (activeIds.length > 0) void loadBreakdowns(activeIds);
   }
 
+  // Three-tier semantic for context-window utilization: green = healthy
+  // headroom (positive), yellow = filling up (neutral/caution), red = near the
+  // window limit / autocompact (negative). Bars and the hero badge share this
+  // exact scale so a session never reads two different colors.
   function utilizationColor(pct: number): string {
-    if (pct >= 95) return "var(--danger)";
-    if (pct >= 80) return "var(--warning)";
-    if (pct >= 50) return "var(--info)";
+    if (pct >= 85) return "var(--danger)";
+    if (pct >= 50) return "var(--warning)";
     return "var(--success)";
   }
 
@@ -273,7 +276,7 @@
   ].filter((c) => c.tokens > 0 || c.icon !== "filled") : []);
 
   let barSegs = $derived<{ pct: number; color: string }[]>(ctx ? [
-      { pct: usedPct, color: "var(--info)" },
+      { pct: usedPct, color: utilizationColor(usedPct) },
   ] : []);
 
   let usedBarPct = $derived(barSegs.reduce((s, b) => s + b.pct, 0));
@@ -358,7 +361,7 @@
           <span class="hero-sep">/ {fmtTokens(ctx.context_window)}</span>
           <span class="hero-unit">tokens used</span>
         </div>
-        <div class="hero-pct-badge" class:warn={usedPct >= 70} class:crit={usedPct >= 85}>
+        <div class="hero-pct-badge" class:warn={usedPct >= 50} class:crit={usedPct >= 85}>
           {fmtPct(usedPct)}
         </div>
       </div>

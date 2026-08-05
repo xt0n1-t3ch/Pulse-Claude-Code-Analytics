@@ -1,8 +1,8 @@
 name: Codex upstream freshness
 
+# Manual-only: the weekly cron was removed so scheduled runs stop consuming
+# Actions minutes. Trigger from the Actions tab when an upstream check is wanted.
 on:
-  schedule:
-    - cron: "23 9 * * 1"
   workflow_dispatch:
 
 permissions:

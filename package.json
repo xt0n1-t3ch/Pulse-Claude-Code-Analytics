@@ -1,6 +1,6 @@
 {
   "name": "pulse",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "private": true,
   "description": "Native local-first analytics dashboard for Claude Code and Codex, with Discord Rich Presence.",
   "scripts": {
@@ -14,7 +14,8 @@
     "test:rust": "cargo test --workspace",
     "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
     "fmt:rust": "cargo fmt --all",
-    "fmt:rust:check": "cargo fmt --all -- --check"
+    "fmt:rust:check": "cargo fmt --all -- --check",
+    "verify": "npm run fmt:rust:check && npm run check && npm run lint:rust && npm run test"
   },
   "packageManager": "npm@11.10.1"
 }

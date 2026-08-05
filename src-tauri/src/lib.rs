@@ -1,5 +1,6 @@
 pub mod access;
 pub mod analyzers;
+pub mod app_settings;
 pub mod commands;
 pub mod db;
 /// Debug-only localhost bridge for browser-based UI review. Never compiled

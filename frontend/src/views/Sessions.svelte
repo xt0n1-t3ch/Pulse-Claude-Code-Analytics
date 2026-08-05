@@ -128,7 +128,16 @@
         getAnalyticsSummary(provider),
         useAdvanced
           ? getSessionHistoryFiltered({
-              from_iso: fromDate ? new Date(fromDate).toISOString() : null,
+              // Compose the selected date-range window with the advanced
+              // filters: without an explicit From, fall back to the window
+              // dropdown (Today/7/30/90/365) so e.g. "Last 7 days" + a Model
+              // filter still honors the 7-day window instead of searching all
+              // time. An explicit From always wins.
+              from_iso: fromDate
+                ? new Date(fromDate).toISOString()
+                : historyDays > 0
+                  ? new Date(Date.now() - historyDays * 86_400_000).toISOString()
+                  : null,
               to_iso: toDate ? new Date(toDate + "T23:59:59").toISOString() : null,
               project: projectFilter || null,
               model: modelFilter || null,

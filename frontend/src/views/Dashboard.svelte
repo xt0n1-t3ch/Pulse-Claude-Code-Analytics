@@ -572,8 +572,17 @@
     gap: 18px;
     padding: 20px 22px 17px;
   }
-  .work-now-head h2 { font-size: 19px; letter-spacing: -0.03em; }
-  .work-now-head p { margin-top: 5px; color: var(--text-muted); font-size: 11px; }
+  /* Match the app's section-eyebrow vocabulary (see "This session", "At a
+     glance") so the column label reads as a quiet kicker instead of a heading
+     that competes with — and sits smaller than — the session name below it. */
+  .work-now-head h2 {
+    color: var(--accent);
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .work-now-head p { margin-top: 6px; color: var(--text-muted); font-size: 12px; }
   .analytics-alert {
     display: flex;
     align-items: center;
@@ -740,7 +749,10 @@
   .insight-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }
   .insight-card { min-width: 0; padding: 4px 16px; display: flex; flex-direction: column; border-left: 1px solid var(--divider); }
   .insight-card:first-child { padding-left: 0; border-left: 0; }
-  .heatmap-card { min-width: 260px; }
+  /* The 24-column heatmap needs real width; letting it share an auto-fit track
+     (min 175px) forced a 260px min-width that overran the panel. Give it its own
+     full-width row instead so it can breathe and never overflow. */
+  .heatmap-card { grid-column: 1 / -1; min-width: 0; margin-top: 2px; }
   .heatmap-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 10px; }
 
   .cache-grade { display: flex; align-items: center; gap: 14px; }
