@@ -62,12 +62,13 @@ try {
   }
   $assets += Get-Item -LiteralPath $sums
 
-  $notes = "Pulse $Tag — local build. Download the Windows installer below and run it (per-user, no admin)."
+  $notes = "Pulse $Tag - local build. Download the Windows installer below and run it (per-user, no admin)."
   $ghArgs = @("release", "create", $Tag, "--title", "Pulse $Tag", "--notes", $notes)
   if ($Draft) { $ghArgs += "--draft" }
   $ghArgs += ($assets | ForEach-Object { $_.FullName })
 
-  Write-Host "Publishing GitHub release via gh ($($assets.Count) assets)..." -ForegroundColor Cyan
+  $assetCount = $assets.Count
+  Write-Host "Publishing $assetCount assets to the GitHub release via gh..." -ForegroundColor Cyan
   gh @ghArgs
   Write-Host "Released $Tag" -ForegroundColor Green
 }
