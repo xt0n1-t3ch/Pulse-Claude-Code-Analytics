@@ -2,6 +2,40 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [1.7.2] - 2026-08-12
+
+Pulse 1.7.2 makes local analytics incremental and provenance-correct, removes
+blank route transitions, and promotes the published Codex Presence Core that
+recognizes the Daybreak Blue and Red cyber models.
+
+### Added
+
+- Native `gpt-daybreak-blue-latest` / `GPT-5.6-Cyber-Blue` and
+  `gpt-5.6-cyber` / `GPT-5.6-Cyber-Red` resolution, including aliases and all
+  six observed reasoning-effort tiers without inventing Blue pricing.
+- Versioned active-session checkpoints, bundled dashboard/cost snapshots, and
+  reconciliation fixtures spanning raw JSONL, SQLite, command DTOs, and exports.
+
+### Fixed
+
+- Appended JSONL transcripts now read only their bounded anchor and new bytes;
+  unchanged polls avoid historical body reads, and truncation, replacement,
+  partial-line, and corrupt-checkpoint cases fall back to source safely.
+- Dashboard, Costs, Reports, budgets, and exports distinguish provider-reported
+  billed spend from documented API-equivalent estimates. Unknown values remain
+  unavailable instead of becoming exact dollars or false budget overruns.
+- Static memoized routes, stale-while-revalidate stores, request coalescing, and
+  fingerprinted refreshes prevent blank transitions and redundant backend work.
+- Local publication now selects only exact-version installers, validates a
+  Windows SPDX SBOM, verifies downloaded hashes, and finalizes the release only
+  after the draft asset inventory matches.
+
+### Changed
+
+- Pulse pins `codex-presence-core` 2.0.0 to the immutable Discord Rich Presence
+  `v1.10.2` release at commit `a508507e0849fd5c9e09c7d1c55eebe2d199cfc0`.
+- `@testing-library/user-event` is updated to 14.6.3.
+
 ## [1.7.1] - 2026-08-04
 
 Pulse 1.7.1 corrects the Claude subscription route so a validly signed-in

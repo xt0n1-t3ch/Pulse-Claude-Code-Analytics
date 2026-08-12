@@ -1,59 +1,64 @@
 # Canonical Codex presence core
 
-Pulse consumes Codex telemetry and Rich Presence composition from the standalone [Codex Discord Rich Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence) repository. `codex-presence-core` is the UI-free owner. Pulse owns Tauri integration, analytics persistence, and presentation; it must not recreate parsing or Discord line composition in TypeScript or a second Rust module.
+Pulse consumes Codex telemetry and Rich Presence composition from the
+standalone [Codex Discord Rich Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)
+repository. `codex-presence-core` is the UI-free owner. Pulse owns Tauri
+integration, analytics persistence, and presentation; it must not recreate
+parsing or Discord line composition in TypeScript or a second Rust module.
 
-## Versioned contract
+## Promoted contract
 
-The current consumer is the Pulse **v1.7.0** release candidate. The upstream
-repository is being validated as a **v1.9.0 / `codex-presence-core` 2.0.0**
-candidate; that source is local validation material, not a published tag or
-release. No upstream commit or tag is promotion evidence until the upstream
-owner pushes it and the consumer records the immutable revision.
+Pulse **v1.7.2** consumes `codex-presence-core` **2.0.0** from the immutable
+upstream **v1.10.2** release at commit
+`a508507e0849fd5c9e09c7d1c55eebe2d199cfc0`.
 
-| Surface | Local v1.7.0 candidate | Promotion requirement |
+| Surface | Promoted value | Release proof |
 | --- | --- | --- |
-| Core package | `codex-presence-core` 2.0.0 candidate from upstream v1.9.0 work | Same 2.0.0 package from a published upstream v1.9.0 release |
-| Config schema | 13 | Migration fixtures pass from schema 12 |
-| Pulse database schema | 5 | Migration and query-plan fixtures pass |
-| Development dependency | Git dependency at the candidate revision | Canonical Git URL plus the pushed full 40-character `rev` |
-| Canonical manifest | Candidate metadata only | Core version, release tag, and commit equal the Cargo Git pin |
+| Core package | `codex-presence-core` 2.0.0 | Published upstream v1.10.2 release |
+| Git dependency | Canonical repository plus full `rev` | Cargo manifests and lockfile resolve to the same commit |
+| Canonical manifest | v1.10.2 + exact commit | `src/codex/UPSTREAM.json` matches the Cargo Git pin |
+| Presence config | Schema 13 | Migration fixtures pass |
+| Pulse database | Schema 5 | Migration and query-plan fixtures pass |
 
-The candidate dependency is allowed only while both worktrees are under local
-validation. A Pulse release must fail until the upstream release exists and the
-dependency uses its exact pushed commit SHA. Moving branches, tags without a
-`rev`, and shortened SHAs are not release inputs.
+Branches, shortened SHAs, path dependencies, and unpeeled tag objects are not
+release identities. The release contract requires the exact commit reached by
+the annotated upstream tag.
 
 ## Source and compatibility boundary
 
-The core exports semantic usage snapshots, quota scopes/windows, Credits, service tier, configuration layout, and deterministic Rich Presence composition. Pulse may translate those DTOs into Tauri responses but may not reinterpret positional `primary`/`secondary` limits or infer unavailable provider capabilities.
+The core exports model identity, reasoning effort, semantic usage snapshots,
+quota scopes/windows, Credits, service tier, configuration layout, and
+deterministic Rich Presence composition. Pulse may translate those DTOs into
+Tauri responses but may not reinterpret positional limits, guess unsupported
+pricing, or infer unavailable provider capabilities.
 
-Code still carried under `src/codex/` is migration residue unless it is an
-explicit Pulse adapter. During candidate validation, the upstream manifest is
-an integration record and must not be presented as proof of a published
-release. After promotion it records compatibility with schema 13 and the
-immutable upstream commit; the release gate then checks that manifest against
-Cargo before any bundle is published.
+Files under `src/codex/` are Pulse-owned adapters or compatibility surfaces
+listed in `src/codex/UPSTREAM.json`. The manifest records schema compatibility
+and the immutable upstream identity. `scripts/check-codex-rich-presence-upstream.ps1`
+checks the manifest against the Cargo dependency before a release is accepted.
 
-## Local validation
+## Validation
 
-During the local phase:
+Run the complete local gate before promotion:
 
 ```powershell
-cargo test --workspace
-npm --prefix frontend run check
-npm --prefix frontend run test
+npm run verify
 npm --prefix frontend run build
+pwsh -File scripts/e2e/run-pulse.ps1 -Mode Tauri -RunPlaywright
 ```
 
-The local path is allowed here so canonical and Pulse changes can be validated together without publishing either repository.
+Browser QA uses the authenticated loopback bridge and real local history; the
+Tauri runner uses an isolated profile so it cannot collide with installed
+Pulse. Packaging must then produce exact-version NSIS/MSI installers, a
+validated Windows SPDX SBOM, and a checksum manifest.
 
-## Promotion sequence
+## Future upstream updates
 
-1. Complete local v1.9.0 / `codex-presence-core` 2.0.0 candidate validation and obtain explicit approval.
-2. After the upstream owner publishes the annotated v1.9.0 release, record its full commit SHA.
-3. Replace the candidate dependency with the canonical Git dependency and exact pushed `rev`.
-4. Update the canonical manifest with core 2.0.0, tag v1.9.0, schema compatibility, and the same SHA.
-5. Run the full Pulse gates again, including Windows runtime, migrations, Dark/Light viewports, performance, SPDX SBOM, and checksums.
-6. Only then approve the annotated Pulse v1.7.0 tag.
-
-No tag, pull request, or release is created by the local validation phase.
+1. Publish and verify a new immutable upstream release.
+2. Record its peeled commit in both Cargo manifests and
+   `src/codex/UPSTREAM.json`.
+3. Refresh `Cargo.lock` and bump the Pulse compatibility version.
+4. Run upstream, model, parser, analytics, localhost, Tauri, SBOM, and checksum
+   gates again.
+5. Publish a new Pulse patch or minor release; never move an existing tag or
+   replace an immutable asset.

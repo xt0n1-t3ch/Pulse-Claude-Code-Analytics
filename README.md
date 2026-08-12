@@ -24,11 +24,12 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.0</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.2</h2>
 
-- **Provider-neutral access routes** — authenticated subscription and API paths stay distinct, carry proof and provenance metadata, and fail closed when an API key cannot be verified.
-- **Fresh quota everywhere** — the Dashboard, Live Preview, and Discord presence share freshness-gated provider windows, including sparse windows and Extra Usage metadata.
-- **Typed Codex core** — Pulse consumes the `codex-presence-core` 2.0.0 contract while validating the upstream v1.9.0 candidate locally; exact costs remain partial or unavailable when their source cannot prove them.
+- **Incremental by construction** — unchanged transcripts read no historical body bytes; appends read only their bounded tail anchor and delta, while active-session checkpoints recover safely after restart.
+- **Money with provenance** — provider-billed spend and documented API-equivalent value remain separate through SQLite, dashboards, reports, budgets, and exports; unknown values stay unavailable.
+- **Native Daybreak models** — `gpt-daybreak-blue-latest` and `gpt-5.6-cyber` resolve as GPT-5.6-Cyber-Blue and GPT-5.6-Cyber-Red with six observed reasoning tiers and no invented Blue pricing.
+- **Published typed core** — Pulse pins `codex-presence-core` 2.0.0 to the immutable upstream `v1.10.2` release and its exact Git revision.
 
 <details>
 <summary>Previous v1.6.5 highlights</summary>
@@ -73,7 +74,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 </details>
 
-**[Download v1.7.0](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.7.2](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
@@ -88,11 +89,11 @@ You may pay for Claude Code every month, ChatGPT every month, or both: **Claude 
 - **Provider-aware fix prompts** — every recommendation has a **Copy Fix Prompt** action labeled for the active provider: **Fix with Claude Code** or **Fix with Codex**.
 - **Plan usage limits** — live tracking of the windows each provider actually exposes, including Claude's Sonnet/Extra Usage telemetry and Codex's primary/secondary quota windows.
 - **In-app updates** — startup and 6-hour checks surface stable signed releases; after approval Pulse downloads, installs, and relaunches from inside the app.
-- **Discord Rich Presence** — five-tier reasoning effort, live project / model / branch. Your flow state, on your profile.
+- **Discord Rich Presence** — six-tier reasoning effort, live project / model / branch. Your flow state, on your profile.
 
-**One product, two factual lanes.** Claude sessions keep Anthropic-specific model routing, cache TTL, Extra Usage, and statusline authority. Codex sessions use the canonical GPT catalog and current local App metadata, including **GPT-5.6 Sol / Terra / Luna**, independent reasoning and Standard/Fast modes, and **372K raw / 353.4K usable** context. Unpublished Fast economics or missing cache-write telemetry stay partial or unavailable instead of becoming an invented multiplier.
+**One product, two factual lanes.** Claude sessions keep Anthropic-specific model routing, cache TTL, Extra Usage, and statusline authority. Codex sessions use the canonical GPT catalog and current local App metadata, including **GPT-5.6 Sol / Terra / Luna / Cyber Blue / Cyber Red** with independent reasoning and Standard/Fast modes. Context comes from observed runtime metadata when available and falls back to a documented catalog value only when the runtime is silent. Unpublished Fast economics, missing cache-write telemetry, and unpriced Blue usage stay partial or unavailable instead of becoming invented numbers.
 
-Codex Discord Rich Presence has its own source-of-truth repo: **[xt0n1-t3ch/Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)**. Pulse consumes its typed core through a checked Git dependency; the upstream v1.9.0 / `codex-presence-core` 2.0.0 source is still a local candidate until its immutable pushed revision is recorded. The standalone Rich Presence project keeps its own audience while Pulse owns the Tauri integration and analytics presentation.
+Codex Discord Rich Presence has its own source-of-truth repo: **[xt0n1-t3ch/Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)**. Pulse consumes its typed core through a checked Git dependency pinned to upstream `v1.10.2` at commit `a508507e0849fd5c9e09c7d1c55eebe2d199cfc0`. The standalone Rich Presence project keeps its own audience while Pulse owns the Tauri integration and analytics presentation.
 
 Written in **Rust** + **Tauri 2** + **Svelte 5**. ≈ 12 MB on Windows, ≈ 18 MB on macOS. Cold-starts in under 200 ms. One-click installers for Windows (NSIS + MSI), macOS (DMG — Apple Silicon + Intel), and Linux (deb, rpm, AppImage). Apache-2.0 licensed (attribution required — see [`NOTICE`](NOTICE)). The data never leaves your machine.
 

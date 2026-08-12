@@ -12,11 +12,9 @@ README, docs-index, and changelog version surface, plus
 `src/codex/UPSTREAM.json`'s `compatibility.pulse` pin.
 
 Pulse additionally refuses release when `codex-presence-core` is a path
-dependency. The current consumer targets the local upstream v1.9.0 / core
-2.0.0 candidate. Promotion requires that upstream release to be published,
-then requires the canonical Git URL, a full 40-character pushed `rev`, core
-2.0.0, and a manifest carrying the same SHA. Until that happens, the upstream
-candidate is not a tag, release, or immutable proof.
+dependency. Pulse v1.7.2 consumes core 2.0.0 from the immutable upstream
+`v1.10.2` release at its full 40-character Git revision; the canonical Git
+dependency and `src/codex/UPSTREAM.json` must carry the same SHA.
 
 ## Local verification (replaces CI)
 
@@ -40,7 +38,8 @@ tag, or schedule.
 4. Windows runtime proves single-instance, close-to-tray + Settings toggle,
    semantic weekly-only usage, Credits, field persistence, preview/live Discord
    equivalence, native theme, and narrow resize.
-5. `SHA256SUMS.txt` covers the published installers.
+5. `SHA256SUMS.txt` covers the exact-version installers and validated Windows
+   SPDX SBOM.
 
 ## Build and publish (local)
 
@@ -52,11 +51,13 @@ pwsh -File scripts/release-local.ps1              # build installers + gh releas
 pwsh -File scripts/release-local.ps1 -SkipBuild   # reuse an existing build
 ```
 
-The script builds the frontend + Tauri NSIS/MSI installers, writes
-`SHA256SUMS.txt` under `target/release/bundle/`, and creates the GitHub release
-(tag `vX.Y.Z`) with those assets via the authenticated `gh` CLI. The updater's
-signed `latest.json` is a CI-only concern (the minisign key is a CI secret) and
-is not produced locally; installers are attached for manual download.
+The script builds the frontend + Tauri NSIS/MSI installers, selects only names
+matching the tag version, generates and validates `pulse-windows-x64.spdx.json`,
+and writes `SHA256SUMS.txt` under `target/release/local-release/vX.Y.Z/`. It
+uploads a draft, downloads and hash-checks all four assets, then makes the
+release public. The updater's signed `latest.json` is a CI-only concern (the
+minisign key is a CI secret) and is not produced locally; installers remain
+available for manual download.
 
 Never move a published tag or replace a published asset — publish a new patch
 version when a correction is required.

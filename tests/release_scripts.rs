@@ -126,11 +126,11 @@ fn vendored_windows_polling_commands_use_silent_launcher() {
 
     assert!(
         manifest.contains(r#""schema_version": 3"#)
-            && manifest.contains(r#""canonical_release": "v1.9.0""#)
+            && manifest.contains(r#""canonical_release": "v1.10.2""#)
             && manifest
-                .contains(r#""canonical_commit": "e95e2b1573eb86da945d03412f57b6a18cc28c50""#)
+                .contains(r#""canonical_commit": "a508507e0849fd5c9e09c7d1c55eebe2d199cfc0""#)
             && manifest.contains(r#""mode": "git-rev""#)
-            && manifest.contains(r#""rev": "e95e2b1573eb86da945d03412f57b6a18cc28c50""#)
+            && manifest.contains(r#""rev": "a508507e0849fd5c9e09c7d1c55eebe2d199cfc0""#)
             && manifest.contains(r#""version": "2.0.0""#)
             && manifest.contains(r#""package": "codex-presence-core""#),
         "Pulse must declare the promoted immutable core contract"
@@ -416,6 +416,141 @@ fn release_assets_publish_a_signed_updater_manifest_for_every_platform() {
 }
 
 #[test]
+fn local_release_assets_select_only_the_exact_tag_version() {
+    let fixture = TempDir::new().expect("fixture");
+    let bundle = fixture.path().join("bundle");
+    let output = fixture.path().join("publication/v1.7.2");
+    write(bundle.join("nsis/Pulse_1.7.1_x64-setup.exe"), "stale exe");
+    write(bundle.join("msi/Pulse_1.7.1_x64_en-US.msi"), "stale msi");
+    write(bundle.join("nsis/Pulse_1.7.2_x64-setup.exe"), "current exe");
+    write(bundle.join("msi/Pulse_1.7.2_x64_en-US.msi"), "current msi");
+    write(
+        bundle.join("pulse-windows-x64.spdx.json"),
+        "{\"spdxVersion\":\"SPDX-2.3\"}",
+    );
+
+    let collected = local_release_assets_command(&bundle, &output, "v1.7.2")
+        .output()
+        .expect("run local asset collector");
+
+    assert_success(&collected);
+    let names = fs::read_dir(&output)
+        .expect("release output")
+        .map(|entry| entry.expect("release asset").file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 4, "unexpected release assets: {names:?}");
+    assert!(output.join("Pulse_1.7.2_x64-setup.exe").is_file());
+    assert!(output.join("Pulse_1.7.2_x64_en-US.msi").is_file());
+    assert!(output.join("pulse-windows-x64.spdx.json").is_file());
+    assert!(!output.join("Pulse_1.7.1_x64-setup.exe").exists());
+    let sums = read(output.join("SHA256SUMS.txt"));
+    assert_eq!(sums.lines().count(), 3, "{sums}");
+    assert!(sums.contains("  Pulse_1.7.2_x64-setup.exe\n"), "{sums}");
+    assert!(sums.contains("  Pulse_1.7.2_x64_en-US.msi\n"), "{sums}");
+    assert!(sums.contains("  pulse-windows-x64.spdx.json\n"), "{sums}");
+}
+
+#[test]
+fn local_release_assets_reject_stale_installers_when_exact_version_is_missing() {
+    let fixture = TempDir::new().expect("fixture");
+    let bundle = fixture.path().join("bundle");
+    let output = fixture.path().join("release-assets");
+    write(bundle.join("nsis/Pulse_1.7.1_x64-setup.exe"), "stale exe");
+    write(bundle.join("msi/Pulse_1.7.1_x64_en-US.msi"), "stale msi");
+    write(
+        bundle.join("pulse-windows-x64.spdx.json"),
+        "{\"spdxVersion\":\"SPDX-2.3\"}",
+    );
+
+    let collected = local_release_assets_command(&bundle, &output, "v1.7.2")
+        .output()
+        .expect("run local asset collector");
+
+    assert_failure_contains(&collected, "Pulse_1.7.2_x64-setup.exe");
+    assert!(
+        !output.exists(),
+        "a failed collection must not promote output"
+    );
+}
+
+#[test]
+fn local_release_assets_preserve_preexisting_output_byte_for_byte() {
+    let fixture = TempDir::new().expect("fixture");
+    let bundle = fixture.path().join("bundle");
+    let output = fixture.path().join("release-assets");
+    write(bundle.join("nsis/Pulse_1.7.2_x64-setup.exe"), "current exe");
+    write(bundle.join("msi/Pulse_1.7.2_x64_en-US.msi"), "current msi");
+    write(
+        bundle.join("pulse-windows-x64.spdx.json"),
+        "{\"spdxVersion\":\"SPDX-2.3\"}",
+    );
+    let sentinel = output.join("test-results/sentinel.bin");
+    write(&sentinel, "preserve me exactly");
+
+    let collected = local_release_assets_command(&bundle, &output, "v1.7.2")
+        .output()
+        .expect("run local asset collector");
+
+    assert_failure_contains(&collected, "must not already exist");
+    assert_eq!(read(sentinel), "preserve me exactly");
+    assert_eq!(fs::read_dir(&output).expect("output").count(), 1);
+}
+
+#[test]
+fn local_release_assets_use_the_strict_release_semver_contract() {
+    let fixture = TempDir::new().expect("fixture");
+    let bundle = fixture.path().join("bundle");
+    fs::create_dir_all(&bundle).expect("bundle");
+
+    for tag in ["v1.7.2-01", "v1.7.2-rc..1", "v1.7.2-.beta"] {
+        let output = fixture.path().join(tag.replace('.', "_"));
+        let collected = local_release_assets_command(&bundle, &output, tag)
+            .output()
+            .expect("run local asset collector");
+        assert_failure_contains(&collected, "semantic version tag");
+        assert!(!output.exists(), "invalid tag promoted output: {tag}");
+    }
+}
+
+#[test]
+fn windows_sbom_validator_accepts_complete_spdx_and_rejects_bad_integrity() {
+    let fixture = TempDir::new().expect("fixture");
+    let artifact = fixture.path().join("Pulse_1.7.2_x64-setup.exe");
+    let sbom = fixture.path().join("pulse-windows-x64.spdx.json");
+    write(&artifact, "current exe");
+    write(
+        &sbom,
+        r#"{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "packages": [
+    {"name": "pulse", "versionInfo": "1.7.2"},
+    {"name": "dependency", "versionInfo": "1.0.0"}
+  ],
+  "files": [{
+    "fileName": "Pulse_1.7.2_x64-setup.exe",
+    "checksums": [{
+      "algorithm": "SHA256",
+      "checksumValue": "b04c26dc8979dba91381554488a4c8fdc93bf8e0c01a4ad009f301402b758610"
+    }]
+  }]
+}"#,
+    );
+
+    let valid = windows_sbom_command(&artifact, &sbom)
+        .output()
+        .expect("validate SPDX");
+    assert_success(&valid);
+
+    let malformed = read(&sbom).replace("CC0-1.0", "NOASSERTION");
+    write(&sbom, &malformed);
+    let invalid = windows_sbom_command(&artifact, &sbom)
+        .output()
+        .expect("reject SPDX");
+    assert_failure_contains(&invalid, "SPDX 2.3 JSON document under CC0-1.0");
+}
+
+#[test]
 fn release_assets_reject_a_platform_without_its_updater_signature() {
     let fixture = TempDir::new().expect("fixture");
     let artifacts = fixture.path().join("artifacts");
@@ -514,6 +649,7 @@ fn platform_asset_collection_prevents_same_basename_mac_collisions() {
 fn manual_release_workflow_pins_actions_and_gates_publication_on_preflight() {
     let root = repository_root();
     let release = read(root.join(".github/workflows/release.yml"));
+    let local_release = read(root.join("scripts/release-local.ps1"));
     let freshness = read(root.join(".github/workflows/upstream-freshness.yml"));
     let audit = read(root.join("scripts/audit-rust.ps1"));
     let combined = format!("{release}\n{freshness}");
@@ -564,6 +700,41 @@ fn manual_release_workflow_pins_actions_and_gates_publication_on_preflight() {
     assert!(release.contains("No release assets"));
     assert!(release.contains("new-windows-sbom.ps1"));
     assert!(release.contains("check-windows-sbom.ps1"));
+    assert!(local_release.contains("prepare-local-release-assets.ps1"));
+    assert!(local_release.contains("new-windows-sbom.ps1"));
+    assert!(local_release.contains("check-windows-sbom.ps1"));
+    assert!(local_release.contains("check-codex-rich-presence-upstream.ps1"));
+    assert!(local_release.contains("Get-ReleaseHttpStatus"));
+    assert!(local_release.contains("Assert-RemoteAnnotatedTag"));
+    assert!(local_release.contains("Remove-FailedRelease"));
+    assert!(local_release.contains("extract-changelog-section.py"));
+    assert!(local_release.contains("--draft"));
+    assert!(local_release.contains("--verify-tag"));
+    assert!(local_release.contains("gh release download"));
+    assert!(local_release.contains("Published asset hash mismatch"));
+    assert!(local_release.contains("GitHub release $Tag is public but not immutable"));
+    assert!(!local_release.contains("Pulse_*_x64"));
+    let sbom_gate = local_release
+        .find("check-windows-sbom.ps1")
+        .expect("local release must validate SPDX");
+    let draft_create = local_release
+        .find("gh @arguments")
+        .expect("local release must create a draft");
+    let download = local_release
+        .find("gh release download")
+        .expect("local release must download its assets");
+    let publish = local_release
+        .find("gh release edit $Tag --draft=false")
+        .expect("local release must finalize the draft");
+    let immutable = local_release
+        .find("$immutable = ($immutableOutput")
+        .expect("local release must verify immutable state");
+    let finalized = local_release
+        .find("$releaseFinalized = $true")
+        .expect("local release must record finalization");
+    assert!(sbom_gate < draft_create);
+    assert!(draft_create < download && download < publish);
+    assert!(publish < immutable && immutable < finalized);
     assert!(
         release.contains("Verify updater manifest targets every platform"),
         "the release must prove latest.json covers every updater target"
@@ -936,6 +1107,32 @@ fn release_assets_command(artifacts: &Path, output: &Path) -> Command {
         .arg("v1.6.1")
         .arg("-Repository")
         .arg("xt0n1-t3ch/Pulse-Claude-Code-Analytics");
+    command
+}
+
+fn local_release_assets_command(bundle: &Path, output: &Path, tag: &str) -> Command {
+    let mut command = script_command("prepare-local-release-assets.ps1");
+    command
+        .arg("-BundleDirectory")
+        .arg(bundle)
+        .arg("-OutputDirectory")
+        .arg(output)
+        .arg("-Tag")
+        .arg(tag);
+    command
+}
+
+fn windows_sbom_command(artifact: &Path, sbom: &Path) -> Command {
+    let mut command = script_command("check-windows-sbom.ps1");
+    command
+        .arg("-ArtifactPath")
+        .arg(artifact)
+        .arg("-SbomPath")
+        .arg(sbom)
+        .arg("-PackageName")
+        .arg("pulse")
+        .arg("-PackageVersion")
+        .arg("1.7.2");
     command
 }
 
