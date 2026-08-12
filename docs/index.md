@@ -25,6 +25,17 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [ui-design-system.md](ui-design-system.md) | Monochrome Geist shell, semantic colors, one-fact/one-owner hierarchy, responsive states, autosave and updater affordances |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
+## v1.7.2 docs refresh
+
+- Promoted the exact immutable Codex Presence Core `v1.10.2` revision with
+  native `gpt-daybreak-blue-latest` and `gpt-5.6-cyber` recognition.
+- Documented and tested provenance-correct monetary DTOs, bounded incremental
+  JSONL reads, active-session checkpoints, request coalescing, and non-blank
+  route transitions across all seven Pulse views.
+- Hardened local Windows publication so stale installers cannot enter a release;
+  exact-version NSIS/MSI assets, SPDX metadata, checksums, and downloaded hashes
+  must agree before the GitHub draft becomes public.
+
 ## v1.7.0 docs refresh
 
 - Documented provider-neutral authenticated access routes, freshness-aware quota

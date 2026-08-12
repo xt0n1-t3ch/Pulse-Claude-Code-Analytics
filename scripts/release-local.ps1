@@ -1,27 +1,22 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Build and publish a Pulse release locally, without GitHub Actions.
+  Build, verify, and publish an immutable Pulse Windows release locally.
 
 .DESCRIPTION
-  Builds the frontend + Tauri Windows installers and publishes a GitHub release
-  with the installers and a SHA256SUMS manifest via the gh CLI. This keeps
-  releases fast and off CI so Actions minutes are reserved for essentials.
-
-  Requires: npm, cargo, cargo-tauri, and an authenticated gh CLI.
-
-  Note: the in-app updater's signed `latest.json` is intentionally NOT produced
-  locally (the minisign private key is a CI secret). Installers are attached for
-  manual download; auto-update signing stays a CI-only concern.
+  Builds the frontend and Tauri installers, generates and validates the Windows
+  SPDX SBOM, selects only installers matching the exact package version, writes
+  SHA256SUMS.txt, uploads a draft, verifies the downloaded bytes, and only then
+  makes the GitHub release public.
 
 .PARAMETER Tag
-  Release tag, e.g. v1.7.1. Defaults to "v" + the version in package.json.
+  Release tag, for example v1.7.2. Defaults to "v" plus package.json.version.
 
 .PARAMETER Draft
-  Create the GitHub release as a draft instead of publishing immediately.
+  Keep the verified GitHub release as a draft instead of publishing it.
 
 .PARAMETER SkipBuild
-  Reuse existing installers under target/release/bundle instead of rebuilding.
+  Reuse exact-version installers already present under target/release/bundle.
 #>
 param(
   [string]$Tag,
@@ -29,49 +24,236 @@ param(
   [switch]$SkipBuild
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-
-if (-not $Tag) {
-  $pkg = Get-Content -Raw -LiteralPath (Join-Path $root "package.json") | ConvertFrom-Json
-  $Tag = "v$($pkg.version)"
+$package = Get-Content -Raw -LiteralPath (Join-Path $root "package.json") | ConvertFrom-Json
+$version = [string]$package.version
+$expectedTag = "v$version"
+if (-not $Tag) { $Tag = $expectedTag }
+if ($Tag -ne $expectedTag) {
+  throw "Release tag $Tag does not match package version $version ($expectedTag)"
 }
-Write-Host "Releasing $Tag ..." -ForegroundColor Cyan
+
+$bundle = Join-Path $root "target/release/bundle"
+$nsis = Join-Path $bundle "nsis/Pulse_${version}_x64-setup.exe"
+$msi = Join-Path $bundle "msi/Pulse_${version}_x64_en-US.msi"
+$sbom = Join-Path $bundle "pulse-windows-x64.spdx.json"
+$output = Join-Path $root "target/release/local-release/$Tag"
+$verification = Join-Path ([System.IO.Path]::GetTempPath()) ("pulse-release-verify-" + [guid]::NewGuid().ToString("N"))
+$releaseAttempted = $false
+$releaseFinalized = $false
+$keepVerifiedDraft = $false
+
+function Get-RequiredRepository {
+  $output = @(& gh repo view --json nameWithOwner --jq .nameWithOwner 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to resolve the GitHub repository: $($output -join ' ')"
+  }
+  $repository = ($output -join "`n").Trim()
+  if ($repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw "GitHub returned an invalid repository identity: $repository"
+  }
+  $repository
+}
+
+function Get-ReleaseHttpStatus {
+  param(
+    [Parameter(Mandatory)] [string]$Repository,
+    [Parameter(Mandatory)] [string]$ReleaseTag
+  )
+
+  $response = @(& gh api -i "repos/$Repository/releases/tags/$ReleaseTag" 2>&1)
+  $exitCode = $LASTEXITCODE
+  $statusLine = $response | Where-Object { [string]$_ -match '^HTTP/\S+\s+\d{3}\b' } | Select-Object -First 1
+  if ($null -eq $statusLine) {
+    throw "GitHub release preflight returned no HTTP status (exit $exitCode)"
+  }
+  $statusMatch = [regex]::Match([string]$statusLine, '^HTTP/\S+\s+(?<status>\d{3})\b')
+  $status = [int]$statusMatch.Groups['status'].Value
+  if (($status -eq 200 -and $exitCode -ne 0) -or ($status -eq 404 -and $exitCode -eq 0)) {
+    throw "GitHub release preflight returned inconsistent status $status / exit $exitCode"
+  }
+  $status
+}
+
+function Assert-RemoteAnnotatedTag {
+  param(
+    [Parameter(Mandatory)] [string]$ReleaseTag,
+    [Parameter(Mandatory)] [string]$ExpectedCommit
+  )
+
+  $refs = @(& git ls-remote --tags origin "refs/tags/$ReleaseTag" "refs/tags/$ReleaseTag^{}" 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to resolve remote release tag $ReleaseTag`: $($refs -join ' ')"
+  }
+  $escapedTag = [regex]::Escape($ReleaseTag)
+  $tagObject = $refs | Where-Object { [string]$_ -match "^[0-9a-fA-F]{40}\s+refs/tags/$escapedTag$" } | Select-Object -First 1
+  $peeledTag = $refs | Where-Object { [string]$_ -match "^[0-9a-fA-F]{40}\s+refs/tags/$escapedTag\^\{\}$" } | Select-Object -First 1
+  if ($null -eq $tagObject -or $null -eq $peeledTag) {
+    throw "Remote release tag $ReleaseTag must exist as an annotated tag"
+  }
+  $remoteCommit = (([string]$peeledTag -split '\s+')[0]).ToLowerInvariant()
+  if ($remoteCommit -ne $ExpectedCommit) {
+    throw "Remote release tag $ReleaseTag resolves to $remoteCommit instead of $ExpectedCommit"
+  }
+}
+
+function Remove-FailedRelease {
+  param([Parameter(Mandatory)] [string]$ReleaseTag)
+
+  $output = @(& gh release view $ReleaseTag --json isDraft,isImmutable 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Unable to inspect a possibly partial release $ReleaseTag during cleanup."
+    return
+  }
+  try { $state = ($output -join "`n") | ConvertFrom-Json }
+  catch {
+    Write-Warning "GitHub returned invalid release state for $ReleaseTag during cleanup."
+    return
+  }
+  if ([bool]$state.isDraft -or -not [bool]$state.isImmutable) {
+    $deleteOutput = @(& gh release delete $ReleaseTag --yes 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "Unable to delete failed release $ReleaseTag`: $($deleteOutput -join ' ')"
+    }
+  } else {
+    Write-Warning "Release $ReleaseTag is already immutable; failure cleanup left it intact."
+  }
+}
+
+Write-Host "Preparing Pulse $Tag ..." -ForegroundColor Cyan
 
 Push-Location $root
 try {
+  $repository = Get-RequiredRepository
+  $releaseStatus = Get-ReleaseHttpStatus -Repository $repository -ReleaseTag $Tag
+  if ($releaseStatus -eq 200) {
+    throw "Release $Tag already exists; immutable releases are never updated"
+  }
+  if ($releaseStatus -ne 404) {
+    throw "GitHub release preflight failed with HTTP $releaseStatus"
+  }
+
+  $tagOutput = @(& git rev-parse "$Tag^{commit}" 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Release tag $Tag does not resolve to a commit: $($tagOutput -join ' ')"
+  }
+  $tagCommit = (($tagOutput | Select-Object -First 1).Trim()).ToLowerInvariant()
+  if ($tagCommit -notmatch '^[0-9a-f]{40}$') {
+    throw "Release tag $Tag returned an invalid commit: $tagCommit"
+  }
+  Assert-RemoteAnnotatedTag -ReleaseTag $Tag -ExpectedCommit $tagCommit
+  & (Join-Path $PSScriptRoot "check-release-contract.ps1") -Tag $Tag -ExpectedCommit $tagCommit
+  if ($LASTEXITCODE -ne 0) { throw "Release contract validation failed" }
+  & (Join-Path $PSScriptRoot "check-codex-rich-presence-upstream.ps1") -Root $root
+  if ($LASTEXITCODE -ne 0) { throw "Codex presence core contract validation failed" }
+
   if (-not $SkipBuild) {
-    Write-Host "Building installers (npm run build)..." -ForegroundColor Cyan
-    # `cargo tauri build` exits non-zero only on the optional updater-signing
-    # step, which runs after the installers are produced. Verify the artifacts
-    # exist rather than trusting the exit code.
+    $buildStartedAt = [DateTime]::UtcNow.AddSeconds(-2)
+    Write-Host "Building exact-version installers..." -ForegroundColor Cyan
     npm run build
+    $buildExitCode = $LASTEXITCODE
+    foreach ($installer in @($nsis, $msi)) {
+      if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+        throw "Build did not produce required installer: $installer"
+      }
+      if ((Get-Item -LiteralPath $installer).LastWriteTimeUtc -lt $buildStartedAt) {
+        throw "Build did not refresh required installer: $installer"
+      }
+    }
+    if ($buildExitCode -ne 0) {
+      Write-Warning "The optional updater-signing phase exited $buildExitCode after fresh installers were produced; continuing with manual-install assets."
+    }
   }
 
-  $bundle = Join-Path $root "target/release/bundle"
-  $assets = @()
-  $assets += Get-ChildItem -Path (Join-Path $bundle "nsis") -Filter "Pulse_*_x64-setup.exe" -ErrorAction SilentlyContinue
-  $assets += Get-ChildItem -Path (Join-Path $bundle "msi")  -Filter "Pulse_*_x64_en-US.msi"  -ErrorAction SilentlyContinue
-  if (-not $assets) { throw "No installers found under $bundle. Run without -SkipBuild first." }
+  foreach ($installer in @($nsis, $msi)) {
+    if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+      throw "Required exact-version installer is missing: $installer"
+    }
+  }
 
-  $sums = Join-Path $bundle "SHA256SUMS.txt"
-  Remove-Item -LiteralPath $sums -ErrorAction SilentlyContinue
+  & (Join-Path $PSScriptRoot "new-windows-sbom.ps1") `
+    -ArtifactPath $nsis `
+    -OutputPath $sbom `
+    -PackageName pulse `
+    -PackageVersion $version
+  if ($LASTEXITCODE -ne 0) { throw "Windows SBOM generation failed" }
+  & (Join-Path $PSScriptRoot "check-windows-sbom.ps1") `
+    -ArtifactPath $nsis `
+    -SbomPath $sbom `
+    -PackageName pulse `
+    -PackageVersion $version
+  if ($LASTEXITCODE -ne 0) { throw "Windows SBOM validation failed" }
+
+  & (Join-Path $PSScriptRoot "prepare-local-release-assets.ps1") `
+    -BundleDirectory $bundle `
+    -OutputDirectory $output `
+    -Tag $Tag
+  if ($LASTEXITCODE -ne 0) { throw "Local release asset preparation failed" }
+
+  $assets = @(Get-ChildItem -LiteralPath $output -File | Sort-Object Name)
+  if ($assets.Count -ne 4) {
+    throw "Expected exactly four local release assets, found $($assets.Count)"
+  }
+  $python = Get-Command python.exe -ErrorAction SilentlyContinue
+  if ($null -eq $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+  if ($null -eq $python) { throw "Python is required to extract the release changelog section" }
+  $notesOutput = @(& $python.Source (Join-Path $PSScriptRoot "extract-changelog-section.py") $version (Join-Path $root "CHANGELOG.md") 2>&1)
+  if ($LASTEXITCODE -ne 0) { throw "Release note extraction failed: $($notesOutput -join ' ')" }
+  $notes = ($notesOutput -join "`n").Trim()
+  if ([string]::IsNullOrWhiteSpace($notes)) { throw "Release notes are empty for $version" }
+  $arguments = @(
+    "release", "create", $Tag,
+    "--draft", "--verify-tag",
+    "--title", "Pulse $Tag",
+    "--notes", $notes
+  )
+  $arguments += @($assets | ForEach-Object { $_.FullName })
+  $releaseAttempted = $true
+  gh @arguments
+  if ($LASTEXITCODE -ne 0) { throw "GitHub draft release creation failed" }
+
+  New-Item -ItemType Directory -Path $verification | Out-Null
+  gh release download $Tag --dir $verification
+  if ($LASTEXITCODE -ne 0) { throw "Published asset download verification failed" }
+  $expectedNames = @($assets | ForEach-Object Name | Sort-Object)
+  $actualNames = @(Get-ChildItem -LiteralPath $verification -File | ForEach-Object Name | Sort-Object)
+  if (($expectedNames -join "`n") -ne ($actualNames -join "`n")) {
+    throw "Published asset inventory differs from the local verified set"
+  }
   foreach ($asset in $assets) {
-    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset.FullName).Hash.ToLower()
-    "$hash  $($asset.Name)" | Add-Content -LiteralPath $sums -Encoding ascii
+    $downloaded = Join-Path $verification $asset.Name
+    $expectedHash = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash
+    $actualHash = (Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash
+    if ($actualHash -ne $expectedHash) {
+      throw "Published asset hash mismatch: $($asset.Name)"
+    }
   }
-  $assets += Get-Item -LiteralPath $sums
 
-  $notes = "Pulse $Tag - local build. Download the Windows installer below and run it (per-user, no admin)."
-  $ghArgs = @("release", "create", $Tag, "--title", "Pulse $Tag", "--notes", $notes)
-  if ($Draft) { $ghArgs += "--draft" }
-  $ghArgs += ($assets | ForEach-Object { $_.FullName })
-
-  $assetCount = $assets.Count
-  Write-Host "Publishing $assetCount assets to the GitHub release via gh..." -ForegroundColor Cyan
-  gh @ghArgs
-  Write-Host "Released $Tag" -ForegroundColor Green
-}
-finally {
+  if ($Draft) {
+    $keepVerifiedDraft = $true
+    Write-Host "Verified draft retained: $Tag" -ForegroundColor Yellow
+  } else {
+    gh release edit $Tag --draft=false
+    if ($LASTEXITCODE -ne 0) { throw "GitHub release finalization failed" }
+    $immutableOutput = @(& gh api "repos/$repository/releases/tags/$Tag" --jq .immutable 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      throw "Unable to verify immutable release state: $($immutableOutput -join ' ')"
+    }
+    $immutable = ($immutableOutput -join "`n").Trim()
+    if ($immutable -ne "true") {
+      throw "GitHub release $Tag is public but not immutable"
+    }
+    $releaseFinalized = $true
+    Write-Host "Released and verified immutable: $Tag" -ForegroundColor Green
+  }
+} finally {
+  if (Test-Path -LiteralPath $verification) {
+    Remove-Item -LiteralPath $verification -Recurse -Force
+  }
+  if ($releaseAttempted -and -not $releaseFinalized -and -not $keepVerifiedDraft) {
+    Remove-FailedRelease -ReleaseTag $Tag
+  }
   Pop-Location
 }
