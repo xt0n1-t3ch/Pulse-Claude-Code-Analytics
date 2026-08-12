@@ -194,7 +194,10 @@ export function poll(): Promise<void> {
       if (startedAtSequence === snapshotSequence) applySnapshot(snapshot);
     })
     .catch((error) => {
-      if (startedAtSequence === snapshotSequence) clearLiveSnapshot();
+      // Stale-while-revalidate: keep the last coherent snapshot on screen, but
+      // revoke its live status. Provider changes still clear because crossing
+      // that trust boundary must never show one provider as another.
+      if (startedAtSequence === snapshotSequence) backendConnection.set("disconnected");
       console.warn("Snapshot error:", error);
     })
     .finally(() => {
@@ -221,7 +224,7 @@ function applySnapshot(snapshot: AppSnapshot): void {
     const selectedId = currentSelectedAccessSourceId;
     const selectedScope = analyticsProviderScopeForSelection(selectedId, routes);
     if (selectedScope) selectedAnalyticsProviderScope.set(selectedScope);
-    backendConnection.set("live");
+    backendConnection.set(snapshot.sync_state === "syncing" ? "connecting" : "live");
     health.set(snapshot.health);
     metrics.set(snapshot.metrics);
     sessions.set(snapshot.sessions);
@@ -232,9 +235,9 @@ function applySnapshot(snapshot: AppSnapshot): void {
     applyDiscordSettings(snapshot.discord_settings);
 }
 
-/** A failed real-backend read must never leave the last successful counters
- * looking current. Historical views keep their own explicit loading/error
- * states; the shared live shell fails closed until a fresh snapshot arrives. */
+/** Clears provider-bound state when changing trust domains. Transient polling
+ * failures use stale-while-revalidate instead and mark the retained snapshot
+ * disconnected, so tables and cards do not blink out between retries. */
 function clearLiveSnapshot(
   connection: "connecting" | "disconnected" = "disconnected",
 ): void {

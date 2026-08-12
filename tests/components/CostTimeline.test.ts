@@ -41,7 +41,7 @@ describe("CostTimeline.svelte", () => {
       props: { points: [], inflections: [] },
     });
 
-    expect(getByText("No spend recorded in this window.")).toBeTruthy();
+    expect(getByText("No monetary value recorded in this window.")).toBeTruthy();
     expect(container.querySelector("svg.tl-svg")).toBeNull();
   });
 
@@ -114,12 +114,12 @@ describe("CostTimeline.svelte", () => {
     expect(getByText(/fell 90% below the rolling baseline/)).toBeTruthy();
   });
 
-  it("states plainly when spend held to its baseline", () => {
+  it("states plainly when monetary value held to its baseline", () => {
     const { getByText } = render(CostTimeline, {
       props: { points: series([4, 5, 4]), inflections: [] },
     });
 
-    expect(getByText("No cost inflections — spend held to its baseline.")).toBeTruthy();
+    expect(getByText("No monetary-value inflections — the observed value held to its baseline.")).toBeTruthy();
   });
 
   /** Axis labels that overprint each other at the right edge are unreadable,

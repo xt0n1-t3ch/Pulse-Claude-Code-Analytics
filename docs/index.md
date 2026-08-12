@@ -39,8 +39,8 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
   claims, or Discord authority until authentication succeeds again.
 - Replaced the unavailable-cost dead end with the Subscription Value Ledger.
   Token totals, token mix, daily usage trend, sessions, cache reuse, and priced
-  coverage remain useful when money is not reported; partial spend keeps its
-  denominator and provenance, while unavailable spend never renders as `$0`.
+  coverage remain useful when money is not reported; partial monetary value keeps
+  its denominator and provenance, while unavailable billing never renders as `$0`.
 - Locked provider-scoped plan catalogs: Claude `free`, `pro`, `team`,
   `enterprise`, `max_5x`, `max_20x`; Codex `free`, `go`, `plus`, `business`,
   `enterprise`, `pro_5x`, `pro_20x`. Ambiguous Max and bare Pro telemetry stay
@@ -87,7 +87,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
   mobile-stack, and consumer-owned horizontal-scroll contracts.
 - Unified cost provenance across live history, Summary, Projects, hourly/model
   aggregates, Reports timelines, analyzers, and offline exports: only
-  `known_cost` contributes to spend, averages divide by priced sessions, and
+  `known_cost` contributes to provenance-aware monetary value, averages divide by priced sessions, and
   partial/unavailable coverage stays explicit instead of promoting raw
   estimates to exact totals.
 - Recorded the same-viewport reference comparison and four-breakpoint visual
@@ -161,7 +161,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 - Added [context-tracking.md](context-tracking.md): the `max_turn_api_input` lifetime peak vs. `current_context_tokens` point-in-time fill split, the compaction-boundary parsing that makes current fill correct, and why Dashboard's and Costs' cost totals differ by aggregation scope.
 - Fixed a live-confirmed bug where every UI surface claiming to show current context fill read a monotonically increasing all-time peak field that never decreased across compactions.
-- Dashboard's "Total Cost" and Costs' "Total Spent" KPI tiles now carry explicit scope labels: "(Live)" and "(30d)".
+- Dashboard and Costs monetary-value KPIs carry explicit scope and provenance labels instead of presenting API-equivalent estimates as billed spend.
 - Kept the release a patch bump: v1.4.1 is a correctness fix with no public API removed.
 
 ## v1.4.0 docs refresh

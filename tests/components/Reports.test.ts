@@ -224,7 +224,7 @@ describe("Reports.svelte", () => {
 
     await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
     flushAll();
-    await waitFor(() => expect(queryByText("Cost timeline")).toBeTruthy());
+    await waitFor(() => expect(queryByText("Monetary value timeline")).toBeTruthy());
 
     getReportsBundle.mockRejectedValueOnce(new Error("query failed"));
     await fireEvent.click(getByText("7d"));

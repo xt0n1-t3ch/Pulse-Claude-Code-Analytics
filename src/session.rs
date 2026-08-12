@@ -1,7 +1,8 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -16,6 +17,9 @@ use crate::cost;
 
 const SESSION_SCAN_MAX_DEPTH: usize = 16;
 const SESSION_SCAN_MAX_ENTRIES: usize = 100_000;
+const SESSION_TAIL_ANCHOR_BYTES: u64 = 64;
+const SESSION_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
+const SESSION_CHECKPOINT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -411,6 +415,11 @@ struct CachedSessionEntry {
     cursor: u64,
     file_len: u64,
     modified: SystemTime,
+    tail_anchor: Vec<u8>,
+    body_bytes_read_last_poll: u64,
+    anchor_bytes_read_last_poll: u64,
+    persisted_cursor: u64,
+    persisted_file_len: u64,
     accumulator: SessionAccumulator,
     snapshot: Option<ClaudeSessionSnapshot>,
 }
@@ -421,6 +430,11 @@ impl CachedSessionEntry {
             cursor: 0,
             file_len: 0,
             modified,
+            tail_anchor: Vec::new(),
+            body_bytes_read_last_poll: 0,
+            anchor_bytes_read_last_poll: 0,
+            persisted_cursor: 0,
+            persisted_file_len: 0,
             accumulator: SessionAccumulator::with_default_effort(default_effort),
             snapshot: None,
         }
@@ -430,12 +444,181 @@ impl CachedSessionEntry {
         self.cursor = 0;
         self.file_len = 0;
         self.modified = modified;
+        self.tail_anchor.clear();
+        self.body_bytes_read_last_poll = 0;
+        self.anchor_bytes_read_last_poll = 0;
+        self.persisted_cursor = 0;
+        self.persisted_file_len = 0;
         self.accumulator = SessionAccumulator::with_default_effort(default_effort);
         self.snapshot = None;
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistentSessionCheckpoint {
+    schema_version: u32,
+    source_path: PathBuf,
+    cursor: u64,
+    file_len: u64,
+    modified: SystemTime,
+    tail_anchor: Vec<u8>,
+    accumulator: SessionAccumulator,
+    snapshot: Option<ClaudeSessionSnapshot>,
+}
+
+fn session_checkpoint_root(path: &Path) -> Option<PathBuf> {
+    config::projects_paths()
+        .into_iter()
+        .find_map(|projects_root| {
+            path.starts_with(&projects_root).then(|| {
+                projects_root
+                    .parent()
+                    .unwrap_or(&projects_root)
+                    .join("pulse-session-checkpoints")
+                    .join(format!("v{SESSION_CHECKPOINT_SCHEMA_VERSION}"))
+            })
+        })
+}
+
+fn session_checkpoint_path(checkpoint_root: &Path, source_path: &Path) -> PathBuf {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source_path.hash(&mut hasher);
+    checkpoint_root.join(format!("{:016x}.json", hasher.finish()))
+}
+
+fn persist_session_checkpoint_to(
+    checkpoint_root: &Path,
+    source_path: &Path,
+    entry: &CachedSessionEntry,
+) -> Result<()> {
+    fs::create_dir_all(checkpoint_root).with_context(|| {
+        format!(
+            "cannot create session checkpoint directory {}",
+            checkpoint_root.display()
+        )
+    })?;
+    let checkpoint = PersistentSessionCheckpoint {
+        schema_version: SESSION_CHECKPOINT_SCHEMA_VERSION,
+        source_path: source_path.to_path_buf(),
+        cursor: entry.cursor,
+        file_len: entry.file_len,
+        modified: entry.modified,
+        tail_anchor: entry.tail_anchor.clone(),
+        accumulator: entry.accumulator.clone(),
+        snapshot: entry.snapshot.clone(),
+    };
+    let destination = session_checkpoint_path(checkpoint_root, source_path);
+    let mut temporary = tempfile::NamedTempFile::new_in(checkpoint_root).with_context(|| {
+        format!(
+            "cannot create temporary session checkpoint in {}",
+            checkpoint_root.display()
+        )
+    })?;
+    serde_json::to_writer(&mut temporary, &checkpoint)
+        .context("cannot serialize session checkpoint")?;
+    temporary
+        .flush()
+        .context("cannot flush session checkpoint")?;
+    temporary
+        .as_file_mut()
+        .sync_all()
+        .context("cannot sync session checkpoint")?;
+    temporary.persist(&destination).map_err(|error| {
+        anyhow::Error::new(error.error).context(format!(
+            "cannot atomically replace session checkpoint {}",
+            destination.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn load_session_checkpoint_from(
+    checkpoint_root: &Path,
+    source_path: &Path,
+    metadata: &std::fs::Metadata,
+    modified: SystemTime,
+) -> Option<CachedSessionEntry> {
+    let checkpoint_path = session_checkpoint_path(checkpoint_root, source_path);
+    let checkpoint_metadata = fs::metadata(&checkpoint_path).ok()?;
+    if checkpoint_metadata.len() > SESSION_CHECKPOINT_MAX_BYTES {
+        return None;
+    }
+    let bytes = fs::read(&checkpoint_path).ok()?;
+    let checkpoint: PersistentSessionCheckpoint = serde_json::from_slice(&bytes).ok()?;
+    if checkpoint.schema_version != SESSION_CHECKPOINT_SCHEMA_VERSION
+        || checkpoint.source_path != source_path
+        || checkpoint.cursor > checkpoint.file_len
+        || checkpoint.file_len > metadata.len()
+        || checkpoint.modified > modified
+        || checkpoint.tail_anchor.len() != checkpoint.cursor.min(SESSION_TAIL_ANCHOR_BYTES) as usize
+        || checkpoint
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.source_file != source_path)
+    {
+        return None;
+    }
+
+    let mut source = std::fs::File::open(source_path).ok()?;
+    if read_tail_anchor(&mut source, checkpoint.cursor).ok()? != checkpoint.tail_anchor {
+        return None;
+    }
+
+    Some(CachedSessionEntry {
+        cursor: checkpoint.cursor,
+        file_len: checkpoint.file_len,
+        modified: checkpoint.modified,
+        tail_anchor: checkpoint.tail_anchor,
+        body_bytes_read_last_poll: 0,
+        anchor_bytes_read_last_poll: 0,
+        persisted_cursor: checkpoint.cursor,
+        persisted_file_len: checkpoint.file_len,
+        accumulator: checkpoint.accumulator,
+        snapshot: checkpoint.snapshot,
+    })
+}
+
+fn load_session_checkpoint(
+    source_path: &Path,
+    metadata: &std::fs::Metadata,
+    modified: SystemTime,
+) -> Option<CachedSessionEntry> {
+    let checkpoint_root = session_checkpoint_root(source_path)?;
+    load_session_checkpoint_from(&checkpoint_root, source_path, metadata, modified)
+}
+
+fn persist_session_checkpoint(source_path: &Path, entry: &mut CachedSessionEntry) {
+    if entry.persisted_cursor == entry.cursor && entry.persisted_file_len == entry.file_len {
+        return;
+    }
+    let Some(checkpoint_root) = session_checkpoint_root(source_path) else {
+        return;
+    };
+    match persist_session_checkpoint_to(&checkpoint_root, source_path, entry) {
+        Ok(()) => {
+            entry.persisted_cursor = entry.cursor;
+            entry.persisted_file_len = entry.file_len;
+        }
+        Err(error) => tracing::warn!(
+            path = %source_path.display(),
+            %error,
+            "failed to persist derived session checkpoint"
+        ),
+    }
+}
+
+fn read_tail_anchor(file: &mut std::fs::File, cursor: u64) -> Result<Vec<u8>> {
+    let anchor_len = cursor.min(SESSION_TAIL_ANCHOR_BYTES) as usize;
+    if anchor_len == 0 {
+        return Ok(Vec::new());
+    }
+    file.seek(SeekFrom::Start(cursor - anchor_len as u64))?;
+    let mut anchor = vec![0; anchor_len];
+    file.read_exact(&mut anchor)?;
+    Ok(anchor)
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SessionAccumulator {
     #[allow(dead_code)]
     session_id: Option<String>,
@@ -496,7 +679,7 @@ const IDLE_DEBOUNCE_SECS: i64 = 45;
 const ORPHANED_PENDING_CALL_SECS: i64 = 600;
 const LIVE_FILE_ACTIVITY_SECS: i64 = 30;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ActivityTracker {
     snapshot: Option<ActivitySnapshot>,
     pending_calls: HashMap<String, PendingActivity>,
@@ -504,7 +687,7 @@ struct ActivityTracker {
     last_effective_signal_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PendingActivity {
     #[allow(dead_code)]
     kind: ActivityKind,
@@ -991,6 +1174,60 @@ pub fn collect_active_sessions(
     )
 }
 
+struct SessionFileCandidate {
+    path: PathBuf,
+    metadata: std::fs::Metadata,
+    modified: SystemTime,
+    is_subagent: bool,
+}
+
+fn is_subagent_session_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str().eq_ignore_ascii_case("subagents"))
+}
+
+fn subagent_parent_transcript_path(path: &Path) -> Option<PathBuf> {
+    let subagents_dir = path.parent()?;
+    if !subagents_dir
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("subagents"))
+    {
+        return None;
+    }
+    let session_dir = subagents_dir.parent()?;
+    let session_id = session_dir.file_name()?.to_str()?;
+    Some(session_dir.parent()?.join(format!("{session_id}.jsonl")))
+}
+
+fn selected_session_paths(
+    candidates: &[(PathBuf, SystemTime, bool)],
+    parse_cutoff: SystemTime,
+) -> HashSet<PathBuf> {
+    let available = candidates
+        .iter()
+        .map(|(path, _, _)| path.clone())
+        .collect::<HashSet<_>>();
+    let mut selected = candidates
+        .iter()
+        .filter(|(_, modified, _)| *modified >= parse_cutoff)
+        .map(|(path, _, _)| path.clone())
+        .collect::<HashSet<_>>();
+
+    // Claude stores subagents under `<session-id>/subagents/` while the
+    // parent transcript is the sibling `<session-id>.jsonl`. Keep that parent
+    // even if its own mtime is older so merge semantics remain intact.
+    for (path, modified, is_subagent) in candidates {
+        if *is_subagent
+            && *modified >= parse_cutoff
+            && let Some(parent) = subagent_parent_transcript_path(path)
+            && available.contains(&parent)
+        {
+            selected.insert(parent);
+        }
+    }
+    selected
+}
+
 pub fn collect_active_sessions_multi(
     projects_roots: &[PathBuf],
     stale_threshold: Duration,
@@ -1010,6 +1247,7 @@ pub fn collect_active_sessions_multi(
     let default_effort = read_claude_effort_level();
     let mut sessions = Vec::new();
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
+    let mut candidates = Vec::new();
 
     for projects_root in projects_roots {
         if !projects_root.exists() {
@@ -1021,14 +1259,9 @@ pub fn collect_active_sessions_multi(
             if !entry.file_type().is_file() {
                 continue;
             }
-            // Detect subagent files but don't skip them — we parse and merge
-            let is_subagent_file = path
-                .components()
-                .any(|component| component.as_os_str().eq_ignore_ascii_case("subagents"));
             if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                 continue;
             }
-            seen_paths.insert(path.to_path_buf());
 
             let metadata = match entry.metadata() {
                 Ok(meta) => meta,
@@ -1039,51 +1272,80 @@ pub fn collect_active_sessions_multi(
                 Err(_) => continue,
             };
 
-            let encoded_dir = path
-                .parent()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            if let Some(mut snapshot) = parse_session_file_cached(
-                path,
-                &metadata,
+            candidates.push(SessionFileCandidate {
+                path: path.to_path_buf(),
+                metadata,
                 modified,
-                &encoded_dir,
-                git_cache,
-                parse_cache,
-                default_effort,
-                ide_workspaces,
-            )? {
-                if !is_subagent_file {
-                    snapshot.background_work = crate::workflow_state::detect_background_work(path);
-                }
-                if is_subagent_file {
-                    snapshot.is_subagent = true;
-                    snapshot.parent_session_id = subagent_parent_session_id(path);
-                    if snapshot
-                        .parent_session_id
-                        .as_ref()
-                        .is_some_and(|parent_id| parent_id == &snapshot.session_id)
-                        && let Some(agent_id) = path.file_stem().and_then(|item| item.to_str())
-                    {
-                        snapshot.session_id = agent_id.to_string();
-                    }
-                    let meta_path = path.with_extension("meta.json");
-                    if let Ok(meta_data) = fs::read_to_string(&meta_path)
-                        && let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_data)
-                        && let Some(agent_type) =
-                            meta_json.get("agentType").and_then(|v| v.as_str())
-                    {
-                        snapshot.project_name = format!("subagent:{}", agent_type);
-                    }
-                }
+                is_subagent: is_subagent_session_path(path),
+            });
+        }
+    }
 
-                let recency = session_recency(&snapshot, modified);
-                snapshot.last_activity = recency;
-                if should_include_session(&snapshot, recency, stale_cutoff, sticky_cutoff) {
-                    sessions.push(snapshot);
+    let parse_cutoff = stale_cutoff.min(sticky_cutoff);
+    let selection_input = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.path.clone(),
+                candidate.modified,
+                candidate.is_subagent,
+            )
+        })
+        .collect::<Vec<_>>();
+    let selected_paths = selected_session_paths(&selection_input, parse_cutoff);
+
+    for candidate in candidates {
+        if !selected_paths.contains(&candidate.path) {
+            continue;
+        }
+        let path = candidate.path.as_path();
+        let modified = candidate.modified;
+        let is_subagent_file = candidate.is_subagent;
+        seen_paths.insert(candidate.path.clone());
+
+        let encoded_dir = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if let Some(mut snapshot) = parse_session_file_cached(
+            path,
+            &candidate.metadata,
+            modified,
+            &encoded_dir,
+            git_cache,
+            parse_cache,
+            default_effort,
+            ide_workspaces,
+        )? {
+            if !is_subagent_file {
+                snapshot.background_work = crate::workflow_state::detect_background_work(path);
+            }
+            if is_subagent_file {
+                snapshot.is_subagent = true;
+                snapshot.parent_session_id = subagent_parent_session_id(path);
+                if snapshot
+                    .parent_session_id
+                    .as_ref()
+                    .is_some_and(|parent_id| parent_id == &snapshot.session_id)
+                    && let Some(agent_id) = path.file_stem().and_then(|item| item.to_str())
+                {
+                    snapshot.session_id = agent_id.to_string();
                 }
+                let meta_path = path.with_extension("meta.json");
+                if let Ok(meta_data) = fs::read_to_string(&meta_path)
+                    && let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_data)
+                    && let Some(agent_type) = meta_json.get("agentType").and_then(|v| v.as_str())
+                {
+                    snapshot.project_name = format!("subagent:{}", agent_type);
+                }
+            }
+
+            let recency = session_recency(&snapshot, modified);
+            snapshot.last_activity = recency;
+            if should_include_session(&snapshot, recency, stale_cutoff, sticky_cutoff) {
+                sessions.push(snapshot);
             }
         }
     }
@@ -1131,61 +1393,130 @@ fn parse_session_file_cached(
     let file_len = metadata.len();
     let path_buf = path.to_path_buf();
 
+    if !parse_cache.entries.contains_key(&path_buf) {
+        let restored = load_session_checkpoint(path, metadata, modified)
+            .unwrap_or_else(|| CachedSessionEntry::new(modified, default_effort));
+        parse_cache.entries.insert(path_buf.clone(), restored);
+    }
     let entry = parse_cache
         .entries
-        .entry(path_buf.clone())
-        .or_insert_with(|| CachedSessionEntry::new(modified, default_effort));
+        .get_mut(&path_buf)
+        .expect("session cache entry was inserted above");
 
-    if file_len < entry.file_len || modified != entry.modified {
+    entry.body_bytes_read_last_poll = 0;
+    entry.anchor_bytes_read_last_poll = 0;
+
+    if file_len < entry.file_len || file_len < entry.cursor || modified < entry.modified {
         entry.reset(modified, default_effort);
     }
 
-    if file_len == entry.cursor && entry.snapshot.is_some() {
+    if file_len == entry.file_len
+        && modified == entry.modified
+        && file_len == entry.cursor
+        && entry.snapshot.is_some()
+    {
         return Ok(entry.snapshot.clone());
     }
 
     let mut file =
         std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
 
-    if entry.cursor > 0 {
-        file.seek(SeekFrom::Start(entry.cursor)).with_context(|| {
+    if entry.cursor > 0 && !entry.tail_anchor.is_empty() {
+        let observed_anchor = read_tail_anchor(&mut file, entry.cursor).with_context(|| {
             format!(
-                "failed to seek to cursor {} in {}",
-                entry.cursor,
+                "failed to validate incremental cursor in {}",
                 path.display()
             )
         })?;
+        entry.anchor_bytes_read_last_poll = observed_anchor.len() as u64;
+        if observed_anchor != entry.tail_anchor {
+            entry.reset(modified, default_effort);
+            // Preserve proof that this poll performed the bounded validation
+            // which rejected the stale cursor.
+            entry.anchor_bytes_read_last_poll = observed_anchor.len() as u64;
+        }
     }
 
-    let reader = BufReader::new(&file);
-    let mut new_cursor = entry.cursor;
+    if file_len == entry.cursor && entry.snapshot.is_some() {
+        entry.file_len = file_len;
+        entry.modified = modified;
+        return Ok(entry.snapshot.clone());
+    }
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
+    file.seek(SeekFrom::Start(entry.cursor)).with_context(|| {
+        format!(
+            "failed to seek to cursor {} in {}",
+            entry.cursor,
+            path.display()
+        )
+    })?;
+
+    let mut reader = BufReader::new(file);
+    let mut new_cursor = entry.cursor;
+    let mut line = Vec::new();
+
+    loop {
+        line.clear();
+        let bytes_read = match reader.read_until(b'\n', &mut line) {
+            Ok(bytes_read) => bytes_read,
             Err(_) => break,
         };
-        new_cursor += line.len() as u64 + 1;
+        if bytes_read == 0 {
+            break;
+        }
+        entry.body_bytes_read_last_poll = entry
+            .body_bytes_read_last_poll
+            .saturating_add(bytes_read as u64);
 
+        // A final JSONL record does not require a trailing newline. Parse a
+        // syntactically complete record at EOF, but keep the cursor at the
+        // fragment start when a writer was interrupted mid-object.
+        let terminated = line.last() == Some(&b'\n');
+        if terminated {
+            line.pop();
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+
+        let line = match std::str::from_utf8(&line) {
+            Ok(line) => line,
+            Err(_) if terminated => {
+                new_cursor = new_cursor.saturating_add(bytes_read as u64);
+                continue;
+            }
+            Err(_) => break,
+        };
         if line.trim().is_empty() {
+            new_cursor = new_cursor.saturating_add(bytes_read as u64);
             continue;
         }
 
-        let msg: JsonlMessage = match serde_json::from_str(&line) {
-            Ok(m) => m,
-            Err(_) => continue,
+        let msg: JsonlMessage = match serde_json::from_str(line) {
+            Ok(message) => message,
+            Err(_) if terminated => {
+                new_cursor = new_cursor.saturating_add(bytes_read as u64);
+                continue;
+            }
+            Err(_) => break,
         };
 
+        new_cursor = new_cursor.saturating_add(bytes_read as u64);
         process_jsonl_message(&mut entry.accumulator, &msg);
     }
 
     entry.cursor = new_cursor;
     entry.file_len = file_len;
+    entry.modified = modified;
+    let mut file = reader.into_inner();
+    entry.tail_anchor = read_tail_anchor(&mut file, entry.cursor)
+        .with_context(|| format!("failed to checkpoint cursor in {}", path.display()))?;
 
     let model_id = match entry.accumulator.model.as_deref() {
         Some(id) if !id.is_empty() => id.to_string(),
         _ => {
             entry.snapshot = None;
+            persist_session_checkpoint(path, entry);
             return Ok(None);
         }
     };
@@ -1298,6 +1629,7 @@ fn parse_session_file_cached(
     };
 
     entry.snapshot = Some(snapshot.clone());
+    persist_session_checkpoint(path, entry);
     Ok(Some(snapshot))
 }
 
@@ -2193,6 +2525,253 @@ fn datetime_to_system_time(ts: DateTime<Utc>) -> Option<SystemTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn parser_test_line(cwd: &Path, input_tokens: u64) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "timestamp": "2026-08-12T12:00:00Z",
+            "sessionId": "4ccf0482-61c0-4611-9d22-becaf1781231",
+            "cwd": cwd,
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": 1,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                },
+                "content": [{"type": "text", "text": "ok"}]
+            }
+        })
+        .to_string()
+    }
+
+    fn parse_test_session(
+        path: &Path,
+        modified_tick: u64,
+        cache: &mut SessionParseCache,
+    ) -> ClaudeSessionSnapshot {
+        let metadata = fs::metadata(path).expect("session metadata");
+        let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(modified_tick);
+        parse_session_file_cached(
+            path,
+            &metadata,
+            modified,
+            "test-project",
+            &mut GitBranchCache::new(Duration::ZERO),
+            cache,
+            ReasoningEffort::Medium,
+            &[],
+        )
+        .expect("parse session")
+        .expect("session snapshot")
+    }
+
+    #[test]
+    fn cached_parser_reads_only_the_appended_delta_when_mtime_advances() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let first = format!("{}\n", parser_test_line(dir.path(), 10));
+        fs::write(&path, first.as_bytes()).expect("initial JSONL");
+        let mut cache = SessionParseCache::default();
+
+        let initial = parse_test_session(&path, 1, &mut cache);
+        assert_eq!(initial.input_tokens, 10);
+        let first_cursor = cache.entries[&path].cursor;
+
+        let appended = format!("{}\n", parser_test_line(dir.path(), 20));
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open append");
+        file.write_all(appended.as_bytes()).expect("append JSONL");
+
+        let updated = parse_test_session(&path, 2, &mut cache);
+        let entry = &cache.entries[&path];
+        assert_eq!(updated.input_tokens, 30);
+        assert!(entry.cursor > first_cursor);
+        assert_eq!(entry.body_bytes_read_last_poll, appended.len() as u64);
+        assert!(entry.anchor_bytes_read_last_poll <= 64);
+
+        let unchanged = parse_test_session(&path, 2, &mut cache);
+        assert_eq!(unchanged.input_tokens, 30);
+        let entry = &cache.entries[&path];
+        assert_eq!(entry.body_bytes_read_last_poll, 0);
+        assert_eq!(entry.anchor_bytes_read_last_poll, 0);
+    }
+
+    #[test]
+    fn cached_parser_accepts_a_complete_final_record_without_a_newline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let record = parser_test_line(dir.path(), 19);
+        fs::write(&path, record.as_bytes()).expect("JSONL without trailing newline");
+        let mut cache = SessionParseCache::default();
+
+        let snapshot = parse_test_session(&path, 1, &mut cache);
+
+        assert_eq!(snapshot.input_tokens, 19);
+        assert_eq!(cache.entries[&path].cursor, record.len() as u64);
+    }
+
+    #[test]
+    fn cached_parser_waits_for_a_complete_line_without_losing_or_double_counting_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let first = format!("{}\n", parser_test_line(dir.path(), 10));
+        fs::write(&path, first.as_bytes()).expect("initial JSONL");
+        let mut cache = SessionParseCache::default();
+        let initial = parse_test_session(&path, 1, &mut cache);
+        assert_eq!(initial.input_tokens, 10);
+        let stable_cursor = cache.entries[&path].cursor;
+
+        let second = parser_test_line(dir.path(), 20);
+        let split = second.len() / 2;
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(&second.as_bytes()[..split]).unwrap();
+        let partial = parse_test_session(&path, 2, &mut cache);
+        assert_eq!(partial.input_tokens, 10);
+        assert_eq!(cache.entries[&path].cursor, stable_cursor);
+
+        file.write_all(&second.as_bytes()[split..]).unwrap();
+        file.write_all(b"\n").unwrap();
+        drop(file);
+        let complete = parse_test_session(&path, 3, &mut cache);
+        assert_eq!(complete.input_tokens, 30);
+    }
+
+    #[test]
+    fn cached_parser_resets_on_truncation_or_tail_anchor_mismatch() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let original = format!(
+            "{}\n{}\n",
+            parser_test_line(dir.path(), 10),
+            parser_test_line(dir.path(), 20)
+        );
+        fs::write(&path, original).expect("original JSONL");
+        let mut cache = SessionParseCache::default();
+        assert_eq!(parse_test_session(&path, 1, &mut cache).input_tokens, 30);
+
+        let replacement = format!("{}\n", parser_test_line(dir.path(), 7));
+        fs::write(&path, replacement).expect("truncated replacement");
+        assert_eq!(parse_test_session(&path, 2, &mut cache).input_tokens, 7);
+
+        let same_or_larger = format!(
+            "{}\n{}\n",
+            parser_test_line(dir.path(), 3).replace("\"ok\"", "\"replacement\""),
+            parser_test_line(dir.path(), 4)
+        );
+        fs::write(&path, same_or_larger).expect("same-size replacement");
+        assert_eq!(parse_test_session(&path, 3, &mut cache).input_tokens, 7);
+        assert_eq!(
+            cache.entries[&path].body_bytes_read_last_poll,
+            fs::metadata(&path).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn persistent_checkpoint_round_trips_only_when_source_identity_still_matches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let checkpoint_root = dir.path().join("checkpoints");
+        let original = format!("{}\n", parser_test_line(dir.path(), 10));
+        fs::write(&path, &original).expect("initial JSONL");
+        let mut cache = SessionParseCache::default();
+        let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        assert_eq!(parse_test_session(&path, 1, &mut cache).input_tokens, 10);
+
+        persist_session_checkpoint_to(&checkpoint_root, &path, &cache.entries[&path])
+            .expect("persist checkpoint");
+        let restored = load_session_checkpoint_from(
+            &checkpoint_root,
+            &path,
+            &fs::metadata(&path).unwrap(),
+            modified,
+        )
+        .expect("valid checkpoint");
+        assert_eq!(restored.cursor, original.len() as u64);
+        assert_eq!(restored.accumulator.total_input_tokens, 10);
+        assert_eq!(restored.snapshot.unwrap().input_tokens, 10);
+        assert_eq!(
+            fs::read_dir(&checkpoint_root).unwrap().count(),
+            1,
+            "atomic checkpointing must leave no temporary files behind"
+        );
+
+        let mut replacement = original.as_bytes().to_vec();
+        let last_json_byte = replacement.len() - 2;
+        replacement[last_json_byte] = b']';
+        fs::write(&path, replacement).expect("same-size replacement");
+        assert!(
+            load_session_checkpoint_from(
+                &checkpoint_root,
+                &path,
+                &fs::metadata(&path).unwrap(),
+                SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+            )
+            .is_none(),
+            "a matching size cannot promote a checkpoint with a stale tail anchor"
+        );
+    }
+
+    #[test]
+    fn corrupt_persistent_checkpoint_falls_back_to_the_jsonl_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("session.jsonl");
+        let checkpoint_root = dir.path().join("checkpoints");
+        fs::create_dir_all(&checkpoint_root).unwrap();
+        fs::write(&path, format!("{}\n", parser_test_line(dir.path(), 17))).expect("source JSONL");
+        fs::write(session_checkpoint_path(&checkpoint_root, &path), b"{")
+            .expect("corrupt checkpoint");
+
+        assert!(
+            load_session_checkpoint_from(
+                &checkpoint_root,
+                &path,
+                &fs::metadata(&path).unwrap(),
+                SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+            )
+            .is_none()
+        );
+        let mut source_cache = SessionParseCache::default();
+        assert_eq!(
+            parse_test_session(&path, 1, &mut source_cache).input_tokens,
+            17
+        );
+    }
+
+    #[test]
+    fn cold_scan_selects_only_fresh_transcripts_and_their_subagent_parent() {
+        let root = PathBuf::from("projects").join("encoded-workspace");
+        let parent_id = "4ccf0482-61c0-4611-9d22-becaf1781231";
+        let parent = root.join(format!("{parent_id}.jsonl"));
+        let active_subagent = root
+            .join(parent_id)
+            .join("subagents")
+            .join("agent-active.jsonl");
+        let stale_unrelated = root.join("stale.jsonl");
+        let fresh_main = root.join("fresh.jsonl");
+        let cutoff = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(50);
+        let fresh = SystemTime::UNIX_EPOCH + Duration::from_secs(150);
+
+        let selected = selected_session_paths(
+            &[
+                (parent.clone(), old, false),
+                (active_subagent.clone(), fresh, true),
+                (stale_unrelated.clone(), old, false),
+                (fresh_main.clone(), fresh, false),
+            ],
+            cutoff,
+        );
+
+        assert!(selected.contains(&active_subagent));
+        assert!(selected.contains(&parent));
+        assert!(selected.contains(&fresh_main));
+        assert!(!selected.contains(&stale_unrelated));
+    }
 
     #[test]
     fn claude_session_scan_respects_depth_limit() {

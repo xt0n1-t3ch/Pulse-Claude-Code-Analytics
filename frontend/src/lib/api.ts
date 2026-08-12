@@ -34,6 +34,27 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
     return (await res.json()) as T;
 }
 
+const inFlightReads = new Map<string, Promise<unknown>>();
+
+/** Share an identical read while it is in flight. This avoids serializing the
+ * same SQLite snapshot twice when a store update and a mounted view react in
+ * the same frame; completed reads are never cached, so freshness still belongs
+ * to the backend. */
+function invokeRead<T>(
+    command: string,
+    args?: Record<string, unknown>,
+    observationIdentity?: string,
+): Promise<T> {
+    const key = `${command}:${JSON.stringify(args ?? {})}:${observationIdentity ?? ""}`;
+    const existing = inFlightReads.get(key);
+    if (existing) return existing as Promise<T>;
+    const pending = invoke<T>(command, args).finally(() => {
+        if (inFlightReads.get(key) === pending) inFlightReads.delete(key);
+    });
+    inFlightReads.set(key, pending);
+    return pending;
+}
+
 export interface HealthResponse {
     version: string;
     uptime_seconds: number;
@@ -299,6 +320,8 @@ export interface DiscordSettings {
 
 export interface AppSnapshot {
     revision: number;
+    sync_state?: "syncing" | "live";
+    snapshot_captured_at?: string;
     health: HealthResponse;
     metrics: MetricsResponse;
     sessions: SessionInfo[];
@@ -504,28 +527,52 @@ export interface HourlyActivity {
 }
 
 export interface CostForecast {
-    spent_this_month: number;
+    billed_spend_usd: number | null;
+    daily_billed_spend_usd: number | null;
+    projected_billed_spend_usd: number | null;
+    api_equivalent_usd: number | null;
+    daily_api_equivalent_usd: number | null;
+    projected_api_equivalent_usd: number | null;
     days_elapsed: number;
     days_in_month: number;
-    projected_monthly: number;
-    daily_average: number;
     cost_basis: CostBasis;
     cost_sources: string[];
     sessions: number;
     priced_sessions: number;
+    billed_sessions: number;
+    api_equivalent_sessions: number;
+    refreshed_at: string;
 }
 
 export interface BudgetStatus {
     monthly_budget: number;
     alert_threshold_pct: number;
-    spent_this_month: number;
-    pct_used: number;
-    projected_monthly: number;
+    billed_spend_usd: number | null;
+    projected_billed_spend_usd: number | null;
+    api_equivalent_usd: number | null;
+    projected_api_equivalent_usd: number | null;
+    pct_used: number | null;
     over_budget: boolean;
     cost_basis: CostBasis;
     cost_sources: string[];
     sessions: number;
     priced_sessions: number;
+    billed_sessions: number;
+    api_equivalent_sessions: number;
+    refreshed_at: string;
+}
+
+export interface DashboardBundle {
+    summary: AnalyticsSummary;
+    sessions: HistoricalSession[];
+    forecast: CostForecast;
+    hourly_activity: HourlyActivity[];
+}
+
+export function getDashboardBundle(
+    provider?: AnalyticsProviderScope,
+): Promise<DashboardBundle> {
+    return invokeRead("get_dashboard_bundle", { provider: provider ?? null });
 }
 
 export interface ModelStat {
@@ -543,7 +590,7 @@ export function getSessionHistory(
     limit?: number,
     provider?: AnalyticsProviderScope,
 ): Promise<HistoricalSession[]> {
-    return invoke("get_session_history", {
+    return invokeRead("get_session_history", {
         days: days ?? null,
         project: project ?? null,
         limit: limit ?? null,
@@ -563,11 +610,11 @@ export function getDailyStats(
     days?: number,
     provider?: AnalyticsProviderScope,
 ): Promise<DailyStat[]> {
-    return invoke("get_daily_stats", { days: days ?? null, provider: provider ?? null });
+    return invokeRead("get_daily_stats", { days: days ?? null, provider: provider ?? null });
 }
 
 export function getAnalyticsSummary(provider?: AnalyticsProviderScope): Promise<AnalyticsSummary> {
-    return invoke("get_analytics_summary", { provider: provider ?? null });
+    return invokeRead("get_analytics_summary", { provider: provider ?? null });
 }
 
 export interface ContextFileEntry {
@@ -596,7 +643,7 @@ export function getContextBreakdown(
     sessionId?: string,
     provider?: AnalyticsProviderScope,
 ): Promise<ContextBreakdown> {
-    return invoke("get_context_breakdown", {
+    return invokeRead("get_context_breakdown", {
         sessionId: sessionId ?? null,
         provider: provider ?? null,
     });
@@ -615,7 +662,7 @@ export function getContextBreakdowns(
     sessionIds?: string[],
     provider?: AnalyticsProviderScope,
 ): Promise<SessionContextBreakdown[]> {
-    return invoke("get_context_breakdowns", {
+    return invokeRead("get_context_breakdowns", {
         sessionIds: sessionIds ?? null,
         provider: provider ?? null,
     });
@@ -650,7 +697,7 @@ export function getHourlyActivity(
     days?: number,
     provider?: AnalyticsProviderScope,
 ): Promise<HourlyActivity[]> {
-    return invoke("get_hourly_activity", { days: days ?? null, provider: provider ?? null });
+    return invokeRead("get_hourly_activity", { days: days ?? null, provider: provider ?? null });
 }
 
 export function getTopSessions(
@@ -666,7 +713,7 @@ export function getTopSessions(
 }
 
 export function getCostForecast(provider?: AnalyticsProviderScope): Promise<CostForecast> {
-    return invoke("get_cost_forecast", { provider: provider ?? null });
+    return invokeRead("get_cost_forecast", { provider: provider ?? null });
 }
 
 /**
@@ -674,7 +721,7 @@ export function getCostForecast(provider?: AnalyticsProviderScope): Promise<Cost
  *
  * Distinct from `getSessionHistory`, which returns a capped page for the table.
  * KPIs must use these totals so a window with more sessions than the page size
- * still reports its true spend.
+ * still reports its complete provenance-aware monetary value.
  */
 export interface CostTotals {
     days: number;
@@ -693,6 +740,10 @@ export interface CostTotals {
     cost_basis: CostBasis;
     cost_sources: string[];
     priced_sessions: number;
+    billed_spend_usd: number | null;
+    api_equivalent_usd: number | null;
+    billed_sessions: number;
+    api_equivalent_sessions: number;
     by_model: CostSlice[];
     by_project: CostSlice[];
 }
@@ -703,20 +754,40 @@ export interface CostSlice {
     sessions: number;
 }
 
+export interface CostsBundle {
+    history: HistoricalSession[];
+    forecast: CostForecast;
+    budget: BudgetStatus;
+    totals: CostTotals;
+    daily_usage: DailyStat[];
+}
+
+export function getCostsBundle(
+    project?: string,
+    provider?: AnalyticsProviderScope,
+    observationIdentity?: string,
+): Promise<CostsBundle> {
+    return invokeRead("get_costs_bundle", {
+        project: project ?? null,
+        provider: provider ?? null,
+    }, observationIdentity);
+}
+
 export function getCostTotals(
     days?: number,
     project?: string,
     provider?: AnalyticsProviderScope,
+    observationIdentity?: string,
 ): Promise<CostTotals> {
-    return invoke("get_cost_totals", {
+    return invokeRead("get_cost_totals", {
         days: days ?? null,
         project: project ?? null,
         provider: provider ?? null,
-    });
+    }, observationIdentity);
 }
 
 export function getBudgetStatus(provider?: AnalyticsProviderScope): Promise<BudgetStatus> {
-    return invoke("get_budget_status", { provider: provider ?? null });
+    return invokeRead("get_budget_status", { provider: provider ?? null });
 }
 
 export function setBudget(monthlyBudget: number, alertThresholdPct?: number): Promise<void> {
@@ -966,7 +1037,7 @@ export interface ReportsBundle {
     daily_costs: DailyCostPoint[];
 }
 
-/** One day on the Reports cost timeline. Zero-filled across the window. */
+/** One day on the Reports monetary-value timeline. Zero-filled across the window. */
 export interface DailyCostPoint {
     date: string;
     cost: number;

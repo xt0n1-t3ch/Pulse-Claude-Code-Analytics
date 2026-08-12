@@ -8,6 +8,7 @@ import {
   planInfo,
   rateLimits,
   selectedAccessSourceId,
+  selectedAnalyticsProviderScope,
   sessions,
 } from "@/lib/stores";
 import { provider } from "@/lib/provider";
@@ -147,15 +148,21 @@ function liveSession(
 }
 
 const forecast: CostForecast = {
-  spent_this_month: 30,
+  billed_spend_usd: 30,
+  daily_billed_spend_usd: 3,
+  projected_billed_spend_usd: 93,
+  api_equivalent_usd: null,
+  daily_api_equivalent_usd: null,
+  projected_api_equivalent_usd: null,
   days_elapsed: 10,
   days_in_month: 31,
-  projected_monthly: 93,
-  daily_average: 3,
   cost_basis: "exact",
-  cost_sources: ["anthropic_api_equivalent"],
+  cost_sources: ["provider_billed"],
   sessions: 2,
   priced_sessions: 2,
+  billed_sessions: 2,
+  api_equivalent_sessions: 0,
+  refreshed_at: "2026-08-12T12:00:00Z",
 };
 
 const hourly: HourlyActivity[] = [
@@ -196,12 +203,26 @@ const getSessionHistory = vi.fn(
 );
 const getCostForecast = vi.fn(async (scope?: string) =>
   scope === "openai" || scope === "anthropic"
-    ? { ...forecast, spent_this_month: 0, projected_monthly: 0, daily_average: 0, sessions: 0, priced_sessions: 0, cost_basis: "unavailable" as const, cost_sources: [] }
+    ? { ...forecast, billed_spend_usd: null, projected_billed_spend_usd: null, daily_billed_spend_usd: null, sessions: 0, priced_sessions: 0, billed_sessions: 0, cost_basis: "unavailable" as const, cost_sources: [] }
     : forecast,
 );
 const getHourlyActivity = vi.fn(async (_days?: number, scope?: string) =>
   scope === "openai" || scope === "anthropic" ? [] : hourly,
 );
+const getDashboardBundle = vi.fn(async (scope?: string) => {
+  const [bundleSummary, bundleSessions, bundleForecast, bundleHourly] = await Promise.all([
+    getAnalyticsSummary(scope),
+    getSessionHistory(30, undefined, 50, scope),
+    getCostForecast(scope),
+    getHourlyActivity(30, scope),
+  ]);
+  return {
+    summary: bundleSummary,
+    sessions: bundleSessions,
+    forecast: bundleForecast,
+    hourly_activity: bundleHourly,
+  };
+});
 const getDailyStats = vi.fn(async () => daily);
 const getProjectStats = vi.fn(async () => projects);
 
@@ -209,6 +230,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    getDashboardBundle: (scope?: string) => getDashboardBundle(scope),
     getAnalyticsSummary: (scope?: string) => getAnalyticsSummary(scope),
     getSessionHistory: (days?: number, project?: string, limit?: number, scope?: string) =>
       getSessionHistory(days, project, limit, scope),
@@ -221,6 +243,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 describe("Dashboard.svelte", () => {
   beforeEach(() => {
+    getDashboardBundle.mockClear();
     getAnalyticsSummary.mockClear();
     getSessionHistory.mockClear();
     getCostForecast.mockClear();
@@ -230,6 +253,7 @@ describe("Dashboard.svelte", () => {
     sessions.set([]);
     accessSnapshot.set(null);
     selectedAccessSourceId.set("all");
+    selectedAnalyticsProviderScope.set("all");
     planInfo.set({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x ($200/mo)", detected: true });
     rateLimits.set({
       provider: "claude",
@@ -298,6 +322,19 @@ describe("Dashboard.svelte", () => {
     const alert = await findByRole("alert");
     expect(alert.textContent).toContain("Historical analytics unavailable");
     expect(alert.textContent).toContain("Retry");
+  });
+
+  it("never relabels a previous provider bundle after a scope switch fails", async () => {
+    const { container, queryByText, findByRole } = render(Dashboard);
+    await waitFor(() => expect(queryByText("Provider-billed projection")).toBeTruthy());
+
+    getDashboardBundle.mockRejectedValueOnce(new Error("openai ledger unavailable"));
+    selectedAnalyticsProviderScope.set("openai");
+
+    const alert = await findByRole("alert");
+    expect(alert.textContent).toContain("openai ledger unavailable");
+    expect(container.textContent).not.toContain("Provider-billed projection");
+    expect(container.querySelector("[data-session-focus]")?.textContent).not.toContain("$6.00");
   });
 
   it("does not reserve an allowance rail when every source lacks provider proof", async () => {
@@ -447,11 +484,12 @@ describe("Dashboard.svelte", () => {
     getSessionHistory.mockResolvedValueOnce([]);
     getCostForecast.mockResolvedValueOnce({
       ...forecast,
-      spent_this_month: 0,
-      projected_monthly: 0,
-      daily_average: 0,
+      billed_spend_usd: null,
+      projected_billed_spend_usd: null,
+      daily_billed_spend_usd: null,
       sessions: 0,
       priced_sessions: 0,
+      billed_sessions: 0,
       cost_basis: "unavailable",
       cost_sources: [],
     });

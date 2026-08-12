@@ -4,7 +4,7 @@
   import SessionCard from "../components/SessionCard.svelte";
   import { sessions, selectedAnalyticsProviderScope } from "../lib/stores";
   import { providerMatchesAnalyticsScope } from "../lib/access";
-  import { fmtTokens, fmtCost, fmtExactCost, fmtDuration, fmtTps, classifyActivity, fmtClock } from "../lib/utils";
+  import { fmtTokens, fmtCost, fmtExactCost, fmtDuration, fmtTps, classifyActivity, fmtClock, monetaryValueLabel } from "../lib/utils";
   import { getSessionHistory, getAnalyticsSummary, searchSessions, getSessionHistoryFiltered } from "../lib/api";
   import type { HistoricalSession, AnalyticsSummary } from "../lib/api";
   import { fly } from "svelte/transition";
@@ -27,7 +27,9 @@
     { key: "cache_write_tokens", label: "Cache Write", enabled: true },
     { key: "cache_read_tokens", label: "Cache Read", enabled: true },
     { key: "duration_secs", label: "Duration (s)", enabled: true },
-    { key: "total_cost", label: "Cost", enabled: true },
+    { key: "total_cost", label: "Known Monetary Value (USD)", enabled: true },
+    { key: "cost_basis", label: "Monetary Value Basis", enabled: true },
+    { key: "cost_source", label: "Monetary Value Source", enabled: true },
     { key: "started_at", label: "Started", enabled: true },
     { key: "ended_at", label: "Ended", enabled: false },
     { key: "effort", label: "Effort", enabled: false },
@@ -93,6 +95,8 @@
   let historyLoading = $state(true);
   let historyError = $state<string | null>(null);
   let historyRequest = 0;
+  const HISTORY_PAGE_SIZE = 50;
+  let visibleHistoryLimit = $state(HISTORY_PAGE_SIZE);
   let historyDays = $state(7);
   let searchQuery = $state("");
   // granular filters
@@ -112,14 +116,13 @@
   );
 
   let compareList = $derived(history.filter((h) => compareIds.has(h.id)));
+  let visibleHistory = $derived(history.slice(0, visibleHistoryLimit));
 
   async function loadHistory(): Promise<void> {
     const request = ++historyRequest;
     const provider = $selectedAnalyticsProviderScope;
     historyLoading = true;
     historyError = null;
-    history = [];
-    summary = null;
     showExport = false;
     compareIds = new Set();
     try {
@@ -150,6 +153,7 @@
       if (request !== historyRequest) return;
       summary = nextSummary;
       history = nextHistory;
+      visibleHistoryLimit = HISTORY_PAGE_SIZE;
       knownProjects = [...new Set(nextHistory.map((session) => session.project))].sort();
     } catch (error) {
       if (request !== historyRequest) return;
@@ -175,12 +179,13 @@
     const provider = $selectedAnalyticsProviderScope;
     historyLoading = true;
     historyError = null;
-    history = [];
-    summary = null;
     showExport = false;
     try {
       const result = await searchSessions(searchQuery, 100, provider);
-      if (request === historyRequest && provider === $selectedAnalyticsProviderScope) history = result;
+      if (request === historyRequest && provider === $selectedAnalyticsProviderScope) {
+        history = result;
+        visibleHistoryLimit = HISTORY_PAGE_SIZE;
+      }
     } catch (error) {
       if (request === historyRequest) {
         historyError = error instanceof Error && error.message
@@ -235,7 +240,7 @@
         {#each projects as p}<option value={p}>{p}</option>{/each}
       </select>
       <select bind:value={sortBy}>
-        <option value="cost">Sort: Cost</option>
+        <option value="cost">Sort: Monetary value</option>
         <option value="tokens">Sort: Tokens</option>
         <option value="duration">Sort: Duration</option>
         <option value="tps">Sort: Throughput</option>
@@ -247,7 +252,7 @@
   <div class="stats-row metric-strip">
     <StatCard label="Active sessions" value={String(filtered.length)} />
     <StatCard label="Live tokens" value={filtered.length > 0 ? fmtTokens(totalTokens) : "—"} />
-    <StatCard label="Live cost" value={filtered.length > 0 ? fmtExactCost(totalCost, totalCostAvailable) : "—"} />
+    <StatCard label="Live monetary value" value={filtered.length > 0 ? fmtExactCost(totalCost, totalCostAvailable) : "—"} />
     <StatCard label="Avg throughput" value={filtered.length > 0 ? fmtTps(avgTps) : "—"} />
   </div>
 
@@ -316,12 +321,12 @@
         <div class="history-summary">
           <span>All time: <strong>{summary.total_sessions}</strong> sessions</span>
           <span>
-            Cost:
+            {monetaryValueLabel(summary.cost_sources)}:
             <strong>
               {summary.cost_basis === "unavailable"
                 ? "Unavailable"
                 : summary.cost_basis === "partial"
-                  ? `${fmtCost(summary.total_cost)} known`
+                  ? `${fmtCost(summary.total_cost)} lower bound`
                   : fmtCost(summary.total_cost)}
             </strong>
           </span>
@@ -334,13 +339,13 @@
 
     {#if historyError}
       <section class="history-state error" role="alert">
-        <strong>{historyError.split(".")[0]}</strong>
+        <strong>{history.length > 0 ? "Showing the last verified history" : historyError.split(".")[0]}</strong>
         <span>{historyError.split(".").slice(1).join(".").trim()}</span>
         <button type="button" onclick={loadHistory}>Retry</button>
       </section>
     {:else if historyLoading}
       <section class="history-state" role="status">
-        <strong>Loading session history</strong>
+        <strong>{history.length > 0 ? "Refreshing session history" : "Loading session history"}</strong>
         <span>Reading the selected provider and time window.</span>
       </section>
     {/if}
@@ -355,7 +360,7 @@
           {#each compareList as c}<div class="compare-cell">{c.model}</div>{/each}
           <div class="compare-label">Tokens</div>
           {#each compareList as c}<div class="compare-cell">{fmtTokens(c.total_tokens)}</div>{/each}
-          <div class="compare-label">Cost</div>
+          <div class="compare-label">Monetary value</div>
           {#each compareList as c}
             <div class="compare-cell accent">
               {c.known_cost === null
@@ -380,7 +385,8 @@
       </div>
     {/if}
 
-    <div class="history-table" class:muted={historyLoading || !!historyError}>
+    {#if history.length > 0 || (!historyLoading && !historyError)}
+    <div class="history-table" class:refreshing={historyLoading && history.length > 0}>
       <div class="ht-header">
         {#if compareMode}<span class="ht-col check"></span>{/if}
         <span class="ht-col status"></span>
@@ -388,10 +394,10 @@
         <span class="ht-col model">Model</span>
         <span class="ht-col">Tokens</span>
         <span class="ht-col">Duration</span>
-        <span class="ht-col cost">Cost</span>
+        <span class="ht-col cost">Monetary value</span>
         <span class="ht-col date">Date</span>
       </div>
-      {#each history as h (h.id)}
+      {#each visibleHistory as h (h.id)}
         <div class="ht-row-wrap">
           <div
             class="ht-row"
@@ -435,14 +441,16 @@
                   <div class="detail-row"><span>Cache Read</span><span>{fmtTokens(h.cache_read_tokens)}</span></div>
                 </div>
                 <div class="detail-section">
-                  <span class="detail-label">Cost Breakdown</span>
+                  <span class="detail-label">Monetary Value Breakdown</span>
                   {#if h.known_cost === null}
                     <p class="detail-unavailable">The provider did not return enough billing inputs for this session.</p>
                   {:else}
                     {#if h.cost_basis === "partial"}
                       <p class="detail-unavailable">Known subtotal; this session has incomplete cost coverage.</p>
-                    {:else if h.cost_basis === "estimated"}
+                    {:else if h.cost_basis === "estimated" || monetaryValueLabel([h.cost_source]) === "API-equivalent value"}
                       <p class="detail-unavailable">API-equivalent estimate reconstructed from session tokens and model pricing.</p>
+                    {:else if monetaryValueLabel([h.cost_source]) === "Provider-billed spend"}
+                      <p class="detail-unavailable">Provider-reported billing for this session.</p>
                     {/if}
                     <div class="detail-row"><span>Input</span><span>{fmtCost(h.input_cost)}</span></div>
                     <div class="detail-row"><span>Output</span><span>{fmtCost(h.output_cost)}</span></div>
@@ -465,6 +473,16 @@
         <div class="ht-empty">No sessions match the selected history filters. All-time totals above remain unchanged.</div>
       {/each}
     </div>
+    {#if history.length > visibleHistory.length}
+      <button
+        class="show-more"
+        type="button"
+        onclick={() => (visibleHistoryLimit += HISTORY_PAGE_SIZE)}
+      >
+        Show {Math.min(HISTORY_PAGE_SIZE, history.length - visibleHistory.length)} more
+      </button>
+    {/if}
+    {/if}
   </div>
 </div>
 
@@ -548,7 +566,7 @@
   .history-summary span { display: flex; align-items: center; gap: 4px; }
 
   .history-table { font-size: 12px; max-height: 500px; overflow-y: auto; --ht-cols: 24px 2fr 1.5fr 90px 80px 80px 80px; }
-  .history-table.muted { display: none; }
+  .history-table.refreshing { opacity: 0.72; pointer-events: none; }
   .ht-header { display: grid; grid-template-columns: var(--ht-cols); gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 9px; letter-spacing: 0.08em; position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
   .ht-row-wrap { border-bottom: 1px solid var(--border); }
   .ht-row { display: grid; grid-template-columns: var(--ht-cols); gap: 8px; padding: 10px 14px; transition: background 0.15s var(--ease); cursor: pointer; }
@@ -576,6 +594,8 @@
   .detail-row { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); padding: 2px 0; }
   .detail-row span:last-child { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
   .detail-unavailable { max-width: 34ch; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+  .show-more { align-self: center; margin: 12px auto 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-secondary); padding: 7px 16px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .show-more:hover { color: var(--accent); border-color: var(--accent); }
 
   .card { min-width: 0; }
   .history-table, .compare-panel { overflow-x: auto; overscroll-behavior-inline: contain; }

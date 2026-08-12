@@ -20,7 +20,7 @@
   } from "../lib/api";
   import { addToast, selectedAnalyticsProviderScope } from "../lib/stores";
   import { providerProfile } from "../lib/provider";
-  import { fmtCost } from "../lib/utils";
+  import { fmtCost, monetaryValueLabel } from "../lib/utils";
   import CostTimeline from "../components/CostTimeline.svelte";
   import type { DailyCostPoint } from "../lib/api";
   import SegmentedControl from "../components/SegmentedControl.svelte";
@@ -202,7 +202,7 @@
   // chart can never disagree with the curve above them.
   let totalCost = $derived(dailyCosts.reduce((sum, p) => sum + p.cost, 0));
   /** Averaged over days with activity, not the whole window: an idle day is
-   *  not a cheap day, and including it would understate real daily spend. */
+   *  not a cheap day, and including it would understate known daily monetary value. */
   let activeDays = $derived(dailyCosts.filter((p) => p.sessions > 0).length);
   let avgDailyCost = $derived(activeDays === 0 ? 0 : totalCost / activeDays);
   let peakDay = $derived(
@@ -294,15 +294,15 @@
     <section class="timeline-hero">
       <div class="th-head">
         <div class="th-titles">
-          <h3 class="th-title">Cost timeline</h3>
-          <p class="th-sub">Daily spend across the selected window, with cost inflections marked on the curve.</p>
+          <h3 class="th-title">Monetary value timeline</h3>
+          <p class="th-sub">Daily monetary value across the selected window, with provenance-aware inflections marked on the curve.</p>
         </div>
         <div class="cost-coverage" data-basis={timelineCostBasis}>
           <strong>
             {timelineCostBasis === "unavailable"
-              ? "Cost unavailable"
+              ? "Monetary value unavailable"
               : timelineCostBasis === "partial"
-                ? "Known-cost coverage"
+                ? "Known monetary-value coverage"
                 : timelineCostBasis === "estimated"
                   ? "API-equivalent estimate"
                   : "Complete coverage"}
@@ -325,7 +325,7 @@
 
       <div class="th-stats">
         <div class="th-stat">
-          <span class="ths-label">{timelineCostBasis === "partial" ? "Known cost" : timelineCostBasis === "estimated" ? "Estimated cost" : "Total cost"}</span>
+          <span class="ths-label">{timelineCostBasis === "partial" ? `${monetaryValueLabel(timelineCostSources)} lower bound` : monetaryValueLabel(timelineCostSources)}</span>
           <span class="ths-value">{timelineCostBasis === "unavailable" ? "—" : fmtCost(totalCost)}</span>
           <span class="ths-meta">{dailyCosts.length} days analysed</span>
         </div>
@@ -442,7 +442,7 @@
         </p>
         {#if inflections.length === 0}
           <div class="empty-inline">
-            No significant cost shifts detected — usage is consistent.
+            No significant monetary-value shifts detected — usage is consistent.
           </div>
         {:else}
           <ul class="inflection-list">

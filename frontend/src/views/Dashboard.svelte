@@ -10,10 +10,7 @@
   } from "../lib/stores";
   import { providerMatchesAnalyticsScope } from "../lib/access";
   import { fmtTokens, fmtCost, fmtExactCost, fmtDuration, fmtPct, fmtTps } from "../lib/utils";
-  import {
-    getAnalyticsSummary, getSessionHistory, getCostForecast,
-    getHourlyActivity,
-  } from "../lib/api";
+  import { getDashboardBundle } from "../lib/api";
   import type { AnalyticsSummary, HistoricalSession, CostForecast, HourlyActivity } from "../lib/api";
 
   let summary = $state<AnalyticsSummary | null>(null);
@@ -23,37 +20,39 @@
   let selectedFocusId = $state<string | null>(null);
   let analyticsLoading = $state(true);
   let analyticsError = $state<string | null>(null);
+  // Internal request ownership, not render state. Keeping this plain also
+  // prevents the refresh effect from subscribing to its own bookkeeping.
+  let analyticsScope: typeof $selectedAnalyticsProviderScope | null = null;
 
   let analyticsRequest = 0;
   async function refresh(provider: typeof $selectedAnalyticsProviderScope): Promise<void> {
     const request = ++analyticsRequest;
-    analyticsLoading = true;
-    analyticsError = null;
-    summary = null;
-    histSessions = [];
-    forecast = null;
-    hourlyData = [];
-    try {
-      const [nextSummary, nextSessions, nextForecast, nextHourlyData] = await Promise.all([
-        getAnalyticsSummary(provider),
-        getSessionHistory(30, undefined, 50, provider),
-        getCostForecast(provider),
-        getHourlyActivity(30, provider),
-      ]);
-      if (request !== analyticsRequest) return;
-      summary = nextSummary;
-      histSessions = nextSessions;
-      forecast = nextForecast;
-      hourlyData = nextHourlyData;
-    } catch (error) {
-      if (request !== analyticsRequest) return;
+    if (analyticsScope !== provider) {
+      // Stale-while-revalidate is safe only inside the same trust scope. Data
+      // from another provider must never survive under the newly selected
+      // label, even when the new read fails.
       summary = null;
       histSessions = [];
       forecast = null;
       hourlyData = [];
+      analyticsScope = provider;
+    }
+    analyticsLoading = true;
+    analyticsError = null;
+    try {
+      const bundle = await getDashboardBundle(provider);
+      if (request !== analyticsRequest || provider !== $selectedAnalyticsProviderScope) return;
+      summary = bundle.summary;
+      histSessions = bundle.sessions;
+      forecast = bundle.forecast;
+      hourlyData = bundle.hourly_activity;
+    } catch (error) {
+      if (request !== analyticsRequest || provider !== $selectedAnalyticsProviderScope) return;
       analyticsError = error instanceof Error ? error.message : "Historical analytics could not be loaded.";
     } finally {
-      if (request === analyticsRequest) analyticsLoading = false;
+      if (request === analyticsRequest && provider === $selectedAnalyticsProviderScope) {
+        analyticsLoading = false;
+      }
     }
   }
 
@@ -151,9 +150,28 @@
     const pct = total > 0 ? (top.sessions / total) * 100 : 0;
     return { name: top.model, pct, sessions: top.sessions };
   });
+  let forecastInsight = $derived.by(() => {
+    if (forecast?.billed_spend_usd !== null && forecast?.billed_spend_usd !== undefined) {
+      return {
+        label: "Provider-billed projection",
+        value: forecast.projected_billed_spend_usd,
+        current: forecast.billed_spend_usd,
+        suffix: "billed",
+      };
+    }
+    if (forecast?.api_equivalent_usd !== null && forecast?.api_equivalent_usd !== undefined) {
+      return {
+        label: "API-equivalent projection",
+        value: forecast.projected_api_equivalent_usd,
+        current: forecast.api_equivalent_usd,
+        suffix: "API-equivalent · not billed spend",
+      };
+    }
+    return null;
+  });
   let hasOperationalSummary = $derived(
     showCacheR + showInput > 0
-      || Boolean(forecast && forecast.spent_this_month > 0)
+      || Boolean(forecastInsight)
       || Boolean(topModel && topModel.pct > 60)
       || hourlyData.length > 0,
   );
@@ -263,13 +281,13 @@
       <header class="work-now-head">
         <div>
           <h2>Live workspace</h2>
-          <p>Your current session — context, spend, and throughput.</p>
+          <p>Your current session — context, monetary value, and throughput.</p>
         </div>
         {#if $backendConnection !== "live"}
           <div class="home-status" aria-label="Connection status">
             <span class="status-chip" class:warn={$backendConnection === "disconnected"}>
               <i></i>
-              {$backendConnection === "disconnected" ? "Reconnecting…" : "Connecting…"}
+              {$backendConnection === "disconnected" ? "Reconnecting…" : "Syncing…"}
             </span>
           </div>
         {/if}
@@ -350,7 +368,7 @@
 
       <div class="focus-values">
         <div>
-          <span class="focus-label">Current cost</span>
+          <span class="focus-label">Current monetary value</span>
           <strong>{fmtExactCost(focusCost, focusCostAvailable)}</strong>
           {#if focusCostBasis !== "exact"}
             <span class="focus-note">{focusCostNote}</span>
@@ -466,13 +484,13 @@
     </div>
     {/if}
 
-    {#if forecast && forecast.spent_this_month > 0}
+    {#if forecast && forecastInsight}
       <div class="insight-card">
         <div class="forecast-info">
-          <span class="forecast-label">Monthly projection</span>
-          <span class="forecast-value">{fmtCost(forecast.projected_monthly)}</span>
+          <span class="forecast-label">{forecastInsight.label}</span>
+          <span class="forecast-value">{forecastInsight.value === null ? "—" : fmtCost(forecastInsight.value)}</span>
           <span class="forecast-meta">
-            {fmtCost(forecast.spent_this_month)} spent
+            {fmtCost(forecastInsight.current)} {forecastInsight.suffix}
             ({forecast.days_elapsed}/{forecast.days_in_month} days)
           </span>
         </div>

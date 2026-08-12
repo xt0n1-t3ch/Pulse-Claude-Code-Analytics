@@ -222,6 +222,40 @@ describe("Context.svelte", () => {
     await waitFor(() => expect(container.querySelector(".hero-used")?.textContent?.trim()).toBe("80.0K"));
   });
 
+  it("does not pair a newly selected session with the previous session breakdown", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([makeSession("s1", "pulse")]);
+
+    const Context = (await import("@/views/Context.svelte")).default;
+    const { container } = render(Context);
+    await waitFor(() => expect(container.querySelector(".hero-used")?.textContent?.trim()).toBe("50.0K"));
+
+    let resolveNext!: (value: SessionContextBreakdown[]) => void;
+    getContextBreakdowns.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveNext = resolve;
+    }));
+    sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
+    await tick();
+    const otherCard = [...container.querySelectorAll<HTMLElement>(".active-ctx-card")]
+      .find((card) => card.textContent?.includes("other"));
+    expect(otherCard).toBeTruthy();
+    await fireEvent.click(otherCard!);
+    await tick();
+
+    expect(otherCard!.classList.contains("selected")).toBe(true);
+    expect(container.querySelector(".hero-card")).toBeNull();
+
+    resolveNext([{
+      session_id: "s2",
+      project: "other",
+      model_id: "claude-opus-4-8",
+      is_idle: false,
+      activity: "Thinking",
+      breakdown: { ...breakdown, used_tokens: 90_000, free_space: 100_000 },
+    }]);
+    await waitFor(() => expect(container.querySelector(".hero-used")?.textContent?.trim()).toBe("90.0K"));
+  });
+
   it("clears the detail instead of falling back to an idle snapshot", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([makeSession("live", "pulse")]);

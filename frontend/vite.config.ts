@@ -18,6 +18,10 @@ export default defineConfig(() => {
               rewrite: () => "/invoke",
               configure(proxy) {
                 proxy.on("proxyReq", (request) => {
+                  // Browser profile cookies are unrelated to the authenticated
+                  // loopback contract and can exceed the bridge's bounded HTTP
+                  // header limit. Never forward them across this boundary.
+                  request.removeHeader("cookie");
                   request.setHeader("Authorization", `Bearer ${bridgeToken}`);
                 });
               },

@@ -48,28 +48,39 @@ const histList = [
 ];
 
 const forecast: CostForecast = {
-  spent_this_month: 30,
+  billed_spend_usd: 30,
+  daily_billed_spend_usd: 3,
+  projected_billed_spend_usd: 93,
+  api_equivalent_usd: null,
+  daily_api_equivalent_usd: null,
+  projected_api_equivalent_usd: null,
   days_elapsed: 10,
   days_in_month: 31,
-  projected_monthly: 93,
-  daily_average: 3,
   cost_basis: "exact",
-  cost_sources: ["anthropic_api_equivalent"],
+  cost_sources: ["provider_billed"],
   sessions: 2,
   priced_sessions: 2,
+  billed_sessions: 2,
+  api_equivalent_sessions: 0,
+  refreshed_at: "2026-08-12T12:00:00Z",
 };
 
 const budget: BudgetStatus = {
   monthly_budget: 100,
   alert_threshold_pct: 80,
-  spent_this_month: 30,
+  billed_spend_usd: 30,
+  projected_billed_spend_usd: 93,
+  api_equivalent_usd: null,
+  projected_api_equivalent_usd: null,
   pct_used: 30,
-  projected_monthly: 93,
   over_budget: false,
   cost_basis: "exact",
-  cost_sources: ["anthropic_api_equivalent"],
+  cost_sources: ["provider_billed"],
   sessions: 2,
   priced_sessions: 2,
+  billed_sessions: 2,
+  api_equivalent_sessions: 0,
+  refreshed_at: "2026-08-12T12:00:00Z",
 };
 
 const getSessionHistory = vi.fn(async () => histList);
@@ -96,6 +107,10 @@ const totals: CostTotals = {
   cost_basis: "exact",
   cost_sources: ["anthropic_api_equivalent"],
   priced_sessions: histList.length,
+  billed_spend_usd: null,
+  api_equivalent_usd: histList.reduce((s, h) => s + h.total_cost, 0),
+  billed_sessions: 0,
+  api_equivalent_sessions: histList.length,
   by_model: [{ label: "Claude Opus 4.8", cost: histList.reduce((s, h) => s + h.total_cost, 0), sessions: 2 }],
   by_project: [
     { label: "pulse", cost: 10, sessions: 1 },
@@ -108,16 +123,35 @@ const projectTotals: CostTotals = {
   ...totals,
   sessions: 1,
   total_cost: 10,
+  api_equivalent_usd: 10,
+  api_equivalent_sessions: 1,
   by_project: [{ label: "pulse", cost: 10, sessions: 1 }],
 };
 const getCostTotals = vi.fn(async (_days?: number, project?: string) =>
   project ? projectTotals : totals,
 );
+async function buildCostsBundle(project?: string) {
+  const [history, bundleForecast, bundleBudget, bundleTotals] = await Promise.all([
+    getSessionHistory(),
+    getCostForecast(),
+    getBudgetStatus(),
+    getCostTotals(30, project),
+  ]);
+  return {
+    history,
+    forecast: bundleForecast,
+    budget: bundleBudget,
+    totals: bundleTotals,
+    daily_usage: [],
+  };
+}
+const getCostsBundle = vi.fn(buildCostsBundle);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
+    getCostsBundle: (project?: string) => getCostsBundle(project),
     getSessionHistory: () => getSessionHistory(),
     getCostForecast: () => getCostForecast(),
     getCostTotals: (days?: number, project?: string) => getCostTotals(days, project),
@@ -128,6 +162,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 describe("Costs.svelte", () => {
   beforeEach(async () => {
+    getCostsBundle.mockReset();
+    getCostsBundle.mockImplementation(buildCostsBundle);
     getSessionHistory.mockReset();
     getSessionHistory.mockResolvedValue(histList);
     getCostForecast.mockReset();
@@ -161,10 +197,10 @@ describe("Costs.svelte", () => {
 
     const labels = [...container.querySelectorAll(".is-label")].map((e) => e.textContent?.trim());
     expect(labels).toEqual([
-      "Avg / session",
-      "Cost / 1M tokens",
+      "Value / session",
+      "Value / 1M tokens",
       "Cache savings",
-      "Total spent (30d)",
+      "API-equivalent value (30d)",
     ]);
   });
 
@@ -177,13 +213,13 @@ describe("Costs.svelte", () => {
     await waitFor(() => expect(container.querySelector(".is-value")).not.toBeNull());
 
     const values = [...container.querySelectorAll(".is-value")].map((e) => e.textContent?.trim());
-    // Total spent mirrors the aggregate exactly.
+    // The provenance-labeled 30-day value mirrors the aggregate exactly.
     expect(values[3]).toBe("$" + totals.total_cost.toFixed(2));
     // Average divides by the aggregate session count.
     expect(values[0]).toBe("$" + (totals.total_cost / totals.sessions).toFixed(2));
   });
 
-  it("renders a Cost by Type breakdown whose legend reconciles to the per-component total", async () => {
+  it("renders a monetary-value breakdown whose legend reconciles to the per-component total", async () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container, getByText } = render(Costs);
     await tick();
@@ -207,6 +243,20 @@ describe("Costs.svelte", () => {
     const rowsTotal = histList.reduce((s, h) => s + h.total_cost, 0);
     expect(legendTotal).toBeCloseTo(rowsTotal, 5);
     expect(getByText("Session details")).toBeTruthy();
+  });
+
+  it("bounds the initial session-detail DOM while preserving the complete export dataset", async () => {
+    const manySessions = Array.from({ length: 75 }, (_, index) => ({
+      ...hist(`history-${index}`, `project-${index}`, { input: 1, output: 1, cacheW: 0, cacheR: 0 }),
+    }));
+    getSessionHistory.mockResolvedValueOnce(manySessions);
+
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { container, getByRole } = render(Costs);
+
+    await waitFor(() => expect(container.querySelectorAll(".dt-row")).toHaveLength(50));
+    await fireEvent.click(getByRole("button", { name: "Show 25 more" }));
+    await waitFor(() => expect(container.querySelectorAll(".dt-row")).toHaveLength(75));
   });
 
   it("plots spend, projection and cap on the cockpit gauge", async () => {
@@ -248,16 +298,36 @@ describe("Costs.svelte", () => {
   });
 
   /** With a session still running, a KPI fetched once on mount silently goes
-   *  stale while the table keeps moving. */
-  it("refreshes the aggregate when the live session snapshot changes", async () => {
+   *  stale while the table keeps moving. Identity-only snapshot replacements,
+   *  however, must not refetch the monetary aggregate. */
+  it("refreshes the aggregate only when the live monetary fingerprint changes", async () => {
     const { sessions } = await import("@/lib/stores");
+    const live = {
+      session_id: "live-cost",
+      provider: "claude",
+      project: "pulse",
+      model: "Claude Opus 4.8",
+      branch: null,
+      cost: 1,
+      cost_available: true,
+      cost_basis: "exact",
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_write_tokens: 0,
+      cache_read_tokens: 0,
+    } as any;
+    sessions.set([live]);
     const Costs = (await import("@/views/Costs.svelte")).default;
     render(Costs);
     await tick();
     await waitFor(() => expect(getCostTotals).toHaveBeenCalled());
     const initialCalls = getCostTotals.mock.calls.length;
 
-    sessions.set([]);
+    sessions.set([{ ...live }]);
+    await tick();
+    expect(getCostTotals.mock.calls.length).toBe(initialCalls);
+
+    sessions.set([{ ...live, cost: 2, output_tokens: 6 }]);
     await tick();
 
     await waitFor(() =>
@@ -329,22 +399,22 @@ describe("Costs.svelte", () => {
   });
 
   it("fails closed when the cost backend is unavailable instead of rendering fake zeroes", async () => {
-    getCostForecast.mockRejectedValueOnce(new Error("database unavailable"));
+    getCostsBundle.mockRejectedValue(new Error("database unavailable"));
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { findByRole, queryByText } = render(Costs);
 
     const alert = await findByRole("alert");
     expect(alert.textContent).toContain("Cost data unavailable");
     expect(alert.textContent).toContain("Retry");
-    expect(queryByText("Spent this month")).toBeNull();
+    expect(queryByText("Provider-billed this month")).toBeNull();
   });
 
   it("explains a real zero month beside a non-zero rolling 30-day ledger", async () => {
     getCostForecast.mockResolvedValueOnce({
       ...forecast,
-      spent_this_month: 0,
-      projected_monthly: 0,
-      daily_average: 0,
+      billed_spend_usd: 0,
+      projected_billed_spend_usd: 0,
+      daily_billed_spend_usd: 0,
       days_elapsed: 3,
     });
     const Costs = (await import("@/views/Costs.svelte")).default;
@@ -366,10 +436,10 @@ describe("Costs.svelte", () => {
     const { findByText } = render(Costs);
 
     expect(await findByText("Partial cost coverage")).toBeTruthy();
-    expect(await findByText(/1 of 2 sessions have a known cost/i)).toBeTruthy();
+    expect(await findByText(/1 of 2 sessions have a known monetary value/i)).toBeTruthy();
   });
 
-  it("turns unavailable spend into a useful subscription value ledger", async () => {
+  it("turns unavailable billing into a provenance-aware value ledger", async () => {
     getSessionHistory.mockResolvedValueOnce(histList.map((session) => ({
       ...session,
       total_cost: 0,
@@ -383,21 +453,30 @@ describe("Costs.svelte", () => {
     })));
     getCostForecast.mockResolvedValueOnce({
       ...forecast,
-      spent_this_month: 0,
-      projected_monthly: 0,
-      daily_average: 0,
+      billed_spend_usd: null,
+      projected_billed_spend_usd: null,
+      daily_billed_spend_usd: null,
+      api_equivalent_usd: null,
+      projected_api_equivalent_usd: null,
+      daily_api_equivalent_usd: null,
       cost_basis: "unavailable",
       cost_sources: [],
       priced_sessions: 0,
+      billed_sessions: 0,
+      api_equivalent_sessions: 0,
     });
     getBudgetStatus.mockResolvedValueOnce({
       ...budget,
-      spent_this_month: 0,
-      projected_monthly: 0,
-      pct_used: 0,
+      billed_spend_usd: null,
+      projected_billed_spend_usd: null,
+      api_equivalent_usd: null,
+      projected_api_equivalent_usd: null,
+      pct_used: null,
       cost_basis: "unavailable",
       cost_sources: [],
       priced_sessions: 0,
+      billed_sessions: 0,
+      api_equivalent_sessions: 0,
     });
     getCostTotals.mockResolvedValue({
       ...totals,
@@ -416,7 +495,7 @@ describe("Costs.svelte", () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container, findByText, findAllByText, getAllByText, queryByText } = render(Costs);
 
-    expect(await findByText("Subscription value ledger")).toBeTruthy();
+    expect(await findByText("Known monetary value by provenance")).toBeTruthy();
     expect((await findAllByText("Cost not reported by provider")).length).toBeGreaterThan(0);
     await waitFor(() => {
       const values = [...container.querySelectorAll(".ledger-value")]

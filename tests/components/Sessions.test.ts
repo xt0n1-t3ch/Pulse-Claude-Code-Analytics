@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor } from "@testing-library/svelte";
+import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { tick } from "svelte";
 import type { SessionInfo, HistoricalSession, AnalyticsSummary } from "@/lib/api";
 
@@ -126,7 +126,7 @@ describe("Sessions.svelte", () => {
     await tick();
 
     const labels = [...container.querySelectorAll(".stat-label")].map((e) => e.textContent?.trim());
-    expect(labels).toEqual(["Active sessions", "Live tokens", "Live cost", "Avg throughput"]);
+    expect(labels).toEqual(["Active sessions", "Live tokens", "Live monetary value", "Avg throughput"]);
 
     await waitFor(() => {
       expect(container.querySelectorAll(".session-list .session-card").length).toBe(2);
@@ -231,8 +231,34 @@ describe("Sessions.svelte", () => {
     await tick();
 
     await waitFor(() => {
-      expect(container.querySelector(".history-summary")?.textContent).toContain("Cost: Unavailable");
+      expect(container.querySelector(".history-summary")?.textContent).toContain("Known monetary value: Unavailable");
     });
-    expect(container.querySelector(".history-summary")?.textContent).not.toContain("Cost: $0.00");
+    expect(container.querySelector(".history-summary")?.textContent).not.toContain("Known monetary value: $0.00");
+  });
+
+  it("does not turn an initial history read failure into a false empty result", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([]);
+    getSessionHistory.mockRejectedValueOnce(new Error("database unavailable"));
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { findByRole, queryByText } = render(Sessions);
+
+    expect((await findByRole("alert")).textContent).toContain("Session history unavailable");
+    expect(queryByText(/No sessions match the selected history filters/i)).toBeNull();
+  });
+
+  it("bounds the initial history DOM without truncating the loaded dataset", async () => {
+    const manySessions = Array.from({ length: 75 }, (_, index) => ({
+      ...hist(`history-${index}`, `project-${index}`, index + 1),
+    }));
+    getSessionHistory.mockResolvedValueOnce(manySessions);
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container, getByRole } = render(Sessions);
+
+    await waitFor(() => expect(container.querySelectorAll(".ht-row")).toHaveLength(50));
+    await fireEvent.click(getByRole("button", { name: "Show 25 more" }));
+    await waitFor(() => expect(container.querySelectorAll(".ht-row")).toHaveLength(75));
   });
 });

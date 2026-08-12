@@ -52,7 +52,7 @@ describe("Signal Ledger design system", () => {
     expect(discord).toContain('<h2 class="view-title">Broadcast</h2>');
     expect(settings).not.toContain('class="view-kicker"');
     expect(settings).toContain('<span class="version-chip">{$health?.version ? `v${$health.version}` : "Version unavailable"}</span>');
-    expect(settings).toContain("<DataSourceInspector");
+    expect(settings).not.toContain("<DataSourceInspector");
     expect(readFileSync(resolve(process.cwd(), "src/views/Dashboard.svelte"), "utf8"))
       .not.toContain("<DataSourceInspector");
   });

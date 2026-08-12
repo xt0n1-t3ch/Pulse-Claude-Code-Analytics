@@ -24,16 +24,21 @@
     onSetBudget: () => void;
   } = $props();
 
-  let spent = $derived(forecast?.spent_this_month ?? 0);
-  let projected = $derived(forecast?.projected_monthly ?? 0);
+  let spent = $derived(forecast?.billed_spend_usd ?? 0);
+  let projected = $derived(forecast?.projected_billed_spend_usd ?? 0);
+  let apiEquivalent = $derived(forecast?.api_equivalent_usd ?? 0);
+  let apiProjected = $derived(forecast?.projected_api_equivalent_usd ?? 0);
   let cap = $derived(budget?.monthly_budget ?? 0);
   let hasCap = $derived(cap > 0);
-  let costAvailable = $derived(
+  let billedAvailable = $derived(
     forecast !== null
-      && (forecast.cost_basis === "exact"
-        || forecast.cost_basis === "estimated"
-        || forecast.cost_basis === "partial")
-      && forecast.priced_sessions > 0,
+      && forecast.billed_spend_usd !== null
+      && forecast.billed_sessions > 0,
+  );
+  let apiEquivalentAvailable = $derived(
+    forecast !== null
+      && forecast.api_equivalent_usd !== null
+      && forecast.api_equivalent_sessions > 0,
   );
 
   /**
@@ -63,7 +68,7 @@
   let alertThreshold = $derived(budget?.alert_threshold_pct ?? 0);
   let spentShareOfCap = $derived(hasCap && cap > 0 ? (spent / cap) * 100 : 0);
   let status = $derived.by((): "none" | "ok" | "warn" | "over" => {
-    if (!costAvailable) return "none";
+    if (!billedAvailable) return "none";
     if (!hasCap) return "none";
     if (spent > cap) return "over";
     if (projected > cap) return "warn";
@@ -77,15 +82,21 @@
 
   /** One plain sentence, so the gauge does not need decoding. */
   let verdict = $derived.by(() => {
-    if (!forecast || !costAvailable) {
-      return "Cost unavailable for this month.";
+    if (!forecast) {
+      return "Billing data unavailable for this month.";
+    }
+    if (!billedAvailable) {
+      if (apiEquivalentAvailable) {
+        return `Provider billing unavailable. Measured usage is worth ${fmtCost(apiEquivalent)} at published API rates; this does not count against the budget.`;
+      }
+      return "Provider billing and API-equivalent value are unavailable for this month.";
     }
     if (spent <= 0) {
       return "No spend recorded this month yet.";
     }
     if (!hasCap) {
-      const prefix = forecast.cost_basis === "partial" ? "Known spend only: " : "";
-      return `${prefix}averaging ${fmtCost(forecast.daily_average)}/day — on course for ${fmtCost(projected)} by month end.`;
+      const prefix = forecast.cost_basis === "partial" ? "Known provider-billed lower bound: " : "";
+      return `${prefix}provider billing averages ${fmtCost(forecast.daily_billed_spend_usd ?? 0)}/day — on course for ${fmtCost(projected)} by month end.`;
     }
     if (status === "over") {
       return `Already ${fmtCost(spent - cap)} over the ${fmtCost(cap)} cap with ${forecast.days_in_month - forecast.days_elapsed} days left.`;
@@ -103,14 +114,14 @@
 <section class="cockpit" class:warn={status === "warn"} class:over={status === "over"}>
   <header class="ck-head">
     <div class="ck-primary">
-      <span class="ck-label">Spent this month</span>
-      <span class="ck-figure">{costAvailable ? fmtCost(spent) : "—"}</span>
+      <span class="ck-label">Provider-billed this month</span>
+      <span class="ck-figure">{billedAvailable ? fmtCost(spent) : "Unavailable"}</span>
     </div>
 
     <div class="ck-marks">
       <div class="ck-mark">
         <span class="ck-mark-label">Projected</span>
-        <span class="ck-mark-value">{costAvailable ? fmtCost(projected) : "—"}</span>
+        <span class="ck-mark-value">{billedAvailable ? fmtCost(projected) : "—"}</span>
       </div>
       <div class="ck-mark">
         <span class="ck-mark-label">Monthly budget</span>
@@ -125,11 +136,11 @@
     </div>
   </header>
 
-  {#if costAvailable}
+  {#if billedAvailable}
     <div
       class="ck-track"
       role="meter"
-      aria-label="Month-to-date spend against budget"
+      aria-label="Provider-billed month-to-date spend against budget"
       aria-valuemin="0"
       aria-valuemax={ceiling}
       aria-valuenow={spent}
@@ -148,7 +159,15 @@
 
   <p class="ck-verdict">{verdict}</p>
 
-  {#if forecast && costAvailable && forecast.days_in_month > 0}
+  {#if apiEquivalentAvailable}
+    <p class="ck-equivalent">
+      <strong>{fmtCost(apiEquivalent)}</strong> API-equivalent value month to date
+      {#if apiProjected > 0}· projected {fmtCost(apiProjected)}{/if}
+      · not provider-billed spend
+    </p>
+  {/if}
+
+  {#if forecast && billedAvailable && forecast.days_in_month > 0}
     <p class="ck-period">
       Day {forecast.days_elapsed} of {forecast.days_in_month}
       {#if hasCap}· {capShare.toFixed(0)}% of cap projected{/if}
@@ -267,6 +286,12 @@
   }
   .warn .ck-verdict { color: var(--warning); }
   .over .ck-verdict { color: var(--danger); }
+
+  .ck-equivalent {
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+  }
+  .ck-equivalent strong { color: var(--text-primary); }
 
   .ck-period {
     font-size: var(--fs-sm);

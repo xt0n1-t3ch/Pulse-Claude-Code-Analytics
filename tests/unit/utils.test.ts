@@ -11,6 +11,8 @@ import {
   fmtClock,
   fmtPromoEndDate,
   formatResetDateTime,
+  monetaryValueKind,
+  monetaryValueLabel,
 } from "@/lib/utils";
 
 describe("fmtTokens", () => {
@@ -42,6 +44,22 @@ describe("fmtExactCost", () => {
   it("never emits lower-bound or approximate cost notation", () => {
     expect(fmtExactCost(0.454, true)).toBe("$0.45");
     expect(fmtExactCost(0.454, false)).not.toMatch(/[>=~]/);
+  });
+});
+
+describe("monetary value provenance", () => {
+  it("does not present API-equivalent arithmetic as provider-billed spend", () => {
+    expect(monetaryValueKind(["anthropic_api_equivalent", "session-calculated"]))
+      .toBe("api-equivalent");
+    expect(monetaryValueLabel(["anthropic_api_equivalent"]))
+      .toBe("API-equivalent value");
+  });
+
+  it("reserves spend language for provider billing and labels mixed sources neutrally", () => {
+    expect(monetaryValueLabel(["provider_billed"])).toBe("Provider-billed spend");
+    expect(monetaryValueLabel(["provider_billed", "api_equivalent"]))
+      .toBe("Known monetary value");
+    expect(monetaryValueLabel([])).toBe("Known monetary value");
   });
 });
 

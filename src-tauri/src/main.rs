@@ -139,14 +139,20 @@ fn main() {
     #[cfg(debug_assertions)]
     pulse::dev_bridge::spawn();
 
-    tauri::Builder::default()
-        // Register single-instance FIRST, before every other plugin and the
-        // poller. A second launch is consumed by the plugin and routed to the
-        // existing window, so it cannot briefly initialize other plugins or
-        // spin up a duplicate analytics/notification producer.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let builder = tauri::Builder::default();
+    // Register single-instance FIRST, before every other plugin and the
+    // poller. The repo-owned native E2E probe is the only exception: debug
+    // builds with an isolated PULSE_E2E_RUN_ID must coexist with an installed
+    // Pulse process so validation never has to stop the user's app.
+    let builder = if native_e2e_probe_requested() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
+    };
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         // Native Windows/macOS/Linux notifications are delivered by the
@@ -215,6 +221,7 @@ fn main() {
             commands::set_active_provider,
             commands::get_app_settings,
             commands::set_close_to_tray,
+            commands::get_dashboard_bundle,
             commands::get_session_history,
             commands::get_session_history_filtered,
             commands::get_sessions_by_hour_range,
@@ -229,6 +236,7 @@ fn main() {
             commands::get_top_sessions,
             commands::get_cost_forecast,
             commands::get_cost_totals,
+            commands::get_costs_bundle,
             commands::get_budget_status,
             commands::set_budget,
             commands::get_model_distribution,
@@ -273,6 +281,16 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("failed to run Pulse");
+}
+
+#[cfg(debug_assertions)]
+fn native_e2e_probe_requested() -> bool {
+    std::env::var_os("PULSE_E2E_RUN_ID").is_some()
+}
+
+#[cfg(not(debug_assertions))]
+fn native_e2e_probe_requested() -> bool {
+    false
 }
 
 #[cfg(test)]

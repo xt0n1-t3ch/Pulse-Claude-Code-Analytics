@@ -321,15 +321,47 @@ fn load_report_data(days: i64, project: Option<&str>, provider: &str) -> ReportD
             session.known_cost,
         )
     }));
-    let spent_this_month: f64 = month_sessions
+    let billed_month_sessions = month_sessions
         .iter()
-        .filter_map(|session| session.known_cost)
-        .sum();
-    let daily_average = if days_elapsed > 0 {
-        spent_this_month / days_elapsed as f64
-    } else {
-        0.0
-    };
+        .filter(|session| {
+            db::monetary_provenance(&session.cost_source) == db::MonetaryProvenance::ProviderBilled
+                && session
+                    .known_cost
+                    .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
+        })
+        .collect::<Vec<_>>();
+    let api_equivalent_month_sessions = month_sessions
+        .iter()
+        .filter(|session| {
+            db::monetary_provenance(&session.cost_source) == db::MonetaryProvenance::ApiEquivalent
+                && session
+                    .known_cost
+                    .is_some_and(|cost| cost.is_finite() && cost >= 0.0)
+        })
+        .collect::<Vec<_>>();
+    let billed_spend_usd = (!billed_month_sessions.is_empty()).then(|| {
+        billed_month_sessions
+            .iter()
+            .filter_map(|session| session.known_cost)
+            .sum::<f64>()
+    });
+    let api_equivalent_usd = (!api_equivalent_month_sessions.is_empty()).then(|| {
+        api_equivalent_month_sessions
+            .iter()
+            .filter_map(|session| session.known_cost)
+            .sum::<f64>()
+    });
+    let daily_billed_spend_usd = billed_spend_usd
+        .filter(|_| days_elapsed > 0)
+        .map(|value| value / days_elapsed as f64);
+    let daily_api_equivalent_usd = api_equivalent_usd
+        .filter(|_| days_elapsed > 0)
+        .map(|value| value / days_elapsed as f64);
+    let billed_sessions = billed_month_sessions.len();
+    let api_equivalent_sessions = api_equivalent_month_sessions.len();
+    drop(billed_month_sessions);
+    drop(api_equivalent_month_sessions);
+    drop(month_sessions);
 
     ReportData {
         sessions,
@@ -352,15 +384,23 @@ fn load_report_data(days: i64, project: Option<&str>, provider: &str) -> ReportD
         },
         projects,
         forecast: db::CostForecast {
-            spent_this_month,
+            billed_spend_usd,
+            daily_billed_spend_usd,
+            projected_billed_spend_usd: daily_billed_spend_usd
+                .map(|value| value * days_in_month as f64),
+            api_equivalent_usd,
+            daily_api_equivalent_usd,
+            projected_api_equivalent_usd: daily_api_equivalent_usd
+                .map(|value| value * days_in_month as f64),
             days_elapsed,
             days_in_month,
-            projected_monthly: daily_average * days_in_month as f64,
-            daily_average,
             cost_basis: month_cost_coverage.cost_basis,
             cost_sources: month_cost_coverage.cost_sources,
             sessions: month_cost_coverage.sessions,
             priced_sessions: month_cost_coverage.priced_sessions,
+            billed_sessions,
+            api_equivalent_sessions,
+            refreshed_at: now.to_rfc3339(),
         },
         hourly: hourly_map.into_values().collect(),
         models,
@@ -424,7 +464,7 @@ pub fn generate_markdown_report_scoped(
     writeln!(markdown, "- Tokens: {}", data.summary.total_tokens).unwrap();
     writeln!(
         markdown,
-        "- Cost: {} ({})",
+        "- Known monetary value: {} ({})",
         format_cost(data.summary.total_cost),
         format_cost_coverage(&coverage)
     )
@@ -521,7 +561,7 @@ pub fn generate_markdown_report_for_provider(
 
     writeln!(md, "## Executive Summary\n").unwrap();
     writeln!(md, "| Metric | Value |\n|---|---|").unwrap();
-    writeln!(md, "| Total cost | {} |", format_cost(total_cost)).unwrap();
+    writeln!(md, "| Known monetary value | {} |", format_cost(total_cost)).unwrap();
     writeln!(
         md,
         "| Cost coverage | {} |\n",
@@ -538,8 +578,20 @@ pub fn generate_markdown_report_for_provider(
     .unwrap();
     writeln!(
         md,
-        "| Daily average | {} |",
-        format_cost(forecast.daily_average)
+        "| Provider-billed month to date | {} |",
+        forecast
+            .billed_spend_usd
+            .map(format_cost)
+            .unwrap_or_else(|| "Unavailable".to_string())
+    )
+    .unwrap();
+    writeln!(
+        md,
+        "| API-equivalent month to date | {} |",
+        forecast
+            .api_equivalent_usd
+            .map(format_cost)
+            .unwrap_or_else(|| "Unavailable".to_string())
     )
     .unwrap();
     writeln!(
@@ -580,7 +632,7 @@ pub fn generate_markdown_report_for_provider(
 
     if let Some(routing) = routing.as_ref() {
         writeln!(md, "## Routing\n").unwrap();
-        writeln!(md, "| Family | Sessions | Cost share | Avg cost/session | Total cost |\n|---|---:|---:|---:|---:|").unwrap();
+        writeln!(md, "| Family | Sessions | Value share | Avg value/session | Known value |\n|---|---:|---:|---:|---:|").unwrap();
         for (label, stats) in [
             ("Opus", &routing.opus),
             ("Sonnet", &routing.sonnet),
@@ -658,7 +710,7 @@ pub fn generate_markdown_report_for_provider(
         .unwrap();
         writeln!(
             md,
-            "\nFast-capable spend runs on Opus 4.8 and Opus 5 (2x priority-speed rate when fast mode is active).\n"
+            "\nFast-capable monetary value uses Opus 4.8 and Opus 5 pricing (2x priority-speed rate when fast mode is active).\n"
         )
         .unwrap();
     }
@@ -722,7 +774,7 @@ pub fn generate_markdown_report_for_provider(
     }
     if !projects.is_empty() {
         writeln!(md, "### Projects\n").unwrap();
-        writeln!(md, "| Project | Sessions | Tokens | Avg Cost | Total Cost | Top Model |\n|---|---:|---:|---:|---:|---|").unwrap();
+        writeln!(md, "| Project | Sessions | Tokens | Avg Value | Known Value | Top Model |\n|---|---:|---:|---:|---:|---|").unwrap();
         for project in projects.iter().take(20) {
             writeln!(
                 md,
@@ -937,7 +989,7 @@ pub fn generate_html_report_scoped(
     };
     let project_label = project.unwrap_or("All projects");
     format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pulse Analytics Report</title><style>body{{margin:0;background:#0b0d10;color:#f5f7fa;font:15px/1.55 Inter,system-ui,sans-serif}}main{{max-width:920px;margin:0 auto;padding:56px 28px}}.kicker{{color:#8ea0b8;text-transform:uppercase;letter-spacing:.12em;font-size:12px}}h1{{font-size:36px;margin:.25rem 0 2rem}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}}.card{{border:1px solid #29313c;border-radius:12px;background:#12161c;padding:18px}}.label{{color:#8ea0b8;font-size:12px}}.value{{font-size:24px;font-weight:700;margin-top:6px}}.note{{margin-top:24px;color:#aab6c5}}code{{color:#d6e2f2}}</style></head><body><main><div class="kicker">Pulse · {label}</div><h1>Analytics Report</h1><div class="grid"><div class="card"><div class="label">Period</div><div class="value">{days} days</div></div><div class="card"><div class="label">Project</div><div class="value">{project}</div></div><div class="card"><div class="label">Sessions</div><div class="value">{sessions}</div></div><div class="card"><div class="label">Tokens</div><div class="value">{tokens}</div></div><div class="card"><div class="label">Cost</div><div class="value">{cost}</div><div class="label">{coverage}</div></div></div><p class="note">Provider-specific recommendations require selecting one subscription provider. Unknown cost remains unavailable rather than being rendered as zero.</p></main></body></html>"#,
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pulse Analytics Report</title><style>body{{margin:0;background:#0b0d10;color:#f5f7fa;font:15px/1.55 Inter,system-ui,sans-serif}}main{{max-width:920px;margin:0 auto;padding:56px 28px}}.kicker{{color:#8ea0b8;text-transform:uppercase;letter-spacing:.12em;font-size:12px}}h1{{font-size:36px;margin:.25rem 0 2rem}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}}.card{{border:1px solid #29313c;border-radius:12px;background:#12161c;padding:18px}}.label{{color:#8ea0b8;font-size:12px}}.value{{font-size:24px;font-weight:700;margin-top:6px}}.note{{margin-top:24px;color:#aab6c5}}code{{color:#d6e2f2}}</style></head><body><main><div class="kicker">Pulse · {label}</div><h1>Analytics Report</h1><div class="grid"><div class="card"><div class="label">Period</div><div class="value">{days} days</div></div><div class="card"><div class="label">Project</div><div class="value">{project}</div></div><div class="card"><div class="label">Sessions</div><div class="value">{sessions}</div></div><div class="card"><div class="label">Processed token volume</div><div class="value">{tokens}</div></div><div class="card"><div class="label">Known monetary value</div><div class="value">{cost}</div><div class="label">{coverage}</div></div></div><p class="note">Provider-specific recommendations require selecting one subscription provider. Unknown monetary value remains unavailable rather than being rendered as zero.</p></main></body></html>"#,
         label = html_escape(label),
         days = d,
         project = html_escape(project_label),
@@ -1033,7 +1085,7 @@ pub fn generate_html_report_for_provider(
         } else {
             "Unavailable".to_string()
         };
-        write!(routing_section_html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level spend split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Spend</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Spend</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div><div class="section-grid" style="margin-top:18px;">{speed_split_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&routing_savings), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html, speed_split_html = speed_split_html).unwrap();
+        write!(routing_section_html, r##"<section id="routing" class="section"><div class="section-header"><div><h2>Routing</h2><p>Family-level monetary-value split. Bars stay monochrome. Diagnosis stays textual for export parity.</p></div></div><div class="section-grid"><div class="card"><h2>Family Value</h2>{routing_rows}<div class="metric-strip"><div class="metric"><div class="label">Sessions</div><div class="value">{routing_sessions}</div></div><div class="metric"><div class="label">Known Value</div><div class="value">{routing_cost}</div></div><div class="metric"><div class="label">Potential Savings</div><div class="value">{routing_savings}</div></div></div><p style="margin-top:18px;">{routing_diagnosis}</p></div>{model_table_html}</div><div class="section-grid" style="margin-top:18px;">{speed_split_html}</div></section>"##, routing_rows = routing_rows_html, routing_sessions = routing.total_sessions, routing_cost = html_escape(&format_cost(routing.total_cost)), routing_savings = html_escape(&routing_savings), routing_diagnosis = html_escape(&routing.diagnosis), model_table_html = model_table_html, speed_split_html = speed_split_html).unwrap();
     }
 
     let mut inflections_html = String::new();
@@ -1114,7 +1166,20 @@ pub fn generate_html_report_for_provider(
 
     let mut html = String::new();
     html.push_str(&crate::report_template::report_head());
-    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Total Cost</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{cost_coverage}</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Input + output + cache</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div><div class="summary-card"><div class="summary-label">Daily Average</div><div class="summary-value">{daily_avg}</div><div class="summary-meta">Projected month {projected_monthly}</div></div></div></header>"##, provider_name = html_escape(provider.display_name()), period_label = html_escape(&period_label), generated_at = html_escape(&generated_at), total_cost = html_escape(&format_cost(total_cost)), cost_coverage = html_escape(&format_cost_coverage(&cost_coverage)), total_sessions = total_sessions, total_tokens = html_escape(&format_tokens_short(total_tokens)), grade_color = grade_color, cache_grade = cache.grade, cache_ratio = cache.trend_weighted_ratio, daily_avg = html_escape(&format_cost(forecast.daily_average)), projected_monthly = html_escape(&format_cost(forecast.projected_monthly))).unwrap();
+    write!(html, r##"<header class="hero"><div class="hero-top"><div><div class="kicker">Pulse · {provider_name} Analytics</div><h1>Analytics Report</h1><div class="hero-meta">{period_label}</div></div><div class="generated-at">Generated {generated_at}</div></div><div class="hero-divider"></div><div class="summary-grid"><div class="summary-card"><div class="summary-label">Known Monetary Value</div><div class="summary-value">{total_cost}</div><div class="summary-meta">{cost_coverage}</div></div><div class="summary-card"><div class="summary-label">Provider-billed MTD</div><div class="summary-value">{billed_mtd}</div><div class="summary-meta">Only provider-reported billing</div></div><div class="summary-card"><div class="summary-label">API-equivalent MTD</div><div class="summary-value">{api_equivalent_mtd}</div><div class="summary-meta">Published rates, never billed spend</div></div><div class="summary-card"><div class="summary-label">Sessions</div><div class="summary-value">{total_sessions}</div><div class="summary-meta">Tracked in current window</div></div><div class="summary-card"><div class="summary-label">Tokens</div><div class="summary-value">{total_tokens}</div><div class="summary-meta">Processed input + output + cache volume</div></div><div class="summary-card"><div class="summary-label">Cache Grade</div><div class="summary-value" style="color:{grade_color}">{cache_grade}</div><div class="summary-meta">{cache_ratio:.1}% weighted hit ratio</div></div></div></header>"##,
+        provider_name = html_escape(provider.display_name()),
+        period_label = html_escape(&period_label),
+        generated_at = html_escape(&generated_at),
+        total_cost = html_escape(&format_cost(total_cost)),
+        cost_coverage = html_escape(&format_cost_coverage(&cost_coverage)),
+        billed_mtd = html_escape(&forecast.billed_spend_usd.map(format_cost).unwrap_or_else(|| "Unavailable".to_string())),
+        api_equivalent_mtd = html_escape(&forecast.api_equivalent_usd.map(format_cost).unwrap_or_else(|| "Unavailable".to_string())),
+        total_sessions = total_sessions,
+        total_tokens = html_escape(&format_tokens_short(total_tokens)),
+        grade_color = grade_color,
+        cache_grade = cache.grade,
+        cache_ratio = cache.trend_weighted_ratio,
+    ).unwrap();
     let topology_tools_html = if trace_overview.top_tools.is_empty() {
         r#"<div class="empty-state">No traced tool mix yet.</div>"#.to_string()
     } else {
@@ -1224,7 +1289,7 @@ fn compute_speed_split(sessions: &[db::HistoricalSession]) -> SpeedSplit {
 
 fn build_speed_split_html(split: &SpeedSplit) -> String {
     format!(
-        r##"<div class="card"><h2>Speed Split</h2><div class="speed-split"><div class="speed-cell is-fast"><div class="speed-head"><span class="speed-bolt">⚡</span><span class="speed-name">Fast-capable</span></div><div class="speed-value">{fast_cost}</div><div class="speed-meta">{fast_sessions} sessions · {fast_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{fast_share:.1}%"></div></div></div><div class="speed-cell"><div class="speed-head"><span class="speed-name">Standard</span></div><div class="speed-value">{standard_cost}</div><div class="speed-meta">{standard_sessions} sessions · {standard_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{standard_share:.1}%"></div></div></div></div><p style="margin-top:14px;color:var(--text-secondary);font-size:12px;">Fast-capable spend runs on Opus 4.8 and Opus 5, which bill at the 2× priority-speed rate when fast mode is active. Standard covers every other model.</p></div>"##,
+        r##"<div class="card"><h2>Speed Split</h2><div class="speed-split"><div class="speed-cell is-fast"><div class="speed-head"><span class="speed-bolt">⚡</span><span class="speed-name">Fast-capable</span></div><div class="speed-value">{fast_cost}</div><div class="speed-meta">{fast_sessions} sessions · {fast_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{fast_share:.1}%"></div></div></div><div class="speed-cell"><div class="speed-head"><span class="speed-name">Standard</span></div><div class="speed-value">{standard_cost}</div><div class="speed-meta">{standard_sessions} sessions · {standard_share:.1}%</div><div class="speed-bar"><div class="speed-fill" style="width:{standard_share:.1}%"></div></div></div></div><p style="margin-top:14px;color:var(--text-secondary);font-size:12px;">Fast-capable monetary value uses Opus 4.8 and Opus 5 pricing at the 2× priority-speed rate when fast mode is active. Standard covers every other model.</p></div>"##,
         fast_cost = html_escape(&format_cost(split.fast_cost)),
         fast_sessions = split.fast_sessions,
         fast_share = split.fast_share_pct(),
@@ -1320,7 +1385,7 @@ fn build_project_table(projects: &[db::ProjectStat]) -> String {
         return String::new();
     }
     let mut html = String::from(
-        r#"<div class="card"><h2>Project Breakdown</h2><table><tr><th>Project</th><th>Sessions</th><th>Tokens</th><th>Avg Cost</th><th style="text-align:right">Total Cost</th></tr>"#,
+        r#"<div class="card"><h2>Project Breakdown</h2><table><tr><th>Project</th><th>Sessions</th><th>Tokens</th><th>Avg Value</th><th style="text-align:right">Known Value</th></tr>"#,
     );
     for p in projects {
         html.push_str(&format!(
