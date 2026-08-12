@@ -212,15 +212,21 @@ function hist(id: string, project: string): HistoricalSession {
 }
 
 const forecast: CostForecast = {
-  spent_this_month: 30,
+  billed_spend_usd: 30,
+  daily_billed_spend_usd: 3,
+  projected_billed_spend_usd: 93,
+  api_equivalent_usd: null,
+  daily_api_equivalent_usd: null,
+  projected_api_equivalent_usd: null,
   days_elapsed: 10,
   days_in_month: 31,
-  projected_monthly: 93,
-  daily_average: 3,
   cost_basis: "exact",
-  cost_sources: ["anthropic_api_equivalent"],
+  cost_sources: ["provider_billed"],
   sessions: 1,
   priced_sessions: 1,
+  billed_sessions: 1,
+  api_equivalent_sessions: 0,
+  refreshed_at: "2026-08-12T12:00:00Z",
 };
 
 const hourly: HourlyActivity[] = [{ hour: 9, session_count: 2, priced_sessions: 2, total_cost: 5, cost_basis: "exact", cost_sources: ["anthropic_api_equivalent"] }];
@@ -334,7 +340,7 @@ describe("poll() to stores to Dashboard full flow", () => {
     expect(get(stores.activeSessions)).toHaveLength(2);
   });
 
-  it("fails closed when the real backend becomes unreachable", async () => {
+  it("marks the last snapshot disconnected without blanking it during revalidation", async () => {
     await stores.poll();
     expect(get(stores.backendConnection)).toBe("live");
 
@@ -342,12 +348,12 @@ describe("poll() to stores to Dashboard full flow", () => {
     await stores.poll();
 
     expect(get(stores.backendConnection)).toBe("disconnected");
-    expect(get(stores.health)).toBeNull();
-    expect(get(stores.metrics)).toBeNull();
-    expect(get(stores.sessions)).toEqual([]);
-    expect(get(stores.rateLimits)).toBeNull();
-    expect(get(stores.planInfo)).toBeNull();
-    expect(get(stores.accessSnapshot)).toBeNull();
+    expect(get(stores.health)).toEqual(health);
+    expect(get(stores.metrics)).toEqual(metrics);
+    expect(get(stores.sessions)).toEqual(liveSessions);
+    expect(get(stores.rateLimits)).toEqual(rateLimitInfo);
+    expect(get(stores.planInfo)).toEqual(planInfoFixture);
+    expect(get(stores.accessSnapshot)).toEqual(accessFixture);
   });
 
   it("ignores an older poll response that resolves after a newer snapshot", async () => {

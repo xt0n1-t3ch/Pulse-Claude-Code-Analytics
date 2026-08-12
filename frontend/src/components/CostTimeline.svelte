@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Daily-spend area chart with cost inflections marked directly on the curve.
+   * Daily monetary-value chart with inflections marked directly on the curve.
    *
    * Drawn as inline SVG rather than Chart.js: the series is small, the shape is
    * fixed, and rendering it ourselves keeps every colour on a theme token and
@@ -148,14 +148,14 @@
 
 <div class="timeline">
   {#if points.length === 0}
-    <div class="tl-empty">No spend recorded in this window.</div>
+    <div class="tl-empty">No monetary value recorded in this window.</div>
   {:else}
     <svg
       class="tl-svg"
       viewBox="0 0 {W} {H}"
       preserveAspectRatio="none"
       role="img"
-      aria-label="Daily cost timeline"
+      aria-label="Daily monetary value timeline"
       onmousemove={onMove}
       onmouseleave={() => (hover = null)}
     >
@@ -205,10 +205,10 @@
       {:else if headline}
         <span class="tl-legend">
           <span class="tl-legend-mark" aria-hidden="true"></span>
-          Cost inflection · {headline.inf.date} {describe(headline.inf)}
+          Monetary-value inflection · {headline.inf.date} {describe(headline.inf)}
         </span>
       {:else}
-        <span class="tl-legend tl-legend-quiet">No cost inflections — spend held to its baseline.</span>
+        <span class="tl-legend tl-legend-quiet">No monetary-value inflections — the observed value held to its baseline.</span>
       {/if}
     </div>
   {/if}

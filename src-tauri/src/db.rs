@@ -481,13 +481,43 @@ pub enum CostBasis {
     Unavailable,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MonetaryProvenance {
+    ProviderBilled,
+    ApiEquivalent,
+    Other,
+}
+
+/// Classifies a monetary source without treating every non-billing value as an
+/// API-equivalent estimate. This is the shared truth boundary for forecasts,
+/// budgets, reports, and rolling totals.
+pub(crate) fn monetary_provenance(source: &str) -> MonetaryProvenance {
+    let normalized = source.trim().to_ascii_lowercase().replace('-', "_");
+    if normalized == "provider_billed" {
+        MonetaryProvenance::ProviderBilled
+    } else if normalized == "api_equivalent"
+        || normalized.ends_with("_api_equivalent")
+        || matches!(
+            normalized.as_str(),
+            "session_calculated" | "legacy_calculated" | "live_session"
+        )
+        || normalized.contains("pricing")
+    {
+        MonetaryProvenance::ApiEquivalent
+    } else {
+        MonetaryProvenance::Other
+    }
+}
+
 impl CostBasis {
     fn from_storage(status: &str, source: &str, known_cost: Option<f64>) -> Self {
         if known_cost.is_none() {
             return Self::Unavailable;
         }
         match status {
-            "exact" if source.eq_ignore_ascii_case("api_equivalent") => Self::Estimated,
+            "exact" if monetary_provenance(source) == MonetaryProvenance::ApiEquivalent => {
+                Self::Estimated
+            }
             "exact" => Self::Exact,
             "partial" => Self::Partial,
             _ => Self::Unavailable,
@@ -950,29 +980,57 @@ pub struct ModelStat {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct CostForecast {
-    pub spent_this_month: f64,
+    pub billed_spend_usd: Option<f64>,
+    pub daily_billed_spend_usd: Option<f64>,
+    pub projected_billed_spend_usd: Option<f64>,
+    pub api_equivalent_usd: Option<f64>,
+    pub daily_api_equivalent_usd: Option<f64>,
+    pub projected_api_equivalent_usd: Option<f64>,
     pub days_elapsed: i64,
     pub days_in_month: i64,
-    pub projected_monthly: f64,
-    pub daily_average: f64,
     pub cost_basis: CostBasis,
     pub cost_sources: Vec<String>,
     pub sessions: usize,
     pub priced_sessions: usize,
+    pub billed_sessions: usize,
+    pub api_equivalent_sessions: usize,
+    pub refreshed_at: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct BudgetStatus {
     pub monthly_budget: f64,
     pub alert_threshold_pct: f64,
-    pub spent_this_month: f64,
-    pub pct_used: f64,
-    pub projected_monthly: f64,
+    pub billed_spend_usd: Option<f64>,
+    pub projected_billed_spend_usd: Option<f64>,
+    pub api_equivalent_usd: Option<f64>,
+    pub projected_api_equivalent_usd: Option<f64>,
+    pub pct_used: Option<f64>,
     pub over_budget: bool,
     pub cost_basis: CostBasis,
     pub cost_sources: Vec<String>,
     pub sessions: usize,
     pub priced_sessions: usize,
+    pub billed_sessions: usize,
+    pub api_equivalent_sessions: usize,
+    pub refreshed_at: String,
+}
+
+#[derive(Debug)]
+pub struct DashboardDataSnapshot {
+    pub summary: AnalyticsSummary,
+    pub sessions: Vec<HistoricalSession>,
+    pub forecast: CostForecast,
+    pub hourly_activity: Vec<HourlyActivity>,
+}
+
+#[derive(Debug)]
+pub struct CostsDataSnapshot {
+    pub history: Vec<HistoricalSession>,
+    pub aggregate_sessions: Vec<HistoricalSession>,
+    pub forecast: CostForecast,
+    pub budget: BudgetStatus,
+    pub daily_usage: Vec<DailyStat>,
 }
 
 fn bounded_i64(value: u64) -> i64 {
@@ -1097,7 +1155,12 @@ const COST_COVERAGE_SQL: &str = "
     COALESCE(SUM(CASE
         WHEN known_cost IS NOT NULL
          AND cost_status = 'exact'
-         AND lower(replace(cost_source, '-', '_')) NOT IN ('provider_billed', 'api_equivalent')
+         AND lower(replace(cost_source, '-', '_')) NOT IN (
+             'provider_billed', 'api_equivalent', 'session_calculated',
+             'legacy_calculated', 'live_session'
+         )
+         AND lower(replace(cost_source, '-', '_')) NOT LIKE '%api_equivalent'
+         AND lower(replace(cost_source, '-', '_')) NOT LIKE '%pricing%'
         THEN 1 ELSE 0 END), 0),
     COALESCE(SUM(CASE
         WHEN known_cost IS NOT NULL AND cost_status = 'partial'
@@ -1110,7 +1173,14 @@ const COST_COVERAGE_SQL: &str = "
     COALESCE(SUM(CASE
         WHEN known_cost IS NOT NULL
          AND cost_status = 'exact'
-         AND lower(replace(cost_source, '-', '_')) = 'api_equivalent'
+         AND (
+             lower(replace(cost_source, '-', '_')) IN (
+                 'api_equivalent', 'session_calculated',
+                 'legacy_calculated', 'live_session'
+             )
+             OR lower(replace(cost_source, '-', '_')) LIKE '%api_equivalent'
+             OR lower(replace(cost_source, '-', '_')) LIKE '%pricing%'
+         )
         THEN 1 ELSE 0 END), 0),
     GROUP_CONCAT(DISTINCT CASE
         WHEN known_cost IS NOT NULL
@@ -1920,26 +1990,75 @@ fn cost_forecast_from_connection(
             .iter()
             .map(|(basis, source, known_cost)| (*basis, source.as_str(), *known_cost)),
     );
-    let spent = observations
-        .iter()
-        .filter_map(|(_, _, known_cost)| *known_cost)
-        .filter(|c| c.is_finite() && *c >= 0.0)
-        .sum::<f64>();
-    let daily_avg = if days_elapsed > 0 {
-        spent / days_elapsed as f64
-    } else {
-        0.0
-    };
+    let mut billed_sessions = 0usize;
+    let mut api_equivalent_sessions = 0usize;
+    let mut billed_spend = 0.0;
+    let mut api_equivalent = 0.0;
+    for (_, source, known_cost) in &observations {
+        let Some(cost) = *known_cost else {
+            continue;
+        };
+        if !cost.is_finite() || cost < 0.0 {
+            continue;
+        }
+        match monetary_provenance(source) {
+            MonetaryProvenance::ProviderBilled => {
+                billed_sessions += 1;
+                billed_spend += cost;
+            }
+            MonetaryProvenance::ApiEquivalent => {
+                api_equivalent_sessions += 1;
+                api_equivalent += cost;
+            }
+            MonetaryProvenance::Other => {}
+        }
+    }
+    let billed_spend_usd = (billed_sessions > 0).then_some(billed_spend);
+    let api_equivalent_usd = (api_equivalent_sessions > 0).then_some(api_equivalent);
+    let daily_billed_spend_usd = billed_spend_usd
+        .filter(|_| days_elapsed > 0)
+        .map(|value| value / days_elapsed as f64);
+    let daily_api_equivalent_usd = api_equivalent_usd
+        .filter(|_| days_elapsed > 0)
+        .map(|value| value / days_elapsed as f64);
     CostForecast {
-        spent_this_month: spent,
+        billed_spend_usd,
+        daily_billed_spend_usd,
+        projected_billed_spend_usd: daily_billed_spend_usd
+            .map(|value| value * days_in_month as f64),
+        api_equivalent_usd,
+        daily_api_equivalent_usd,
+        projected_api_equivalent_usd: daily_api_equivalent_usd
+            .map(|value| value * days_in_month as f64),
         days_elapsed,
         days_in_month,
-        projected_monthly: daily_avg * days_in_month as f64,
-        daily_average: daily_avg,
         cost_basis: coverage.cost_basis,
         cost_sources: coverage.cost_sources,
         sessions: coverage.sessions,
         priced_sessions: coverage.priced_sessions,
+        billed_sessions,
+        api_equivalent_sessions,
+        refreshed_at: now.to_rfc3339(),
+    }
+}
+
+fn empty_cost_forecast(now: chrono::DateTime<Utc>) -> CostForecast {
+    CostForecast {
+        billed_spend_usd: None,
+        daily_billed_spend_usd: None,
+        projected_billed_spend_usd: None,
+        api_equivalent_usd: None,
+        daily_api_equivalent_usd: None,
+        projected_api_equivalent_usd: None,
+        days_elapsed: 0,
+        days_in_month: 30,
+        cost_basis: CostBasis::Unavailable,
+        cost_sources: Vec::new(),
+        sessions: 0,
+        priced_sessions: 0,
+        billed_sessions: 0,
+        api_equivalent_sessions: 0,
+        refreshed_at: now.to_rfc3339(),
     }
 }
 
@@ -1948,21 +2067,12 @@ pub fn get_cost_forecast() -> CostForecast {
 }
 
 pub fn get_cost_forecast_scoped(provider: Option<&str>) -> CostForecast {
+    let now = Utc::now();
     let Ok(conn) = db().lock() else {
-        return CostForecast {
-            spent_this_month: 0.0,
-            days_elapsed: 0,
-            days_in_month: 30,
-            projected_monthly: 0.0,
-            daily_average: 0.0,
-            cost_basis: CostBasis::Unavailable,
-            cost_sources: Vec::new(),
-            sessions: 0,
-            priced_sessions: 0,
-        };
+        return empty_cost_forecast(now);
     };
     let provider = analytics_provider_scope(provider);
-    cost_forecast_from_connection(&conn, &provider, Utc::now())
+    cost_forecast_from_connection(&conn, &provider, now)
 }
 
 pub fn get_budget_status() -> BudgetStatus {
@@ -1970,21 +2080,41 @@ pub fn get_budget_status() -> BudgetStatus {
 }
 
 pub fn get_budget_status_scoped(provider: Option<&str>) -> BudgetStatus {
-    let forecast = get_cost_forecast_scoped(provider);
+    let now = Utc::now();
     let Ok(conn) = db().lock() else {
+        let forecast = empty_cost_forecast(now);
         return BudgetStatus {
             monthly_budget: 0.0,
             alert_threshold_pct: 80.0,
-            spent_this_month: forecast.spent_this_month,
-            pct_used: 0.0,
-            projected_monthly: forecast.projected_monthly,
+            billed_spend_usd: forecast.billed_spend_usd,
+            projected_billed_spend_usd: forecast.projected_billed_spend_usd,
+            api_equivalent_usd: forecast.api_equivalent_usd,
+            projected_api_equivalent_usd: forecast.projected_api_equivalent_usd,
+            pct_used: None,
             over_budget: false,
             cost_basis: forecast.cost_basis,
             cost_sources: forecast.cost_sources,
             sessions: forecast.sessions,
             priced_sessions: forecast.priced_sessions,
+            billed_sessions: forecast.billed_sessions,
+            api_equivalent_sessions: forecast.api_equivalent_sessions,
+            refreshed_at: forecast.refreshed_at,
         };
     };
+    let provider = analytics_provider_scope(provider);
+    budget_status_from_connection(&conn, &provider, now)
+}
+
+fn budget_status_from_connection(
+    conn: &Connection,
+    provider: &str,
+    now: chrono::DateTime<Utc>,
+) -> BudgetStatus {
+    let forecast = cost_forecast_from_connection(conn, provider, now);
+    budget_status_from_forecast(conn, forecast)
+}
+
+fn budget_status_from_forecast(conn: &Connection, forecast: CostForecast) -> BudgetStatus {
     let (budget, threshold): (f64, f64) = conn
         .query_row(
             "SELECT monthly_budget, alert_threshold_pct FROM budget_config WHERE id = 1",
@@ -1992,22 +2122,159 @@ pub fn get_budget_status_scoped(provider: Option<&str>) -> BudgetStatus {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap_or((0.0, 80.0));
-    let pct = if budget > 0.0 {
-        (forecast.spent_this_month / budget) * 100.0
-    } else {
-        0.0
-    };
+    let pct = forecast
+        .billed_spend_usd
+        .filter(|_| budget > 0.0)
+        .map(|spent| (spent / budget) * 100.0);
     BudgetStatus {
         monthly_budget: budget,
         alert_threshold_pct: threshold,
-        spent_this_month: forecast.spent_this_month,
+        billed_spend_usd: forecast.billed_spend_usd,
+        projected_billed_spend_usd: forecast.projected_billed_spend_usd,
+        api_equivalent_usd: forecast.api_equivalent_usd,
+        projected_api_equivalent_usd: forecast.projected_api_equivalent_usd,
         pct_used: pct,
-        projected_monthly: forecast.projected_monthly,
-        over_budget: budget > 0.0 && forecast.projected_monthly > budget,
+        over_budget: budget > 0.0
+            && forecast
+                .projected_billed_spend_usd
+                .is_some_and(|projection| projection > budget),
         cost_basis: forecast.cost_basis,
         cost_sources: forecast.cost_sources,
         sessions: forecast.sessions,
         priced_sessions: forecast.priced_sessions,
+        billed_sessions: forecast.billed_sessions,
+        api_equivalent_sessions: forecast.api_equivalent_sessions,
+        refreshed_at: forecast.refreshed_at,
+    }
+}
+
+/// Dashboard history, forecast, and hourly activity under one SQLite mutex
+/// acquisition. The individual queries remain independently testable, while
+/// the UI receives a coherent snapshot without queueing four IPC commands.
+pub fn get_dashboard_data_scoped(
+    provider: Option<&str>,
+    days: i64,
+    history_limit: i64,
+) -> DashboardDataSnapshot {
+    let now = Utc::now();
+    let provider = analytics_provider_scope(provider);
+    let Ok(conn) = db().lock() else {
+        return DashboardDataSnapshot {
+            summary: AnalyticsSummary::default(),
+            sessions: Vec::new(),
+            forecast: empty_cost_forecast(now),
+            hourly_activity: Vec::new(),
+        };
+    };
+    let cutoff = (now - chrono::Duration::days(days)).to_rfc3339();
+    DashboardDataSnapshot {
+        summary: analytics_summary_from_connection(&conn, &provider),
+        sessions: query_sessions(
+            &conn,
+            &provider,
+            Some(days),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(history_limit),
+        ),
+        forecast: cost_forecast_from_connection(&conn, &provider, now),
+        hourly_activity: query_hourly_activity(&conn, &provider, &cutoff),
+    }
+}
+
+/// Costs view inputs under one SQLite mutex acquisition. `history` preserves
+/// the unfiltered table population; `aggregate_sessions` follows the selected
+/// project and feeds the reconciled KPI total.
+pub fn get_costs_data_scoped(
+    provider: Option<&str>,
+    days: i64,
+    project: Option<&str>,
+    history_limit: i64,
+) -> CostsDataSnapshot {
+    let now = Utc::now();
+    let provider = analytics_provider_scope(provider);
+    let Ok(conn) = db().lock() else {
+        let forecast = empty_cost_forecast(now);
+        return CostsDataSnapshot {
+            history: Vec::new(),
+            aggregate_sessions: Vec::new(),
+            budget: BudgetStatus {
+                monthly_budget: 0.0,
+                alert_threshold_pct: 80.0,
+                billed_spend_usd: None,
+                projected_billed_spend_usd: None,
+                api_equivalent_usd: None,
+                projected_api_equivalent_usd: None,
+                pct_used: None,
+                over_budget: false,
+                cost_basis: CostBasis::Unavailable,
+                cost_sources: Vec::new(),
+                sessions: 0,
+                priced_sessions: 0,
+                billed_sessions: 0,
+                api_equivalent_sessions: 0,
+                refreshed_at: forecast.refreshed_at.clone(),
+            },
+            forecast,
+            daily_usage: Vec::new(),
+        };
+    };
+    costs_data_from_connection(&conn, &provider, days, project, history_limit, now)
+}
+
+fn costs_data_from_connection(
+    conn: &Connection,
+    provider: &str,
+    days: i64,
+    project: Option<&str>,
+    history_limit: i64,
+    now: chrono::DateTime<Utc>,
+) -> CostsDataSnapshot {
+    let history = query_sessions(
+        conn,
+        provider,
+        Some(days),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(history_limit),
+    );
+    let aggregate_sessions = query_sessions(
+        conn,
+        provider,
+        Some(days),
+        None,
+        None,
+        project,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let cutoff = (now - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string();
+    let forecast = cost_forecast_from_connection(conn, provider, now);
+    let budget = budget_status_from_forecast(conn, forecast.clone());
+    CostsDataSnapshot {
+        history,
+        aggregate_sessions,
+        forecast,
+        budget,
+        daily_usage: query_daily_stats(conn, provider, &cutoff),
     }
 }
 
@@ -2235,11 +2502,45 @@ pub fn export_all_data() -> serde_json::Value {
 }
 
 pub fn export_all_data_scoped(provider: Option<&str>) -> serde_json::Value {
-    let sessions = get_session_history_scoped(provider, None, None, Some(10000));
-    let daily = get_daily_stats_scoped(provider, Some(365));
-    let summary = get_analytics_summary_scoped(provider);
+    let provider = analytics_provider_scope(provider);
+    let now = Utc::now();
+    let Ok(conn) = db().lock() else {
+        return serde_json::json!({
+            "exported_at": now.to_rfc3339(),
+            "summary": AnalyticsSummary::default(),
+            "sessions": [],
+            "daily_stats": [],
+        });
+    };
+    export_all_data_from_connection(&conn, &provider, now)
+}
+
+fn export_all_data_from_connection(
+    conn: &Connection,
+    provider: &str,
+    now: chrono::DateTime<Utc>,
+) -> serde_json::Value {
+    let sessions = query_sessions(
+        conn,
+        provider,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(10_000),
+    );
+    let cutoff = (now - chrono::Duration::days(365))
+        .format("%Y-%m-%d")
+        .to_string();
+    let daily = query_daily_stats(conn, provider, &cutoff);
+    let summary = analytics_summary_from_connection(conn, provider);
     serde_json::json!({
-        "exported_at": Utc::now().to_rfc3339(),
+        "exported_at": now.to_rfc3339(),
         "summary": summary,
         "sessions": sessions,
         "daily_stats": daily,
@@ -2285,6 +2586,32 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn monetary_provenance_recognizes_only_owned_billing_and_api_equivalent_sources() {
+        for source in ["provider_billed", "provider-billed"] {
+            assert_eq!(
+                monetary_provenance(source),
+                MonetaryProvenance::ProviderBilled
+            );
+        }
+        for source in [
+            "api_equivalent",
+            "anthropic_api_equivalent",
+            "session-calculated",
+            "legacy-calculated",
+            "live_session",
+            "versioned-pricing",
+        ] {
+            assert_eq!(
+                monetary_provenance(source),
+                MonetaryProvenance::ApiEquivalent
+            );
+        }
+        for source in ["unknown", "legacy", "fixture", "external-ledger"] {
+            assert_eq!(monetary_provenance(source), MonetaryProvenance::Other);
+        }
+    }
 
     #[test]
     fn api_equivalent_estimate_reconstructs_claude_and_codex_from_real_rates() {
@@ -2430,6 +2757,137 @@ mod tests {
         let conn = Connection::open_in_memory().expect("in-memory sqlite");
         init_schema(&conn).expect("initialize schema");
         conn
+    }
+
+    #[test]
+    fn raw_jsonl_reconciles_with_sqlite_costs_dto_and_export() {
+        use cc_discord_presence::session::{
+            GitBranchCache, SessionParseCache, collect_active_sessions_multi,
+        };
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().join("projects");
+        let transcript_dir = project_root.join("encoded-repo");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&transcript_dir).expect("transcript dir");
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        let transcript = transcript_dir.join("4ccf0482-61c0-4611-9d22-becaf1781231.jsonl");
+        let observed_at = Utc::now().to_rfc3339();
+        let model = "claude-sonnet-4-20250514";
+        let lines = [
+            (100_u64, 20_u64, 30_u64, 50_u64),
+            (40_u64, 10_u64, 5_u64, 15_u64),
+        ];
+        let raw = lines
+            .iter()
+            .map(|(input, output, cache_write, cache_read)| {
+                serde_json::json!({
+                    "type": "assistant",
+                    "timestamp": observed_at,
+                    "sessionId": "4ccf0482-61c0-4611-9d22-becaf1781231",
+                    "cwd": workspace,
+                    "message": {
+                        "model": model,
+                        "usage": {
+                            "input_tokens": input,
+                            "output_tokens": output,
+                            "cache_creation_input_tokens": cache_write,
+                            "cache_read_input_tokens": cache_read
+                        },
+                        "content": [{"type": "text", "text": "fixture"}]
+                    }
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&transcript, raw).expect("raw JSONL fixture");
+
+        let expected_input: u64 = lines
+            .iter()
+            .map(|(input, _, cache_write, cache_read)| input + cache_write + cache_read)
+            .sum();
+        let expected_output: u64 = lines.iter().map(|(_, output, _, _)| output).sum();
+        let expected_cache_write: u64 = lines.iter().map(|(_, _, write, _)| write).sum();
+        let expected_cache_read: u64 = lines.iter().map(|(_, _, _, read)| read).sum();
+        let expected_total = expected_input + expected_output;
+        let expected_cost: f64 = lines
+            .iter()
+            .map(|(input, output, cache_write, cache_read)| {
+                cost::calculate_category_costs(
+                    model,
+                    *input,
+                    *output,
+                    *cache_write,
+                    *cache_read,
+                    false,
+                )
+                .total()
+            })
+            .sum();
+
+        let snapshots = collect_active_sessions_multi(
+            &[project_root.clone(), project_root],
+            Duration::from_secs(3_600),
+            Duration::from_secs(3_600),
+            &mut GitBranchCache::new(Duration::ZERO),
+            &mut SessionParseCache::default(),
+            &[],
+        )
+        .expect("parse raw JSONL");
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "duplicate source roots must deduplicate"
+        );
+        let infos = crate::commands::build_claude_session_infos(&snapshots);
+        assert_eq!(infos.len(), 1);
+        let info = &infos[0];
+        assert_eq!(info.input_tokens, expected_input);
+        assert_eq!(info.output_tokens, expected_output);
+        assert_eq!(info.cache_write_tokens, expected_cache_write);
+        assert_eq!(info.cache_read_tokens, expected_cache_read);
+        assert_eq!(info.tokens, expected_total);
+        assert!((info.cost - expected_cost).abs() < 1e-12);
+
+        let conn = test_conn();
+        upsert_session_into(&conn, info, &observed_at).expect("persist parsed DTO");
+        upsert_session_into(&conn, info, &observed_at).expect("idempotent upsert");
+        let costs = costs_data_from_connection(&conn, "claude", 30, None, 200, Utc::now());
+        assert_eq!(costs.aggregate_sessions.len(), 1);
+        let stored = &costs.aggregate_sessions[0];
+        assert_eq!(stored.input_tokens, expected_input as i64);
+        assert_eq!(stored.output_tokens, expected_output as i64);
+        assert_eq!(stored.cache_write_tokens, expected_cache_write as i64);
+        assert_eq!(stored.cache_read_tokens, expected_cache_read as i64);
+        assert_eq!(stored.total_tokens, expected_total as i64);
+        assert_eq!(stored.cost_basis, CostBasis::Estimated);
+        assert_eq!(stored.cost_source, "api_equivalent");
+        assert!((stored.known_cost.expect("known API equivalent") - expected_cost).abs() < 1e-12);
+
+        let totals = crate::commands::aggregate_cost_totals(30, &costs.aggregate_sessions);
+        assert_eq!(totals.sessions, 1);
+        assert_eq!(totals.priced_sessions, 1);
+        assert_eq!(totals.total_tokens, expected_total as i64);
+        assert!((totals.total_cost - expected_cost).abs() < 1e-12);
+
+        let export = export_all_data_from_connection(&conn, "claude", Utc::now());
+        assert_eq!(export["summary"]["total_sessions"], 1);
+        assert_eq!(export["summary"]["total_tokens"], expected_total);
+        assert_eq!(export["sessions"].as_array().map(Vec::len), Some(1));
+        assert_eq!(export["sessions"][0]["input_tokens"], expected_input);
+        assert_eq!(export["sessions"][0]["output_tokens"], expected_output);
+        assert_eq!(
+            export["sessions"][0]["cache_write_tokens"],
+            expected_cache_write
+        );
+        assert_eq!(
+            export["sessions"][0]["cache_read_tokens"],
+            expected_cache_read
+        );
+        assert_eq!(export["sessions"][0]["cost_basis"], "estimated");
     }
 
     #[test]
@@ -2582,9 +3040,12 @@ mod tests {
         let codex_forecast = cost_forecast_from_connection(&conn, "codex", now);
         let claude_forecast = cost_forecast_from_connection(&conn, "claude", now);
         let all_forecast = cost_forecast_from_connection(&conn, "all", now);
-        assert_eq!(codex_forecast.spent_this_month, 2.0);
-        assert_eq!(claude_forecast.spent_this_month, 7.0);
-        assert_eq!(all_forecast.spent_this_month, 9.0);
+        assert_eq!(codex_forecast.billed_spend_usd, None);
+        assert_eq!(claude_forecast.billed_spend_usd, None);
+        assert_eq!(all_forecast.billed_spend_usd, None);
+        assert_eq!(codex_forecast.api_equivalent_usd, Some(2.0));
+        assert_eq!(claude_forecast.api_equivalent_usd, Some(7.0));
+        assert_eq!(all_forecast.api_equivalent_usd, Some(9.0));
     }
 
     #[test]
@@ -2868,7 +3329,7 @@ mod tests {
             .map(|row| (row.id.clone(), row))
             .collect::<std::collections::HashMap<_, _>>();
 
-        assert_eq!(by_id["exact"].cost_basis, CostBasis::Exact);
+        assert_eq!(by_id["exact"].cost_basis, CostBasis::Estimated);
         assert_eq!(by_id["partial"].cost_basis, CostBasis::Partial);
         assert_eq!(by_id["billed"].cost_basis, CostBasis::Exact);
         assert_eq!(by_id["missing"].cost_basis, CostBasis::Unavailable);
@@ -2986,11 +3447,86 @@ mod tests {
         assert_eq!(forecast.cost_basis, CostBasis::Partial);
         assert_eq!(forecast.sessions, 2);
         assert_eq!(forecast.priced_sessions, 1);
-        assert_eq!(forecast.spent_this_month, 2.5);
+        assert_eq!(forecast.billed_spend_usd, None);
+        assert_eq!(forecast.api_equivalent_usd, Some(2.5));
         assert_eq!(
             forecast.cost_sources,
             vec!["session-calculated".to_string()]
         );
+    }
+
+    #[test]
+    fn forecast_and_budget_keep_provider_billing_separate_from_api_equivalent_value() {
+        let conn = test_conn();
+        let now = Utc
+            .with_ymd_and_hms(2026, 8, 15, 12, 0, 0)
+            .single()
+            .expect("fixed date");
+        for (id, source, known_cost) in [
+            ("billed", "provider_billed", 10.0),
+            ("estimated", "api_equivalent", 90.0),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, updated_at,
+                    total_cost, cost_status, cost_source, known_cost
+                 ) VALUES (?1, 'codex', 'repo', 'model', ?2, ?2, ?3, 'exact', ?4, ?3)",
+                params![id, now.to_rfc3339(), known_cost, source],
+            )
+            .expect("insert monetary provenance fixture");
+        }
+        conn.execute(
+            "INSERT INTO budget_config (id, monthly_budget, alert_threshold_pct, updated_at)
+             VALUES (1, 50, 80, ?1)",
+            params![now.to_rfc3339()],
+        )
+        .expect("insert budget fixture");
+
+        let forecast = cost_forecast_from_connection(&conn, "codex", now);
+        assert_eq!(forecast.billed_spend_usd, Some(10.0));
+        assert_eq!(forecast.api_equivalent_usd, Some(90.0));
+        assert_eq!(forecast.billed_sessions, 1);
+        assert_eq!(forecast.api_equivalent_sessions, 1);
+
+        let budget = budget_status_from_connection(&conn, "codex", now);
+        assert_eq!(budget.billed_spend_usd, Some(10.0));
+        assert_eq!(budget.api_equivalent_usd, Some(90.0));
+        assert_eq!(budget.pct_used, Some(20.0));
+        assert!(
+            !budget.over_budget,
+            "API-equivalent value must not trip a billing budget"
+        );
+    }
+
+    #[test]
+    fn forecast_does_not_promote_unknown_known_cost_to_api_equivalent_value() {
+        let conn = test_conn();
+        let now = Utc
+            .with_ymd_and_hms(2026, 8, 15, 12, 0, 0)
+            .single()
+            .expect("fixed date");
+        for (id, source, known_cost) in [
+            ("billed", "provider_billed", 10.0),
+            ("calculated", "session-calculated", 20.0),
+            ("other", "external-ledger", 30.0),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions (
+                    id, provider, project, model, started_at, updated_at,
+                    total_cost, cost_status, cost_source, known_cost
+                 ) VALUES (?1, 'codex', 'repo', 'model', ?2, ?2, ?3, 'exact', ?4, ?3)",
+                params![id, now.to_rfc3339(), known_cost, source],
+            )
+            .expect("insert monetary provenance fixture");
+        }
+
+        let forecast = cost_forecast_from_connection(&conn, "codex", now);
+
+        assert_eq!(forecast.billed_spend_usd, Some(10.0));
+        assert_eq!(forecast.api_equivalent_usd, Some(20.0));
+        assert_eq!(forecast.billed_sessions, 1);
+        assert_eq!(forecast.api_equivalent_sessions, 1);
+        assert_eq!(forecast.priced_sessions, 3);
     }
 
     #[test]
@@ -3049,7 +3585,8 @@ mod tests {
         let forecast = cost_forecast_from_connection(&conn, "codex", now);
         assert_eq!(forecast.priced_sessions, 1);
         assert_eq!(forecast.cost_basis, CostBasis::Estimated);
-        assert!(forecast.spent_this_month > 0.0);
+        assert!(forecast.billed_spend_usd.is_none());
+        assert!(forecast.api_equivalent_usd.is_some_and(|value| value > 0.0));
     }
 
     #[test]

@@ -150,7 +150,7 @@ Cost aggregates keep usage and money on separate evidence tracks.
 cache-read, pure-input, and total token counts for the selected window. Its
 `cost_basis` remains `exact`, `partial`, or `unavailable` according to priced
 session coverage. The Costs view uses those token counters for the Subscription
-Value Ledger even when spend is unavailable, renders known partial spend only
+Value Ledger even when billing is unavailable, renders only known partial monetary value
 with its coverage denominator and provenance, and omits monetary charts and
 derived rates when doing so would imply complete coverage.
 

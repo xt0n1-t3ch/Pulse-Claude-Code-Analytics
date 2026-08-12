@@ -9,6 +9,47 @@ export function fmtCost(n: number): string {
   return "$" + n.toFixed(2);
 }
 
+export type MonetaryValueKind = "provider-billed" | "api-equivalent" | "mixed" | "unknown";
+
+/** Classify aggregate monetary provenance before choosing user-facing copy.
+ * Arithmetic can be exact while still representing API-equivalent value rather
+ * than a provider invoice, so `CostBasis` alone is not enough for this label. */
+export function monetaryValueKind(sources: readonly string[]): MonetaryValueKind {
+  let hasProviderBilling = false;
+  let hasApiEquivalent = false;
+  let hasOther = false;
+
+  for (const rawSource of sources) {
+    const source = rawSource.trim().toLowerCase().replaceAll("-", "_");
+    if (!source || source === "unknown") continue;
+    if (source === "provider_billed") {
+      hasProviderBilling = true;
+    } else if (
+      source.includes("api_equivalent")
+      || source === "session_calculated"
+      || source === "legacy_calculated"
+      || source === "live_session"
+      || source.includes("pricing")
+    ) {
+      hasApiEquivalent = true;
+    } else {
+      hasOther = true;
+    }
+  }
+
+  if (hasProviderBilling && !hasApiEquivalent && !hasOther) return "provider-billed";
+  if (hasApiEquivalent && !hasProviderBilling && !hasOther) return "api-equivalent";
+  if (hasProviderBilling || hasApiEquivalent || hasOther) return "mixed";
+  return "unknown";
+}
+
+export function monetaryValueLabel(sources: readonly string[]): string {
+  const kind = monetaryValueKind(sources);
+  if (kind === "provider-billed") return "Provider-billed spend";
+  if (kind === "api-equivalent") return "API-equivalent value";
+  return "Known monetary value";
+}
+
 /** Exact-cost renderer shared by every consumer surface. A transport-level
  * zero is not evidence of a measured zero, so unproved values stay neutral. */
 export function fmtExactCost(n: number, available: boolean): string {

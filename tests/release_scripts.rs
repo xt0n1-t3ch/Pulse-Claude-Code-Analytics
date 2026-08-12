@@ -511,31 +511,40 @@ fn platform_asset_collection_prevents_same_basename_mac_collisions() {
 }
 
 #[test]
-fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
+fn manual_release_workflow_pins_actions_and_gates_publication_on_preflight() {
     let root = repository_root();
-    let ci = read(root.join(".github/workflows/ci.yml"));
     let release = read(root.join(".github/workflows/release.yml"));
     let freshness = read(root.join(".github/workflows/upstream-freshness.yml"));
     let audit = read(root.join("scripts/audit-rust.ps1"));
-    let combined = format!("{ci}\n{release}\n{freshness}");
+    let combined = format!("{release}\n{freshness}");
 
-    assert!(!release.contains("workflow_dispatch:"));
-    assert!(release.contains("tags: [\"v*.*.*\"]"));
+    assert!(release.contains("workflow_dispatch:"));
+    assert!(release.contains("Existing annotated release tag"));
+    assert_eq!(release.matches("ref: ${{ inputs.tag }}").count(), 1);
+    assert!(
+        release
+            .matches("ref: ${{ needs.preflight.outputs.tag_commit }}")
+            .count()
+            >= 2
+    );
+    assert!(!release.contains("tags: [\"v*.*.*\"]"));
     assert!(release.contains("needs: [preflight, build]"));
-    assert!(ci.contains("name: Frontend · Svelte"));
-    assert!(!ci.contains("--no-run"));
-    assert!(ci.matches("cargo test --locked --workspace").count() >= 2);
-    assert!(ci.contains("cargo clippy --locked --workspace --all-targets -- -D warnings"));
+    assert!(!release.contains("--no-run"));
+    assert!(release.contains("cargo test --locked --workspace"));
+    assert!(release.contains("cargo clippy --locked --workspace --all-targets -- -D warnings"));
     assert!(release.contains("contents: write"));
     assert!(release.contains("cancel-in-progress: false"));
     assert!(release.contains("immutable-releases"));
-    assert!(release.contains("gh run list --workflow ci.yml"));
+    assert!(!release.contains("gh run list --workflow ci.yml"));
     assert!(release.contains("trap cleanup_draft EXIT INT TERM"));
-    assert!(ci.contains("scripts/audit-rust.ps1"));
     assert!(release.contains("scripts/audit-rust.ps1"));
     assert!(audit.contains(r#"@("audit", "--deny", "warnings")"#));
     assert!(audit.contains("rustsec-accepted-warnings.json"));
     assert!(release.contains("check-release-contract.ps1"));
+    assert!(release.contains("tag_commit: ${{ steps.release_target.outputs.tag_commit }}"));
+    assert!(release.contains("tag_commit=$tagCommit"));
+    assert!(release.contains("EXPECTED_TAG_COMMIT: ${{ needs.preflight.outputs.tag_commit }}"));
+    assert!(release.contains("Release tag moved after preflight"));
     let fetch_tag = release
         .find("Fetch annotated release tag")
         .expect("release workflow must fetch the remote tag object");
@@ -544,7 +553,7 @@ fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
         .expect("release workflow must validate the fetched tag");
     assert!(fetch_tag < validate_tag);
     assert!(release.contains(
-        "git fetch --force origin \"refs/tags/${env:GITHUB_REF_NAME}:refs/tags/${env:GITHUB_REF_NAME}\""
+        "git fetch --force origin \"refs/tags/${env:RELEASE_TAG}:refs/tags/${env:RELEASE_TAG}\""
     ));
     assert!(release.contains("gh release view \"$TAG\" --json databaseId --jq .databaseId"));
     assert!(
@@ -562,7 +571,6 @@ fn workflows_pin_actions_and_gate_tag_only_publication_on_preflight() {
     assert!(release.contains("release-assets/latest.json"));
     assert!(freshness.contains("workflow_dispatch:"));
     assert!(freshness.contains("issues: write"));
-    assert!(!ci.contains("git ls-remote"));
 
     for line in combined.lines().map(str::trim) {
         if let Some(action) = line.strip_prefix("- uses: ") {

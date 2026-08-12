@@ -107,7 +107,7 @@
       </div>
 
       <div class="detail-section">
-        <h4 class="detail-title">Cost Breakdown</h4>
+        <h4 class="detail-title">Monetary Value Breakdown</h4>
         {#if session.cost_available === true}
           <div class="cost-grid">
             <span class="cost-label">Input</span><span class="cost-val">{fmtCost(session.input_cost)}</span>
@@ -116,7 +116,7 @@
             <span class="cost-label">Cache Read</span><span class="cost-val">{fmtCost(session.cache_read_cost)}</span>
           </div>
         {:else}
-          <span class="cost-unavailable">Exact cost is unavailable for this session.</span>
+          <span class="cost-unavailable">Monetary value is unavailable for this session.</span>
         {/if}
       </div>
 

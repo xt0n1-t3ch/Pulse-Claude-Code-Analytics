@@ -73,16 +73,17 @@ exactly as before.
 
 ## Aggregation scope (Dashboard vs. Costs)
 
-A related but separate question: why does the Dashboard's "Total Cost" sometimes differ from the
-Costs view's "Total Spent"? They answer different questions on purpose:
+A related but separate question: why does the Dashboard's live monetary value sometimes differ from
+the Costs view's 30-day monetary value? They answer different questions on purpose:
 
-- Dashboard's **Total Cost (Live)** sums only the sessions Pulse currently considers live
+- Dashboard's **Current monetary value (Live)** sums only the sessions Pulse currently considers live
   (`get_metrics()` → `current_live_session_infos()`).
-- Costs view's **Total Spent (30d)** sums the persisted historical database over a rolling
+- Costs view's **Provider-billed spend (30d)**, **API-equivalent value (30d)**, or
+  **Known monetary value (30d)** label follows the recorded provenance while summing a rolling
   30-day window, merged with live sessions (`getSessionHistory(30, ...)`).
 
-Both numbers are real and correctly computed; neither is fake or stale. The labels make the
-scope explicit so the difference reads as "two different real questions" rather than "an
+Both numbers are derived from observed sessions and preserve their billing/API-equivalent source.
+The labels make the scope explicit so the difference reads as "two different real questions" rather than "an
 inconsistency."
 
 ## Source

@@ -5,15 +5,21 @@ import type { BudgetStatus, CostForecast } from "@/lib/api";
 
 function forecast(overrides: Partial<CostForecast> = {}): CostForecast {
   return {
-    spent_this_month: 7371.35,
+    billed_spend_usd: 7371.35,
+    daily_billed_spend_usd: 307.14,
+    projected_billed_spend_usd: 9521.32,
+    api_equivalent_usd: 8100,
+    daily_api_equivalent_usd: 337.5,
+    projected_api_equivalent_usd: 10462.5,
     days_elapsed: 24,
     days_in_month: 31,
-    projected_monthly: 9521.32,
-    daily_average: 307.14,
     cost_basis: "exact",
-    cost_sources: ["anthropic_api_equivalent"],
+    cost_sources: ["provider_billed", "api_equivalent"],
     sessions: 4,
     priced_sessions: 4,
+    billed_sessions: 2,
+    api_equivalent_sessions: 2,
+    refreshed_at: "2026-08-12T12:00:00Z",
     ...overrides,
   };
 }
@@ -22,14 +28,19 @@ function budget(monthly: number): BudgetStatus {
   return {
     monthly_budget: monthly,
     alert_threshold_pct: 80,
-    spent_this_month: 7371.35,
+    billed_spend_usd: 7371.35,
+    projected_billed_spend_usd: 9521.32,
+    api_equivalent_usd: 8100,
+    projected_api_equivalent_usd: 10462.5,
     pct_used: (7371.35 / monthly) * 100,
-    projected_monthly: 9521.32,
     over_budget: 9521.32 > monthly,
     cost_basis: "exact",
-    cost_sources: ["anthropic_api_equivalent"],
+    cost_sources: ["provider_billed", "api_equivalent"],
     sessions: 4,
     priced_sessions: 4,
+    billed_sessions: 2,
+    api_equivalent_sessions: 2,
+    refreshed_at: "2026-08-12T12:00:00Z",
   };
 }
 
@@ -90,13 +101,12 @@ describe("BudgetCockpit.svelte", () => {
   it("warns once spend crosses the configured alert threshold", () => {
     const { container, getByText } = render(BudgetCockpit, {
       props: {
-        forecast: forecast({ spent_this_month: 85, projected_monthly: 95, daily_average: 3.5 }),
+        forecast: forecast({ billed_spend_usd: 85, projected_billed_spend_usd: 95, daily_billed_spend_usd: 3.5 }),
         budget: {
-          monthly_budget: 100,
-          alert_threshold_pct: 80,
-          spent_this_month: 85,
+          ...budget(100),
+          billed_spend_usd: 85,
           pct_used: 85,
-          projected_monthly: 95,
+          projected_billed_spend_usd: 95,
           over_budget: false,
         },
         onSetBudget: noop,
@@ -113,13 +123,13 @@ describe("BudgetCockpit.svelte", () => {
   it("stays healthy under the cap when no alert threshold is configured", () => {
     const { container } = render(BudgetCockpit, {
       props: {
-        forecast: forecast({ spent_this_month: 85, projected_monthly: 95, daily_average: 3.5 }),
+        forecast: forecast({ billed_spend_usd: 85, projected_billed_spend_usd: 95, daily_billed_spend_usd: 3.5 }),
         budget: {
-          monthly_budget: 100,
+          ...budget(100),
           alert_threshold_pct: 0,
-          spent_this_month: 85,
+          billed_spend_usd: 85,
           pct_used: 85,
-          projected_monthly: 95,
+          projected_billed_spend_usd: 95,
           over_budget: false,
         },
         onSetBudget: noop,
@@ -151,10 +161,10 @@ describe("BudgetCockpit.svelte", () => {
     const { getByText } = render(BudgetCockpit, {
       props: {
         forecast: forecast({
-          spent_this_month: 0,
+          billed_spend_usd: 0,
           days_elapsed: 3,
-          projected_monthly: 0,
-          daily_average: 0,
+          projected_billed_spend_usd: 0,
+          daily_billed_spend_usd: 0,
         }),
         budget: null,
         onSetBudget: noop,
@@ -168,21 +178,26 @@ describe("BudgetCockpit.svelte", () => {
     const { container, getByText } = render(BudgetCockpit, {
       props: {
         forecast: forecast({
-          spent_this_month: 0,
-          projected_monthly: 0,
-          daily_average: 0,
+          billed_spend_usd: null,
+          projected_billed_spend_usd: null,
+          daily_billed_spend_usd: null,
+          api_equivalent_usd: null,
+          projected_api_equivalent_usd: null,
+          daily_api_equivalent_usd: null,
           cost_basis: "unavailable",
           cost_sources: [],
           sessions: 4,
           priced_sessions: 0,
+          billed_sessions: 0,
+          api_equivalent_sessions: 0,
         }),
         budget: null,
         onSetBudget: noop,
       },
     });
 
-    expect(container.querySelector(".ck-figure")?.textContent?.trim()).toBe("—");
-    expect(getByText("Cost unavailable for this month.")).toBeTruthy();
+    expect(container.querySelector(".ck-figure")?.textContent?.trim()).toBe("Unavailable");
+    expect(getByText("Provider billing and API-equivalent value are unavailable for this month.")).toBeTruthy();
     expect(container.querySelector(".ck-track")).toBeNull();
   });
 
@@ -190,9 +205,9 @@ describe("BudgetCockpit.svelte", () => {
     const { container, getByText } = render(BudgetCockpit, {
       props: {
         forecast: forecast({
-          spent_this_month: 85,
-          projected_monthly: 95,
-          daily_average: 3.5,
+          billed_spend_usd: 85,
+          projected_billed_spend_usd: 95,
+          daily_billed_spend_usd: 3.5,
           cost_basis: "partial",
           sessions: 4,
           priced_sessions: 3,
@@ -203,8 +218,33 @@ describe("BudgetCockpit.svelte", () => {
     });
 
     expect(container.querySelector(".ck-figure")?.textContent).toContain("$85");
-    expect(getByText(/Known spend only:/)).toBeTruthy();
+    expect(getByText(/Known provider-billed lower bound:/)).toBeTruthy();
     expect(container.querySelector(".ck-track")).not.toBeNull();
+  });
+
+  it("never applies API-equivalent value to a billing budget", () => {
+    const { container, getByText } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({
+          billed_spend_usd: null,
+          projected_billed_spend_usd: null,
+          daily_billed_spend_usd: null,
+          billed_sessions: 0,
+          api_equivalent_usd: 9000,
+          projected_api_equivalent_usd: 12000,
+          api_equivalent_sessions: 4,
+          cost_basis: "estimated",
+          cost_sources: ["api_equivalent"],
+        }),
+        budget: budget(100),
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".ck-track")).toBeNull();
+    expect(container.querySelector(".cockpit.warn")).toBeNull();
+    expect(container.querySelector(".cockpit.over")).toBeNull();
+    expect(getByText(/does not count against the budget/)).toBeTruthy();
   });
 
   it("uses no hardcoded colours", async () => {

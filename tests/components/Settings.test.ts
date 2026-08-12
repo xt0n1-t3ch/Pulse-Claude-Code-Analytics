@@ -99,7 +99,7 @@ describe("Settings.svelte", () => {
     expect(getByText("Settings")).toBeTruthy();
     expect(getByText("Data sources")).toBeTruthy();
     expect(getByText("Data management")).toBeTruthy();
-    expect(container.querySelectorAll(".rail-ctrl").length).toBe(3);
+    expect(container.querySelectorAll(".rail-ctrl").length).toBe(4);
   });
 
   it("reflects a manual plan override on the select instead of reverting to auto", async () => {

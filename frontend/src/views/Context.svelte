@@ -26,6 +26,7 @@
 
   let breakdownListRequest = 0;
   let lastBreakdownKey = "";
+  const loadedBreakdownKeys = new Map<string, string>();
   let scopedLiveSessions = $derived(
     $sessions.filter(
       (session) =>
@@ -39,6 +40,7 @@
     if (list.length === 0) {
       selectedSessionId = null;
       breakdownListRequest++;
+      loadedBreakdownKeys.clear();
       breakdowns = [];
       ctx = null;
       contextError = null;
@@ -52,22 +54,52 @@
     }
   });
 
+  function contextFingerprint(session: {
+    session_id: string;
+    model_id: string;
+    context_used_tokens?: number | null;
+    context_window_tokens?: number | null;
+  }): string {
+    return `${$selectedAnalyticsProviderScope}:${[
+      session.session_id,
+      session.model_id,
+      session.context_used_tokens ?? 0,
+      session.context_window_tokens ?? 0,
+    ].join(":")}`;
+  }
+
   async function loadBreakdowns(activeIds: string[]): Promise<void> {
     const request = ++breakdownListRequest;
     const scope = $selectedAnalyticsProviderScope;
     const active = new Set(activeIds);
+    const requestedKeys = new Map(
+      scopedLiveSessions
+        .filter((session) => active.has(session.session_id))
+        .map((session) => [session.session_id, contextFingerprint(session)]),
+    );
     refreshing = true;
-    loaded = false;
-    breakdowns = [];
-    ctx = null;
+    if (!ctx) loaded = false;
     contextError = null;
     try {
       const next = await getContextBreakdowns(activeIds, scope);
       if (request === breakdownListRequest && scope === $selectedAnalyticsProviderScope) {
-        const current = next.filter((entry) => active.has(entry.session_id) && !entry.is_idle);
-        breakdowns = current;
-        const selected = current.find((entry) => entry.session_id === selectedSessionId)
-          ?? current[0]
+        const liveIds = new Set(scopedLiveSessions.map((session) => session.session_id));
+        const merged = new Map(
+          breakdowns
+            .filter((entry) => liveIds.has(entry.session_id) && !entry.is_idle)
+            .map((entry) => [entry.session_id, entry]),
+        );
+        for (const entry of next) {
+          if (!liveIds.has(entry.session_id) || entry.is_idle) continue;
+          merged.set(entry.session_id, entry);
+          const requestedKey = requestedKeys.get(entry.session_id);
+          if (requestedKey) loadedBreakdownKeys.set(entry.session_id, requestedKey);
+        }
+        breakdowns = scopedLiveSessions
+          .map((session) => merged.get(session.session_id))
+          .filter((entry): entry is SessionContextBreakdown => Boolean(entry));
+        const selected = breakdowns.find((entry) => entry.session_id === selectedSessionId)
+          ?? breakdowns[0]
           ?? null;
         if (selected) {
           selectedSessionId = selected.session_id;
@@ -80,8 +112,6 @@
       }
     } catch (error) {
       if (request === breakdownListRequest && scope === $selectedAnalyticsProviderScope) {
-        breakdowns = [];
-        ctx = null;
         loaded = true;
         contextError = error instanceof Error && error.message
           ? `Context data unavailable. ${error.message}`
@@ -102,19 +132,15 @@
   });
 
   $effect(() => {
-    const activeSessions = scopedLiveSessions
-      .sort((a, b) => a.session_id.localeCompare(b.session_id));
-    const activeIds = activeSessions.map((session) => session.session_id);
-    const key = `${$selectedAnalyticsProviderScope}:${activeSessions.map((session) => [
-      session.session_id,
-      session.context_used_tokens ?? 0,
-      session.context_window_tokens ?? 0,
-      session.tokens,
-    ].join(":")).join(",")}`;
+    const selected = scopedLiveSessions.find(
+      (session) => session.session_id === selectedSessionId,
+    );
+    const key = selected ? contextFingerprint(selected) : "";
     if (key === lastBreakdownKey) return;
     lastBreakdownKey = key;
-    if (activeIds.length === 0) {
+    if (!selected) {
       breakdownListRequest++;
+      loadedBreakdownKeys.clear();
       breakdowns = [];
       ctx = null;
       contextError = null;
@@ -122,7 +148,20 @@
       loaded = true;
       return;
     }
-    void loadBreakdowns(activeIds);
+    const cached = breakdowns.find((entry) => entry.session_id === selected.session_id);
+    if (cached && loadedBreakdownKeys.get(selected.session_id) === key) {
+      ctx = cached.breakdown;
+      return;
+    }
+    // The selector already names the new session. Retaining the previous
+    // session's breakdown here would combine two different observations into
+    // one card, which is worse than an explicit loading state.
+    ctx = null;
+    loaded = false;
+    const requestIds = breakdowns.length === 0
+      ? scopedLiveSessions.map((session) => session.session_id)
+      : [selected.session_id];
+    void loadBreakdowns(requestIds);
   });
 
   function clampPct(pct: number): number {
@@ -281,7 +320,9 @@
 
   let usedBarPct = $derived(barSegs.reduce((s, b) => s + b.pct, 0));
   let selectedEntry = $derived(
-    breakdowns.find((entry) => entry.session_id === selectedSessionId) ?? breakdowns[0] ?? null,
+    scopedLiveSessions.find((entry) => entry.session_id === selectedSessionId)
+      ?? scopedLiveSessions[0]
+      ?? null,
   );
 </script>
 
@@ -289,7 +330,7 @@
   <div class="view-header">
     <div class="view-title-line">
       <h2 class="view-title">Context</h2>
-      {#if breakdowns.length > 0}<span class="active-count">{breakdowns.length} active</span>{/if}
+      {#if scopedLiveSessions.length > 0}<span class="active-count">{scopedLiveSessions.length} active</span>{/if}
     </div>
     <div class="header-meta">
       {#if refreshing}<span class="refreshing-dot" aria-label="Refreshing"></span>{/if}
@@ -305,17 +346,17 @@
       <button type="button" class="btn" onclick={retryContext}>Retry</button>
     </section>
   {:else if ctx}
-    {#if breakdowns.length > 0}
+    {#if scopedLiveSessions.length > 0}
       <div class="active-section">
         <div class="advice-title-row">
           <h3 class="advice-title">Active windows</h3>
           <span class="advice-sub">Select a session to inspect how full its context window is.</span>
         </div>
         <div class="active-grid">
-          {#each breakdowns as entry (entry.session_id)}
+          {#each scopedLiveSessions as entry (entry.session_id)}
             {@const cardPct = clampPct(
-              entry.breakdown.context_window > 0
-                ? (entry.breakdown.used_tokens / entry.breakdown.context_window) * 100
+              (entry.context_window_tokens ?? 0) > 0
+                ? ((entry.context_used_tokens ?? 0) / (entry.context_window_tokens ?? 1)) * 100
                 : 0,
             )}
             <button
@@ -336,9 +377,9 @@
                 ></div>
               </div>
               <div class="act-meta">
-                <span class="act-model">{entry.model_id || entry.breakdown.model}</span>
+                <span class="act-model">{entry.model_id || entry.model}</span>
                 <span class="act-tokens">
-                  {fmtTokens(entry.breakdown.used_tokens)} / {fmtTokens(entry.breakdown.context_window)}
+                  {fmtTokens(entry.context_used_tokens ?? 0)} / {fmtTokens(entry.context_window_tokens ?? 0)}
                 </span>
               </div>
             </button>

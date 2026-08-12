@@ -313,7 +313,7 @@
     { id: "model", key: "showModel",    label: "Model",         hint: "Active model identifier." },
     { id: "activity", key: "showActivity", label: "Activity",      hint: "What Pulse thinks you're doing." },
     { id: "tokens", key: "showTokens",   label: "Token count",   hint: "Cumulative tokens this session." },
-    { id: "cost", key: "showCost",     label: "Cost",          hint: "Running USD total for the session." },
+    { id: "cost", key: "showCost",     label: "Monetary value", hint: "Running provider-billed or API-equivalent USD value when available." },
     { id: "quotas", key: "showLimits",   label: "Usage quotas", hint: "Only quota windows actually reported by the provider." },
     { id: "credits", key: "showCredits", label: "Credits available", hint: "Real Codex account credit balance when available." },
     { id: "context", key: "showContext",  label: "Context usage", hint: "Current context-window fill percentage." },

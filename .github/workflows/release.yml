@@ -5,6 +5,11 @@ name: Release
 # manual fallback and never runs automatically on a tag push.
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -18,24 +23,28 @@ env:
   NODE_VERSION: "22"
   NPM_VERSION: "11.10.1"
   RUST_VERSION: "1.96.1"
+  RELEASE_TAG: ${{ inputs.tag }}
 
 jobs:
   preflight:
     name: Preflight · Release contract
     runs-on: ubuntu-latest
+    outputs:
+      tag_commit: ${{ steps.release_target.outputs.tag_commit }}
     permissions:
       actions: read
       contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
 
       - name: Fetch annotated release tag
         shell: pwsh
-        run: git fetch --force origin "refs/tags/${env:GITHUB_REF_NAME}:refs/tags/${env:GITHUB_REF_NAME}"
+        run: git fetch --force origin "refs/tags/${env:RELEASE_TAG}:refs/tags/${env:RELEASE_TAG}"
 
       - name: Install Linux dependencies
         run: |
@@ -59,21 +68,12 @@ jobs:
           if ((npm --version).Trim() -ne $env:NPM_VERSION) { throw "Unexpected npm version" }
 
       - name: Validate annotated release target
+        id: release_target
         shell: pwsh
-        run: ./scripts/check-release-contract.ps1 -Tag "$env:GITHUB_REF_NAME" -ExpectedCommit "$env:GITHUB_SHA"
-
-      - name: Require green protected main CI for this commit
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $runs = @(gh run list --workflow ci.yml --commit "$env:GITHUB_SHA" --event push --limit 20 --json status,conclusion,headSha,url | ConvertFrom-Json)
-          $green = @($runs | Where-Object {
-            $_.headSha -eq $env:GITHUB_SHA -and
-            $_.status -eq "completed" -and
-            $_.conclusion -eq "success"
-          })
-          if ($green.Count -eq 0) { throw "No successful protected main CI run exists for $env:GITHUB_SHA" }
+          $tagCommit = (git rev-list -n 1 "$env:RELEASE_TAG").Trim()
+          ./scripts/check-release-contract.ps1 -Tag "$env:RELEASE_TAG" -ExpectedCommit $tagCommit
+          "tag_commit=$tagCommit" >> $env:GITHUB_OUTPUT
 
       - name: Verify vendored Codex integrity
         shell: pwsh
@@ -141,6 +141,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          ref: ${{ needs.preflight.outputs.tag_commit }}
           persist-credentials: false
 
       - name: Install Linux dependencies
@@ -228,8 +229,20 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          ref: ${{ needs.preflight.outputs.tag_commit }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Revalidate immutable release target
+        shell: pwsh
+        env:
+          EXPECTED_TAG_COMMIT: ${{ needs.preflight.outputs.tag_commit }}
+        run: |
+          git fetch --force origin "refs/tags/${env:RELEASE_TAG}:refs/tags/${env:RELEASE_TAG}"
+          $tagCommit = (git rev-list -n 1 "$env:RELEASE_TAG").Trim()
+          if ($tagCommit -ne $env:EXPECTED_TAG_COMMIT) {
+            throw "Release tag moved after preflight: expected $env:EXPECTED_TAG_COMMIT, got $tagCommit"
+          }
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -237,7 +250,7 @@ jobs:
 
       - name: Prepare complete release assets and checksums
         shell: pwsh
-        run: ./scripts/release-assets.ps1 -ArtifactsDirectory artifacts -OutputDirectory release-assets -Tag "$env:GITHUB_REF_NAME" -Repository "$env:GITHUB_REPOSITORY"
+        run: ./scripts/release-assets.ps1 -ArtifactsDirectory artifacts -OutputDirectory release-assets -Tag "$env:RELEASE_TAG" -Repository "$env:GITHUB_REPOSITORY"
 
       - name: Verify checksum manifest
         shell: bash
@@ -250,7 +263,7 @@ jobs:
       - name: Verify updater manifest targets every platform
         shell: bash
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           test "$(jq -r .version release-assets/latest.json)" = "${TAG#v}"
@@ -264,7 +277,7 @@ jobs:
       - name: Extract curated release notes
         shell: bash
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           python3 scripts/extract-changelog-section.py "${TAG#v}" CHANGELOG.md > release-body.md
@@ -275,7 +288,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then

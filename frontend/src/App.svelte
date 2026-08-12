@@ -1,9 +1,16 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, type Component } from "svelte";
   import TopBar from "./components/TopBar.svelte";
   import AccessSourceBar from "./components/AccessSourceBar.svelte";
   import Toast from "./components/Toast.svelte";
   import UpdateBanner from "./components/UpdateBanner.svelte";
+  import Dashboard from "./views/Dashboard.svelte";
+  import Sessions from "./views/Sessions.svelte";
+  import Context from "./views/Context.svelte";
+  import Costs from "./views/Costs.svelte";
+  import Reports from "./views/Reports.svelte";
+  import Discord from "./views/Discord.svelte";
+  import Settings from "./views/Settings.svelte";
   import {
     currentView,
     invalidateLiveSnapshotForProviderChange,
@@ -16,29 +23,20 @@
   import { fly } from "svelte/transition";
   import { setTheme } from "@tauri-apps/api/app";
 
-  const viewLoaders = {
-    dashboard: () => import("./views/Dashboard.svelte"),
-    sessions: () => import("./views/Sessions.svelte"),
-    context: () => import("./views/Context.svelte"),
-    costs: () => import("./views/Costs.svelte"),
-    reports: () => import("./views/Reports.svelte"),
-    discord: () => import("./views/Discord.svelte"),
-    settings: () => import("./views/Settings.svelte"),
+  type ViewId = "dashboard" | "sessions" | "context" | "costs" | "reports" | "discord" | "settings";
+  const views: Record<ViewId, Component<any>> = {
+    dashboard: Dashboard,
+    sessions: Sessions,
+    context: Context,
+    costs: Costs,
+    reports: Reports,
+    discord: Discord,
+    settings: Settings,
   } as const;
-  type ViewId = keyof typeof viewLoaders;
-  let ActiveView = $state<any>(null);
-  let activeViewId = $state<ViewId>("dashboard");
-  let viewLoadRevision = 0;
-
-  $effect(() => {
-    const requested = ($currentView in viewLoaders ? $currentView : "dashboard") as ViewId;
-    const revision = ++viewLoadRevision;
-    activeViewId = requested;
-    ActiveView = null;
-    void viewLoaders[requested]().then((module) => {
-      if (revision === viewLoadRevision) ActiveView = module.default;
-    });
-  });
+  let activeViewId = $derived(
+    ($currentView in views ? $currentView : "dashboard") as ViewId,
+  );
+  let ActiveView = $derived(views[activeViewId]);
 
   const initialTheme: "dark" | "light" =
     localStorage.getItem("pulse-theme") === "light" ? "light" : "dark";
@@ -82,19 +80,15 @@
   <TopBar onToggleTheme={toggleTheme} />
   <AccessSourceBar />
   <main class="main-content">
-    {#if ActiveView}
-      {#key activeViewId}
-        <div class="view-host" in:fly={{ y: 8, duration: 200 }}>
-          {#if activeViewId === "settings"}
-            <ActiveView onToggleTheme={toggleTheme} currentTheme={theme} />
-          {:else}
-            <ActiveView />
-          {/if}
-        </div>
-      {/key}
-    {:else}
-      <div class="view-loading" aria-live="polite">Loading view…</div>
-    {/if}
+    {#key activeViewId}
+      <div class="view-host" in:fly={{ y: 4, duration: 80 }}>
+        {#if activeViewId === "settings"}
+          <ActiveView onToggleTheme={toggleTheme} currentTheme={theme} />
+        {:else}
+          <ActiveView />
+        {/if}
+      </div>
+    {/key}
   </main>
 </div>
 <Toast />
@@ -129,5 +123,4 @@
     min-width: 0;
     min-height: 100%;
   }
-  .view-loading { color: var(--text-muted); padding: 24px 4px; font-size: var(--fs-sm); }
 </style>

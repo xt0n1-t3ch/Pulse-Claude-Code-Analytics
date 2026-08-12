@@ -3,13 +3,11 @@
   import Chart from "../components/Chart.svelte";
   import { sessions, selectedAnalyticsProviderScope } from "../lib/stores";
   import { providerMatchesAnalyticsScope } from "../lib/access";
-  import { fmtCost, fmtTokens, fmtPct } from "../lib/utils";
+  import { fmtCost, fmtExactCost, fmtTokens, fmtPct, monetaryValueLabel } from "../lib/utils";
   import {
-    getSessionHistory,
-    getCostForecast,
+    getCostsBundle,
     getCostTotals,
     getBudgetStatus,
-    getDailyStats,
     setBudget,
   } from "../lib/api";
   import type {
@@ -61,37 +59,52 @@
     { key: "cache_write_tokens", label: "Cache Write", enabled: true },
     { key: "cache_read_tokens", label: "Cache Read", enabled: true },
     { key: "tokens", label: "Total Tokens", enabled: true },
-    { key: "input_cost", label: "Input Cost", enabled: true },
-    { key: "output_cost", label: "Output Cost", enabled: true },
-    { key: "cache_write_cost", label: "Cache Write Cost", enabled: true },
-    { key: "cache_read_cost", label: "Cache Read Cost", enabled: true },
-    { key: "cost", label: "Total Cost", enabled: true },
+    { key: "input_cost", label: "Input Monetary Value (USD)", enabled: true },
+    { key: "output_cost", label: "Output Monetary Value (USD)", enabled: true },
+    { key: "cache_write_cost", label: "Cache Write Monetary Value (USD)", enabled: true },
+    { key: "cache_read_cost", label: "Cache Read Monetary Value (USD)", enabled: true },
+    { key: "cost", label: "Known Monetary Value (USD)", enabled: true },
+    { key: "cost_basis", label: "Monetary Value Basis", enabled: true },
+    { key: "cost_source", label: "Monetary Value Source", enabled: true },
   ];
 
   let histSessions = $state<HistoricalSession[]>([]);
+  const DETAIL_PAGE_SIZE = 50;
+  let visibleDetailLimit = $state(DETAIL_PAGE_SIZE);
   let loadGeneration = 0;
   let totalsGeneration = 0;
+  let lastTotalsKey = "";
+  let lastTotalsScope = "";
+  // Request bookkeeping only; making it reactive would let effects subscribe
+  // to their own in-flight toggle and schedule redundant refresh passes.
+  let bundleRefreshing = false;
+
+  function totalsScopeKey(
+    provider: typeof $selectedAnalyticsProviderScope,
+    project: string,
+  ): string {
+    return `${provider}:${project}`;
+  }
 
   async function loadData(): Promise<void> {
     const generation = ++loadGeneration;
     const provider = $selectedAnalyticsProviderScope;
     const project = projectFilter;
-    loading = true;
+    const scopeKey = totalsScopeKey(provider, project);
+    const requestKey = `${scopeKey}:${monetaryFingerprint}`;
+    if (hasLoaded && scopeKey !== lastTotalsScope) {
+      histSessions = [];
+      forecast = null;
+      budgetStatus = null;
+      totals = null;
+      dailyUsage = [];
+    }
+    bundleRefreshing = true;
+    loading = !hasLoaded;
     loadError = null;
-    histSessions = [];
-    forecast = null;
-    budgetStatus = null;
-    dailyUsage = [];
-    totals = null;
     showExport = false;
     try {
-      const [nextHistory, nextForecast, nextBudget, nextTotals, nextDailyUsage] = await Promise.all([
-        getSessionHistory(30, undefined, 200, provider),
-        getCostForecast(provider),
-        getBudgetStatus(provider),
-        getCostTotals(30, project || undefined, provider),
-        getDailyStats(30, provider),
-      ]);
+      const bundle = await getCostsBundle(project || undefined, provider, requestKey);
       if (
         generation !== loadGeneration
         || provider !== $selectedAnalyticsProviderScope
@@ -99,11 +112,15 @@
       ) {
         return;
       }
-      histSessions = nextHistory;
-      forecast = nextForecast;
-      budgetStatus = nextBudget;
-      totals = nextTotals;
-      dailyUsage = nextDailyUsage;
+      histSessions = bundle.history;
+      visibleDetailLimit = DETAIL_PAGE_SIZE;
+      forecast = bundle.forecast;
+      budgetStatus = bundle.budget;
+      totals = bundle.totals;
+      dailyUsage = bundle.daily_usage;
+      lastTotalsKey = requestKey;
+      lastTotalsScope = scopeKey;
+      hasLoaded = true;
     } catch (error) {
       if (generation !== loadGeneration) return;
       loadError = error instanceof Error && error.message
@@ -112,7 +129,7 @@
     } finally {
       if (generation === loadGeneration) {
         loading = false;
-        hasLoaded = true;
+        bundleRefreshing = false;
       }
     }
   }
@@ -130,25 +147,29 @@
     provider: typeof $selectedAnalyticsProviderScope,
   ): Promise<void> {
     const generation = ++totalsGeneration;
+    const scopeKey = totalsScopeKey(provider, project);
+    const requestKey = `${scopeKey}:${monetaryFingerprint}`;
     if (project === projectFilter && provider === $selectedAnalyticsProviderScope) {
-      totals = null;
       loadError = null;
     }
     try {
-      const next = await getCostTotals(30, project || undefined, provider);
+      const next = await getCostTotals(30, project || undefined, provider, requestKey);
       // Ignore a response that lost the race against a newer filter selection.
       if (
         generation === totalsGeneration
         && project === projectFilter
         && provider === $selectedAnalyticsProviderScope
-      ) totals = next;
+      ) {
+        totals = next;
+        lastTotalsKey = requestKey;
+        lastTotalsScope = scopeKey;
+      }
     } catch (error) {
       if (
         generation === totalsGeneration
         && project === projectFilter
         && provider === $selectedAnalyticsProviderScope
       ) {
-        totals = null;
         loadError = error instanceof Error && error.message
           ? `Cost data unavailable. ${error.message}`
           : "Cost data unavailable. Pulse could not load your usage ledger.";
@@ -166,6 +187,23 @@
   }
 
   let projectFilter = $state("");
+  let monetaryFingerprint = $derived.by(() =>
+    $sessions
+      .filter((session) =>
+        providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
+      )
+      .map((session) => [
+        session.session_id,
+        session.cost_available === true ? session.cost : "unavailable",
+        session.cost_basis ?? "unavailable",
+        session.input_tokens,
+        session.output_tokens,
+        session.cache_write_tokens,
+        session.cache_read_tokens,
+      ].join(":"))
+      .sort()
+      .join("|"),
+  );
 
   onMount(() => { loadData(); });
   let previousProviderScope: string | undefined;
@@ -181,8 +219,17 @@
   $effect(() => {
     const project = projectFilter;
     const provider = $selectedAnalyticsProviderScope;
-    void $sessions;
-    if (hasLoaded && !loadError) void refreshTotals(project, provider);
+    const scopeKey = totalsScopeKey(provider, project);
+    const key = `${scopeKey}:${monetaryFingerprint}`;
+    if (hasLoaded && scopeKey !== lastTotalsScope) {
+      // A value from another project/provider cannot be shown under the new
+      // filter. Live deltas inside the same scope still retain the last
+      // verified aggregate while the refresh runs.
+      totals = null;
+    }
+    if (hasLoaded && !bundleRefreshing && key !== lastTotalsKey) {
+      void refreshTotals(project, provider);
+    }
   });
 
   let allSessions = $derived.by(() => {
@@ -247,6 +294,10 @@
       .sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1))
       .map((s) => ({ ...s } as Record<string, unknown>)),
   );
+  let sortedFiltered = $derived(
+    [...filtered].sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1)),
+  );
+  let visibleCostRows = $derived(sortedFiltered.slice(0, visibleDetailLimit));
 
   /** The aggregate is fetched for the active filter, so it always describes
    *  the same population the KPIs claim. Summing `filtered` is only a fallback
@@ -380,7 +431,7 @@
 
   let costByProject = $derived.by(() => {
     if (!costAvailable) return [];
-    // Window-wide when unfiltered, so the bars reconcile with Total Spent.
+    // Window-wide when unfiltered, so the bars reconcile with the value total.
     if (hasTotals && totals) {
       return totals.by_project.map((p) => [p.label, p.cost] as [string, number]);
     }
@@ -444,7 +495,7 @@
   <div class="view-header">
     <div>
       <h2 class="view-title">Usage &amp; cost</h2>
-      <p class="view-subtitle">Real spend and API-equivalent value, priced from your own sessions.</p>
+      <p class="view-subtitle">Provider-billed spend and API-equivalent value, kept as separate facts.</p>
     </div>
     <div class="filters">
       <!-- Explicit handler rather than `bind:value`: the selection drives a
@@ -452,7 +503,10 @@
            the aggregate depends on. -->
       <select
         value={projectFilter}
-        onchange={(event) => (projectFilter = event.currentTarget.value)}
+        onchange={(event) => {
+          projectFilter = event.currentTarget.value;
+          visibleDetailLimit = DETAIL_PAGE_SIZE;
+        }}
       >
         <option value="">All Projects</option>
         {#each projects as p}<option value={p}>{p}</option>{/each}
@@ -465,19 +519,26 @@
       <strong>Loading cost ledger</strong>
       <span>Adding up the current month and previous 30 days.</span>
     </section>
-  {:else if loadError}
+  {:else if loadError && !hasLoaded}
     <section class="load-state error" role="alert">
       <strong>Cost data unavailable</strong>
       <span>{loadError.replace(/^Cost data unavailable\.\s*/, "")}</span>
       <button type="button" onclick={loadData}>Retry</button>
     </section>
   {:else}
+    {#if loadError}
+      <section class="load-state error" role="status">
+        <strong>Showing the last verified ledger</strong>
+        <span>{loadError.replace(/^Cost data unavailable\.\s*/, "")}</span>
+        <button type="button" onclick={loadData}>Retry</button>
+      </section>
+    {/if}
     <section class="value-ledger" aria-label="Subscription value ledger">
       <header class="ledger-head">
         <div>
-          <span class="ledger-eyebrow">Last 30 days · API-equivalent value</span>
-          <h3>What your subscription usage is worth</h3>
-          <p>Token-for-token value of your Claude and Codex sessions at pay-as-you-go API rates — measured from real usage, even when a provider doesn't report exact spend.</p>
+          <span class="ledger-eyebrow">Last 30 days · provenance-aware value</span>
+          <h3>Known monetary value by provenance</h3>
+          <p>Provider-billed amounts and API-equivalent estimates stay distinct. Every value comes from observed usage; unavailable billing is never guessed.</p>
         </div>
         <span
           class="coverage-pill"
@@ -490,6 +551,20 @@
       </header>
 
       <div class="ledger-metrics">
+        <div class="ledger-metric">
+          <span class="ledger-label">Provider-billed · 30d</span>
+          <strong class="ledger-value">
+            {fmtExactCost(totals?.billed_spend_usd ?? 0, totals?.billed_spend_usd !== null && totals?.billed_spend_usd !== undefined)}
+          </strong>
+          <small>{totals?.billed_sessions ?? 0} provider readbacks</small>
+        </div>
+        <div class="ledger-metric">
+          <span class="ledger-label">API-equivalent · 30d</span>
+          <strong class="ledger-value">
+            {fmtExactCost(totals?.api_equivalent_usd ?? 0, totals?.api_equivalent_usd !== null && totals?.api_equivalent_usd !== undefined)}
+          </strong>
+          <small>{totals?.api_equivalent_sessions ?? 0} priced from published rates</small>
+        </div>
         <div class="ledger-metric">
           <span class="ledger-label">Total tokens</span>
           <strong class="ledger-value">{fmtTokens(usageTotalTokens)}</strong>
@@ -514,7 +589,7 @@
             {:else if totals?.cost_basis === "estimated"}
               {fmtCost(totalCost)} estimated
             {:else}
-              {fmtCost(totalCost)} known spend
+              {fmtCost(totalCost)} {monetaryValueLabel(totals?.cost_sources ?? []).toLowerCase()}{totals?.cost_basis === "partial" ? " lower bound" : ""}
             {/if}
           </small>
         </div>
@@ -584,7 +659,7 @@
           <div>
             <strong>Coverage details</strong>
             <span>
-              {totals.priced_sessions} of {totals.sessions} sessions have a known cost; totals exclude unpriced sessions.
+              {totals.priced_sessions} of {totals.sessions} sessions have a known monetary value; this is a lower bound and excludes unpriced sessions.
             </span>
           </div>
           {#if totals.cost_sources.length > 0}
@@ -593,10 +668,10 @@
         </section>
       {/if}
 
-      {#if forecast?.priced_sessions && forecast.spent_this_month === 0 && totalCost > 0}
+      {#if forecast?.priced_sessions && (forecast.billed_spend_usd ?? 0) === 0 && (forecast.api_equivalent_usd ?? 0) === 0 && totalCost > 0}
         <p class="window-context">
-          No month-to-date spend is stored. The previous 30 days include {fmtCost(totalCost)}
-          from earlier sessions.
+          No month-to-date monetary value is available. The previous 30 days include
+          {fmtCost(totalCost)} from earlier sessions with known provenance.
         </p>
       {/if}
 
@@ -612,7 +687,7 @@
        cockpit above. -->
       <div class="inline-stats">
     <div class="is-item">
-      <span class="is-label">Avg / session</span>
+      <span class="is-label">Value / session</span>
       <span class="is-value">{costAvailable ? fmtCost(avgCost) : "—"}</span>
        <span class="is-meta">
          {costAvailable
@@ -621,7 +696,7 @@
        </span>
     </div>
     <div class="is-item">
-      <span class="is-label">Cost / 1M tokens</span>
+      <span class="is-label">Value / 1M tokens</span>
       <span class="is-value">{costAvailable && derivedRatesAvailable ? fmtCost(costPerMToken) : "—"}</span>
       <span class="is-meta">{costAvailable && derivedRatesAvailable ? "blended rate" : "requires complete coverage"}</span>
     </div>
@@ -631,15 +706,15 @@
       <span class="is-meta">{costAvailable && derivedRatesAvailable ? "vs uncached input" : "requires complete coverage"}</span>
     </div>
     <div class="is-item">
-      <span class="is-label">Total spent (30d)</span>
+      <span class="is-label">{monetaryValueLabel(totals?.cost_sources ?? [])} (30d)</span>
       <span class="is-value">{costAvailable ? fmtCost(totalCost) : "—"}</span>
-      <span class="is-meta">{costAvailable ? "window total" : "cost not reported"}</span>
+      <span class="is-meta">{costAvailable ? (totals?.cost_basis === "partial" ? "known lower bound" : "window total") : "monetary value unavailable"}</span>
     </div>
       </div>
 
       <div class="charts-row">
     <section class="pane">
-      <h3 class="pane-title">Cost by type</h3>
+      <h3 class="pane-title">Monetary value by type</h3>
       {#if costAvailable && costTotal > 0}
         <div class="cost-type-bar">
           <div class="cost-seg input" style="width:{(totalInputCost / costTotal) * 100}%"></div>
@@ -655,14 +730,14 @@
         </div>
       {:else}
         <div class="empty-hint">
-          {costAvailable ? "No cost recorded in this window" : "Cost not reported for this window"}
+          {costAvailable ? "No monetary value recorded in this window" : "Monetary value unavailable for this window"}
         </div>
       {/if}
     </section>
 
     {#if modelCosts.length > 0}
       <section class="pane">
-        <h3 class="pane-title">Cost per model</h3>
+        <h3 class="pane-title">Monetary value per model</h3>
         <div class="model-cost-list">
           {#each modelCosts as [model, cost]}
             <div class="mc-row">
@@ -680,7 +755,7 @@
 
       {#if costByProject.length > 0}
         <div class="card surface-matte">
-          <h3 class="card-title">Cost by project</h3>
+          <h3 class="card-title">Monetary value by project</h3>
           <div
             class="chart-container"
             style="height: {Math.max(140, Math.min(360, 44 + costByProject.length * 44))}px"
@@ -715,9 +790,9 @@
         <span class="dt-col">Cache W</span>
         <span class="dt-col">Cache R</span>
         <span class="dt-col">Tokens</span>
-        <span class="dt-col cost">Cost</span>
+        <span class="dt-col cost">Monetary value</span>
       </div>
-      {#each [...filtered].sort((a, b) => (b.cost ?? -1) - (a.cost ?? -1)) as s (s.id)}
+      {#each visibleCostRows as s (s.id)}
         <div class="dt-row">
           <span class="dt-col status"><span class="status-dot" class:active={s.is_active}></span></span>
           <span class="dt-col project">{s.project}{s.branch ? " · " + s.branch : ""}</span>
@@ -734,6 +809,15 @@
         <div class="dt-empty">No session data yet</div>
       {/each}
     </div>
+    {#if sortedFiltered.length > visibleCostRows.length}
+      <button
+        class="show-more"
+        type="button"
+        onclick={() => (visibleDetailLimit += DETAIL_PAGE_SIZE)}
+      >
+        Show {Math.min(DETAIL_PAGE_SIZE, sortedFiltered.length - visibleCostRows.length)} more
+      </button>
+    {/if}
     </div>
   {/if}
 </div>
@@ -832,7 +916,7 @@
   }
   .ledger-metrics {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     border-block: 1px solid var(--divider);
   }
   .ledger-metric {
@@ -843,6 +927,8 @@
     border-left: 1px solid var(--divider);
   }
   .ledger-metric:first-child { padding-left: 0; border-left: none; }
+  .ledger-metric:nth-child(4) { padding-left: 0; border-left: none; border-top: 1px solid var(--divider); }
+  .ledger-metric:nth-child(n+5) { border-top: 1px solid var(--divider); }
   .ledger-value {
     overflow: hidden;
     color: var(--text-primary);
@@ -1053,7 +1139,9 @@
   .is-meta { font-size: var(--fs-xs); color: var(--text-muted); }
   @media (max-width: 900px) {
     .ledger-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .ledger-metric:nth-child(3) { padding-left: 0; border-left: none; }
+    .ledger-metric:nth-child(3),
+    .ledger-metric:nth-child(5) { padding-left: 0; border-left: none; }
+    .ledger-metric:nth-child(n+3) { border-top: 1px solid var(--divider); }
     .usage-ledger-grid { grid-template-columns: 1fr; }
     .usage-ledger-grid > section + section { padding: 20px 0 0; border-left: none; border-top: 1px solid var(--divider); }
     .inline-stats { grid-template-columns: repeat(2, 1fr); row-gap: 18px; }
@@ -1112,6 +1200,8 @@
   .card-title-row .card-title { margin-bottom: 0; }
   .export-btn { font-size: 11px; font-weight: 600; color: var(--text-secondary); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 12px; cursor: pointer; transition: all 0.15s ease; }
   .export-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+  .show-more { display: block; margin: 12px auto 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-secondary); padding: 7px 16px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .show-more:hover { color: var(--accent); border-color: var(--accent); }
 
   .detail-table { font-size: 12px; max-height: 400px; overflow-y: auto; --dt-cols: 24px 2fr 80px 80px 80px 80px 80px 80px; }
   .dt-header { display: grid; grid-template-columns: var(--dt-cols); gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; position: sticky; top: 0; background: var(--bg-card); z-index: 1; }

@@ -28,6 +28,7 @@ const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_HEADER_LINE_BYTES: usize = 4 * 1024;
 const MAX_HEADER_COUNT: usize = 64;
+const MAX_CHUNK_COUNT: usize = 1024;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const MAX_DAYS: i64 = 3_660;
 const MAX_LIMIT: i64 = 500;
@@ -311,6 +312,9 @@ fn dispatch(target: &BridgeTarget) -> Result<String, DispatchError> {
         "get_unread_notification_count" => {
             serialize(crate::commands::get_unread_notification_count())
         }
+        "get_dashboard_bundle" => serialize(crate::commands::dashboard_bundle_blocking(
+            target.provider.clone(),
+        )),
         "get_session_history" => serialize(crate::commands::get_session_history(
             Some(days),
             project,
@@ -383,6 +387,10 @@ fn dispatch(target: &BridgeTarget) -> Result<String, DispatchError> {
         }
         "get_cost_totals" => serialize(crate::commands::cost_totals_blocking(
             days,
+            project,
+            target.provider.clone(),
+        )),
+        "get_costs_bundle" => serialize(crate::commands::costs_bundle_blocking(
             project,
             target.provider.clone(),
         )),
@@ -621,7 +629,7 @@ struct HttpRequest {
     body: Vec<u8>,
 }
 
-fn read_bounded_line(reader: &mut BufReader<TcpStream>, max_bytes: usize) -> io::Result<String> {
+fn read_bounded_line<R: Read>(reader: &mut BufReader<R>, max_bytes: usize) -> io::Result<String> {
     let mut bytes = Vec::with_capacity(max_bytes.min(1024));
     let read = reader
         .take((max_bytes + 1) as u64)
@@ -636,7 +644,80 @@ fn read_bounded_line(reader: &mut BufReader<TcpStream>, max_bytes: usize) -> io:
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "request is not UTF-8"))
 }
 
-fn read_request(reader: &mut BufReader<TcpStream>) -> io::Result<HttpRequest> {
+fn read_chunked_body<R: Read>(reader: &mut BufReader<R>) -> io::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    let mut chunk_count = 0usize;
+    let mut framing_bytes = 0usize;
+    loop {
+        let size_line = read_bounded_line(reader, MAX_HEADER_LINE_BYTES)?;
+        chunk_count = chunk_count.saturating_add(1);
+        framing_bytes = framing_bytes.saturating_add(size_line.len());
+        if chunk_count > MAX_CHUNK_COUNT || framing_bytes > MAX_HEADER_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request chunk framing too large",
+            ));
+        }
+        let size_token = size_line
+            .trim()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if size_token.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "missing chunk size",
+            ));
+        }
+        let chunk_size = usize::from_str_radix(size_token, 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size"))?;
+        if chunk_size == 0 {
+            let mut trailer_bytes = 0usize;
+            let mut trailer_count = 0usize;
+            loop {
+                let trailer = read_bounded_line(reader, MAX_HEADER_LINE_BYTES)?;
+                if trailer.is_empty() || trailer.trim().is_empty() {
+                    return Ok(body);
+                }
+                trailer_count = trailer_count.saturating_add(1);
+                trailer_bytes = trailer_bytes.saturating_add(trailer.len());
+                if trailer_count > MAX_HEADER_COUNT || trailer_bytes > MAX_HEADER_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "request trailers too large",
+                    ));
+                }
+            }
+        }
+        if body.len().saturating_add(chunk_size) > MAX_BODY_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request body too large",
+            ));
+        }
+        let offset = body.len();
+        body.resize(offset + chunk_size, 0);
+        reader.read_exact(&mut body[offset..])?;
+        let mut ending = [0u8; 2];
+        reader.read_exact(&mut ending)?;
+        if ending != *b"\r\n" {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid chunk terminator",
+            ));
+        }
+        framing_bytes = framing_bytes.saturating_add(ending.len());
+        if framing_bytes > MAX_HEADER_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "request chunk framing too large",
+            ));
+        }
+    }
+}
+
+fn read_request<R: Read>(reader: &mut BufReader<R>) -> io::Result<HttpRequest> {
     let request_line = read_bounded_line(reader, MAX_HEADER_LINE_BYTES)?;
     let request_line_bytes = request_line.len();
     if request_line_bytes == 0 {
@@ -675,14 +756,35 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> io::Result<HttpRequest> {
         .transpose()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid content length"))?
         .unwrap_or(0);
-    if length > MAX_BODY_BYTES {
+    let transfer_encoding = headers
+        .get("transfer-encoding")
+        .map(|value| value.trim().to_ascii_lowercase());
+    if transfer_encoding.is_some() && headers.contains_key("content-length") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "request body too large",
+            "conflicting request body framing",
         ));
     }
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body)?;
+    let body = match transfer_encoding.as_deref() {
+        Some("chunked") => read_chunked_body(reader)?,
+        Some(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported transfer encoding",
+            ));
+        }
+        None => {
+            if length > MAX_BODY_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "request body too large",
+                ));
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body)?;
+            body
+        }
+    };
     Ok(HttpRequest {
         method,
         path,
@@ -700,7 +802,10 @@ fn handle(mut stream: TcpStream, expected_token: &str) -> io::Result<()> {
         Err(error) if error.to_string() == "request body too large" => {
             return respond(&mut stream, 413, "request body too large", "", None);
         }
-        Err(_) => return respond(&mut stream, 400, "malformed request", "", None),
+        Err(error) => {
+            let message = format!("malformed request: {error}");
+            return respond(&mut stream, 400, &message, "", None);
+        }
     };
     let origin = request.headers.get("origin").map(String::as_str);
     let Some(allow_origin) = allowed_origin(origin) else {
@@ -857,6 +962,53 @@ mod tests {
             Err(AuthError::Invalid)
         );
         assert_eq!(authorize(Some("Bearer secret"), "secret"), Ok(()));
+    }
+
+    #[test]
+    fn chunked_browser_request_reassembles_the_authenticated_invoke_body() {
+        let payload = r#"{"command":"get_dashboard_bundle","args":{"provider":"claude"}}"#;
+        let split = 19;
+        let raw = format!(
+            "POST /invoke HTTP/1.1\r\nHost: 127.0.0.1:1421\r\nTransfer-Encoding: chunked\r\nContent-Type: application/json\r\nAuthorization: Bearer secret\r\n\r\n{:x}\r\n{}\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+            split,
+            &payload[..split],
+            payload.len() - split,
+            &payload[split..],
+        );
+        let mut reader = BufReader::new(std::io::Cursor::new(raw.into_bytes()));
+
+        let request = read_request(&mut reader).expect("chunked request");
+        let invoke: InvokeRequest = serde_json::from_slice(&request.body).expect("invoke JSON");
+        let target = BridgeTarget::from_request(invoke).expect("bridge target");
+
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/invoke");
+        assert_eq!(target.command, "get_dashboard_bundle");
+        assert_eq!(target.provider.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn request_parser_rejects_ambiguous_body_framing() {
+        let raw = b"POST /invoke HTTP/1.1\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n";
+        let mut reader = BufReader::new(std::io::Cursor::new(raw));
+
+        let error = read_request(&mut reader).expect_err("ambiguous framing must fail closed");
+
+        assert_eq!(error.to_string(), "conflicting request body framing");
+    }
+
+    #[test]
+    fn chunked_request_rejects_excessive_framing_before_body_limit() {
+        let mut raw = String::from("POST /invoke HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n");
+        for _ in 0..=MAX_CHUNK_COUNT {
+            raw.push_str("1\r\nx\r\n");
+        }
+        raw.push_str("0\r\n\r\n");
+        let mut reader = BufReader::new(std::io::Cursor::new(raw.into_bytes()));
+
+        let error = read_request(&mut reader).expect_err("chunk framing must be bounded");
+
+        assert_eq!(error.to_string(), "request chunk framing too large");
     }
 
     #[test]

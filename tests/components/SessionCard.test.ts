@@ -214,6 +214,6 @@ describe("SessionCard", () => {
 
     expect(container.textContent).not.toContain("$1.23");
     await fireEvent.click(container.querySelector(".session-card")!);
-    expect(getByText("Exact cost is unavailable for this session.")).toBeTruthy();
+    expect(getByText("Monetary value is unavailable for this session.")).toBeTruthy();
   });
 });

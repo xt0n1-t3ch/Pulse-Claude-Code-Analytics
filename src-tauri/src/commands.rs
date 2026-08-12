@@ -58,6 +58,8 @@ const STALE_THRESHOLD: Duration = Duration::from_secs(120);
 const STICKY_WINDOW: Duration = Duration::from_secs(120);
 const ACTIVE_CUTOFF: Duration = Duration::from_secs(600);
 const IDLE_CUTOFF: Duration = Duration::from_secs(300);
+const APP_SNAPSHOT_CACHE_SCHEMA: u32 = 1;
+const APP_SNAPSHOT_CACHE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 static SNAPSHOT_POLLER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -1317,9 +1319,12 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
             }
             INITIAL_SNAPSHOT_READY.store(true, Ordering::Release);
 
-            if let Ok(snapshot) = get_app_snapshot() {
+            if let Ok(snapshot) = build_app_snapshot("live") {
                 let snapshot_hash = app_snapshot_fingerprint(&snapshot);
                 if last_snapshot_hash != Some(snapshot_hash) {
+                    if let Err(error) = persist_app_snapshot(&snapshot) {
+                        tracing::warn!(error = %error, "failed to persist Pulse app snapshot");
+                    }
                     if let Some(app) = app.as_ref()
                         && let Err(error) = app.emit("pulse://snapshot", &snapshot)
                     {
@@ -1416,6 +1421,8 @@ pub struct HealthResponse {
 #[derive(Serialize)]
 pub struct AppSnapshot {
     pub revision: u32,
+    pub sync_state: &'static str,
+    pub snapshot_captured_at: String,
     pub health: HealthResponse,
     pub metrics: MetricsResponse,
     pub sessions: Vec<SessionInfo>,
@@ -1426,18 +1433,20 @@ pub struct AppSnapshot {
     pub plan: PlanInfo,
 }
 
-#[tauri::command]
-pub fn get_app_snapshot() -> Result<AppSnapshot, String> {
-    let deadline = Instant::now() + REFRESH_INTERVAL + Duration::from_secs(1);
-    while SNAPSHOT_POLLER_STARTED.load(Ordering::Acquire)
-        && !INITIAL_SNAPSHOT_READY.load(Ordering::Acquire)
-        && Instant::now() < deadline
-    {
-        thread::sleep(Duration::from_millis(25));
-    }
+#[derive(Deserialize, Serialize)]
+struct PersistedAppSnapshot {
+    schema_version: u32,
+    provider: String,
+    saved_at: String,
+    snapshot: serde_json::Value,
+}
+
+fn build_app_snapshot(sync_state: &'static str) -> Result<AppSnapshot, String> {
     let access = get_access_snapshot();
     Ok(AppSnapshot {
         revision: 1,
+        sync_state,
+        snapshot_captured_at: chrono::Utc::now().to_rfc3339(),
         health: get_health(),
         metrics: get_metrics(),
         sessions: get_live_sessions(),
@@ -1447,6 +1456,102 @@ pub fn get_app_snapshot() -> Result<AppSnapshot, String> {
         discord_settings: get_discord_settings()?,
         plan: get_plan_info(),
     })
+}
+
+fn app_snapshot_cache_path() -> PathBuf {
+    cc_discord_presence::config::claude_home().join("pulse-last-app-snapshot.json")
+}
+
+fn persist_app_snapshot(snapshot: &AppSnapshot) -> Result<(), String> {
+    let value = serde_json::to_value(snapshot).map_err(|error| error.to_string())?;
+    persist_app_snapshot_value_at(&app_snapshot_cache_path(), current_provider(), value)
+}
+
+fn persist_app_snapshot_value_at(
+    path: &std::path::Path,
+    provider: Provider,
+    snapshot: serde_json::Value,
+) -> Result<(), String> {
+    let envelope = PersistedAppSnapshot {
+        schema_version: APP_SNAPSHOT_CACHE_SCHEMA,
+        provider: provider.as_str().to_string(),
+        saved_at: chrono::Utc::now().to_rfc3339(),
+        snapshot,
+    };
+    cc_discord_presence::codex::util::write_json_pretty_atomic(path, &envelope)
+        .map_err(|error| error.to_string())
+}
+
+fn load_persisted_app_snapshot_at(
+    path: &std::path::Path,
+    provider: Provider,
+) -> Result<Option<serde_json::Value>, String> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.len() > APP_SNAPSHOT_CACHE_MAX_BYTES {
+        return Err(format!(
+            "persisted app snapshot is too large: {} bytes",
+            metadata.len()
+        ));
+    }
+    let raw = std::fs::read(path).map_err(|error| error.to_string())?;
+    let mut persisted: PersistedAppSnapshot =
+        serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+    if persisted.schema_version != APP_SNAPSHOT_CACHE_SCHEMA
+        || persisted.provider != provider.as_str()
+    {
+        return Ok(None);
+    }
+    let Some(root) = persisted.snapshot.as_object_mut() else {
+        return Err("persisted app snapshot root is not an object".to_string());
+    };
+    let required = [
+        "revision",
+        "health",
+        "metrics",
+        "sessions",
+        "access",
+        "rate_limits",
+        "discord_preview",
+        "discord_settings",
+        "plan",
+    ];
+    if root.get("revision").and_then(serde_json::Value::as_u64) != Some(1)
+        || required.iter().any(|field| !root.contains_key(*field))
+    {
+        return Err("persisted app snapshot has an invalid contract".to_string());
+    }
+    root.insert(
+        "sync_state".to_string(),
+        serde_json::Value::String("syncing".to_string()),
+    );
+    root.entry("snapshot_captured_at".to_string())
+        .or_insert(serde_json::Value::String(persisted.saved_at));
+    Ok(Some(persisted.snapshot))
+}
+
+#[tauri::command]
+pub fn get_app_snapshot() -> Result<serde_json::Value, String> {
+    let poller_is_syncing = SNAPSHOT_POLLER_STARTED.load(Ordering::Acquire)
+        && !INITIAL_SNAPSHOT_READY.load(Ordering::Acquire);
+    if poller_is_syncing {
+        match load_persisted_app_snapshot_at(&app_snapshot_cache_path(), current_provider()) {
+            Ok(Some(snapshot)) => return Ok(snapshot),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "ignoring invalid persisted Pulse app snapshot");
+            }
+        }
+    }
+    serde_json::to_value(build_app_snapshot(if poller_is_syncing {
+        "syncing"
+    } else {
+        "live"
+    })?)
+    .map_err(|error| error.to_string())
 }
 
 /// Returns the canonical access routes used to build quota DTOs, previews, and
@@ -1475,6 +1580,8 @@ fn app_snapshot_fingerprint(snapshot: &AppSnapshot) -> u64 {
 
 fn semantic_snapshot_fingerprint(mut value: serde_json::Value) -> u64 {
     if let Some(root) = value.as_object_mut() {
+        root.remove("sync_state");
+        root.remove("snapshot_captured_at");
         if let Some(health) = root
             .get_mut("health")
             .and_then(serde_json::Value::as_object_mut)
@@ -1693,7 +1800,7 @@ pub struct RateLimitInfo {
     pub error: Option<String>,
 }
 
-fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> {
+pub(crate) fn build_claude_session_infos(snapshots: &[ClaudeSessionSnapshot]) -> Vec<SessionInfo> {
     let now = SystemTime::now();
     let idle = now
         .checked_sub(IDLE_CUTOFF)
@@ -3080,6 +3187,29 @@ pub fn set_close_to_tray(enabled: bool) -> Result<crate::app_settings::AppSettin
     crate::app_settings::set_close_to_tray(enabled).map_err(|error| error.to_string())
 }
 
+#[derive(Serialize)]
+pub struct DashboardBundle {
+    pub summary: crate::db::AnalyticsSummary,
+    pub sessions: Vec<crate::db::HistoricalSession>,
+    pub forecast: crate::db::CostForecast,
+    pub hourly_activity: Vec<crate::db::HourlyActivity>,
+}
+
+#[tauri::command]
+pub async fn get_dashboard_bundle(provider: Option<String>) -> DashboardBundle {
+    offload(move || dashboard_bundle_blocking(provider)).await
+}
+
+pub fn dashboard_bundle_blocking(provider: Option<String>) -> DashboardBundle {
+    let data = crate::db::get_dashboard_data_scoped(provider.as_deref(), 30, 50);
+    DashboardBundle {
+        summary: data.summary,
+        sessions: data.sessions,
+        forecast: data.forecast,
+        hourly_activity: data.hourly_activity,
+    }
+}
+
 #[tauri::command]
 pub fn get_session_history(
     days: Option<i64>,
@@ -4170,11 +4300,11 @@ pub fn reports_bundle_blocking(
     )
 }
 
-/// Window-wide cost totals for the Cost Analysis KPIs.
+/// Window-wide monetary totals for the Cost Analysis KPIs.
 ///
 /// The view lists a capped page of recent sessions for its table, but a KPI
-/// that says "Total spent (30d)" has to cover the whole window. Summing the
-/// visible page instead understates real spend by exactly the sessions that
+/// that describes a 30-day value has to cover the whole window. Summing the
+/// visible page instead understates the value by exactly the sessions that
 /// did not fit — which is how the screen came to report $7.73 against an
 /// actual $7,371.35.
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
@@ -4184,6 +4314,12 @@ pub struct CostTotals {
     pub priced_sessions: usize,
     pub cost_basis: crate::db::CostBasis,
     pub cost_sources: Vec<String>,
+    /// Provider billing readback only. `None` means no such observation exists.
+    pub billed_spend_usd: Option<f64>,
+    /// Token usage priced with documented API rates, never provider-billed spend.
+    pub api_equivalent_usd: Option<f64>,
+    pub billed_sessions: usize,
+    pub api_equivalent_sessions: usize,
     pub total_cost: f64,
     pub input_cost: f64,
     pub output_cost: f64,
@@ -4237,7 +4373,10 @@ pub fn cost_totals_blocking(
     aggregate_cost_totals(days, &sessions)
 }
 
-fn aggregate_cost_totals(days: i64, sessions: &[crate::db::HistoricalSession]) -> CostTotals {
+pub(crate) fn aggregate_cost_totals(
+    days: i64,
+    sessions: &[crate::db::HistoricalSession],
+) -> CostTotals {
     use std::collections::HashMap;
 
     let coverage = crate::db::summarize_cost_provenance(sessions.iter().map(|session| {
@@ -4271,6 +4410,20 @@ fn aggregate_cost_totals(days: i64, sessions: &[crate::db::HistoricalSession]) -
         };
         if s.cost_basis == crate::db::CostBasis::Unavailable {
             continue;
+        }
+        if !known_cost.is_finite() || known_cost < 0.0 {
+            continue;
+        }
+        match crate::db::monetary_provenance(&s.cost_source) {
+            crate::db::MonetaryProvenance::ProviderBilled => {
+                totals.billed_sessions += 1;
+                *totals.billed_spend_usd.get_or_insert(0.0) += known_cost;
+            }
+            crate::db::MonetaryProvenance::ApiEquivalent => {
+                totals.api_equivalent_sessions += 1;
+                *totals.api_equivalent_usd.get_or_insert(0.0) += known_cost;
+            }
+            crate::db::MonetaryProvenance::Other => {}
         }
         totals.total_cost += known_cost;
         totals.input_cost += s.input_cost;
@@ -4309,6 +4462,31 @@ fn into_sorted_slices(map: std::collections::HashMap<&str, (f64, usize)>) -> Vec
             .then_with(|| a.label.cmp(&b.label))
     });
     slices
+}
+
+#[derive(Serialize)]
+pub struct CostsBundle {
+    pub history: Vec<crate::db::HistoricalSession>,
+    pub forecast: crate::db::CostForecast,
+    pub budget: crate::db::BudgetStatus,
+    pub totals: CostTotals,
+    pub daily_usage: Vec<crate::db::DailyStat>,
+}
+
+#[tauri::command]
+pub async fn get_costs_bundle(project: Option<String>, provider: Option<String>) -> CostsBundle {
+    offload(move || costs_bundle_blocking(project, provider)).await
+}
+
+pub fn costs_bundle_blocking(project: Option<String>, provider: Option<String>) -> CostsBundle {
+    let data = crate::db::get_costs_data_scoped(provider.as_deref(), 30, project.as_deref(), 200);
+    CostsBundle {
+        history: data.history,
+        forecast: data.forecast,
+        budget: data.budget,
+        totals: aggregate_cost_totals(30, &data.aggregate_sessions),
+        daily_usage: data.daily_usage,
+    }
 }
 
 /// First calendar date plotted for a `days`-long window, inclusive.
@@ -4745,11 +4923,15 @@ mod tests {
     #[test]
     fn snapshot_fingerprint_ignores_wall_clock_fields_but_not_telemetry() {
         let first = serde_json::json!({
+            "sync_state": "syncing",
+            "snapshot_captured_at": "2026-08-12T10:00:00Z",
             "health": {"uptime_seconds": 10, "status": "ok"},
             "discord_preview": {"duration_secs": 10, "state": "7d 96%"},
             "sessions": [{"duration_secs": 10, "tokens_per_sec": 4.5, "tokens": 100}]
         });
         let second = serde_json::json!({
+            "sync_state": "live",
+            "snapshot_captured_at": "2026-08-12T10:00:05Z",
             "health": {"uptime_seconds": 15, "status": "ok"},
             "discord_preview": {"duration_secs": 15, "state": "7d 96%"},
             "sessions": [{"duration_secs": 15, "tokens_per_sec": 3.0, "tokens": 100}]
@@ -4772,6 +4954,57 @@ mod tests {
             })),
             semantic_snapshot_fingerprint(changed)
         );
+    }
+
+    fn persisted_snapshot_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "revision": 1,
+            "sync_state": "live",
+            "snapshot_captured_at": "2026-08-12T10:00:00Z",
+            "health": {},
+            "metrics": {},
+            "sessions": [],
+            "access": {},
+            "rate_limits": null,
+            "discord_preview": {},
+            "discord_settings": {},
+            "plan": {}
+        })
+    }
+
+    #[test]
+    fn persisted_snapshot_is_provider_scoped_and_returns_as_syncing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("snapshot.json");
+        super::persist_app_snapshot_value_at(&path, Provider::Claude, persisted_snapshot_fixture())
+            .expect("persist snapshot");
+
+        let loaded = super::load_persisted_app_snapshot_at(&path, Provider::Claude)
+            .expect("load snapshot")
+            .expect("matching provider snapshot");
+        assert_eq!(loaded["sync_state"], "syncing");
+        assert_eq!(loaded["snapshot_captured_at"], "2026-08-12T10:00:00Z");
+        assert!(
+            super::load_persisted_app_snapshot_at(&path, Provider::Codex)
+                .expect("provider mismatch is not an I/O failure")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn corrupt_or_wrong_contract_persisted_snapshot_is_never_promoted() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("snapshot.json");
+        std::fs::write(&path, b"not-json").expect("write corrupt cache");
+        assert!(super::load_persisted_app_snapshot_at(&path, Provider::Claude).is_err());
+
+        super::persist_app_snapshot_value_at(
+            &path,
+            Provider::Claude,
+            serde_json::json!({"revision": 1}),
+        )
+        .expect("persist invalid contract");
+        assert!(super::load_persisted_app_snapshot_at(&path, Provider::Claude).is_err());
     }
 
     #[test]
@@ -6067,6 +6300,31 @@ mod tests {
         assert_eq!(totals.priced_sessions, 1);
         assert_eq!(totals.total_cost, 2.5);
         assert_eq!(totals.cost_sources, vec!["session-calculated".to_string()]);
+        assert_eq!(totals.billed_spend_usd, None);
+        assert_eq!(totals.api_equivalent_usd, Some(2.5));
+        assert_eq!(totals.billed_sessions, 0);
+        assert_eq!(totals.api_equivalent_sessions, 1);
+    }
+
+    #[test]
+    fn cost_totals_keep_billed_and_api_equivalent_values_in_separate_fields() {
+        let mut billed = session_on_day(1, 10.0);
+        billed.cost_basis = crate::db::CostBasis::Exact;
+        billed.cost_source = "provider_billed".to_string();
+        billed.known_cost = Some(10.0);
+
+        let mut estimated = session_on_day(1, 90.0);
+        estimated.cost_basis = crate::db::CostBasis::Estimated;
+        estimated.cost_source = "api_equivalent".to_string();
+        estimated.known_cost = Some(90.0);
+
+        let totals = aggregate_cost_totals(30, &[billed, estimated]);
+
+        assert_eq!(totals.total_cost, 100.0);
+        assert_eq!(totals.billed_spend_usd, Some(10.0));
+        assert_eq!(totals.api_equivalent_usd, Some(90.0));
+        assert_eq!(totals.billed_sessions, 1);
+        assert_eq!(totals.api_equivalent_sessions, 1);
     }
 
     #[test]
