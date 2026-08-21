@@ -134,6 +134,11 @@ fn create_or_show_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    // Install the tracing subscriber before anything can emit. Without this,
+    // every tracing event in the GUI process — including background-poller
+    // failure diagnostics — is silently discarded.
+    cc_discord_presence::util::setup_tracing();
+
     // Debug builds also serve the read-only dev bridge so the UI can be
     // reviewed in a browser against real backend data.
     #[cfg(debug_assertions)]

@@ -1319,18 +1319,28 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
             }
             INITIAL_SNAPSHOT_READY.store(true, Ordering::Release);
 
-            if let Ok(snapshot) = build_app_snapshot("live") {
-                let snapshot_hash = app_snapshot_fingerprint(&snapshot);
-                if last_snapshot_hash != Some(snapshot_hash) {
-                    if let Err(error) = persist_app_snapshot(&snapshot) {
-                        tracing::warn!(error = %error, "failed to persist Pulse app snapshot");
+            match build_app_snapshot("live") {
+                Ok(snapshot) => {
+                    let snapshot_hash = app_snapshot_fingerprint(&snapshot);
+                    if last_snapshot_hash != Some(snapshot_hash) {
+                        if let Err(error) = persist_app_snapshot(&snapshot) {
+                            tracing::warn!(error = %error, "failed to persist Pulse app snapshot");
+                        }
+                        if let Some(app) = app.as_ref()
+                            && let Err(error) = app.emit("pulse://snapshot", &snapshot)
+                        {
+                            tracing::warn!(error = %error, "failed to emit Pulse snapshot");
+                        }
+                        last_snapshot_hash = Some(snapshot_hash);
                     }
-                    if let Some(app) = app.as_ref()
-                        && let Err(error) = app.emit("pulse://snapshot", &snapshot)
-                    {
-                        tracing::warn!(error = %error, "failed to emit Pulse snapshot");
-                    }
-                    last_snapshot_hash = Some(snapshot_hash);
+                }
+                // A snapshot-build failure must never vanish at this seam: the
+                // suppressed event is what strands the native UI on stale data.
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "failed to build Pulse app snapshot; pulse://snapshot event suppressed this cycle"
+                    );
                 }
             }
 
@@ -1429,7 +1439,14 @@ pub struct AppSnapshot {
     pub access: AccessSnapshot,
     pub rate_limits: Option<RateLimitInfo>,
     pub discord_preview: DiscordPresencePreview,
-    pub discord_settings: DiscordSettings,
+    /// None only when the persisted presence configuration could not be read
+    /// or parsed. A Discord-settings failure is an ancillary subsystem fault:
+    /// it must degrade this payload instead of destroying otherwise-valid
+    /// analytics telemetry. Never replaced with fabricated defaults — absent
+    /// means unreadable, and `discord_settings_error` says why.
+    pub discord_settings: Option<DiscordSettings>,
+    /// Why `discord_settings` is None. Always None when settings are present.
+    pub discord_settings_error: Option<String>,
     pub plan: PlanInfo,
 }
 
@@ -1443,6 +1460,19 @@ struct PersistedAppSnapshot {
 
 fn build_app_snapshot(sync_state: &'static str) -> Result<AppSnapshot, String> {
     let access = get_access_snapshot();
+    // Discord settings are ancillary: a failed read degrades this one payload
+    // and is surfaced as a diagnostic, instead of aborting a snapshot whose
+    // health/metrics/sessions/access telemetry is perfectly valid.
+    let (discord_settings, discord_settings_error) = match get_discord_settings() {
+        Ok(settings) => (Some(settings), None),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "Discord settings unavailable; degrading the app snapshot payload"
+            );
+            (None, Some(error))
+        }
+    };
     Ok(AppSnapshot {
         revision: 1,
         sync_state,
@@ -1453,7 +1483,8 @@ fn build_app_snapshot(sync_state: &'static str) -> Result<AppSnapshot, String> {
         access,
         rate_limits: get_rate_limits(),
         discord_preview: get_discord_preview(),
-        discord_settings: get_discord_settings()?,
+        discord_settings,
+        discord_settings_error,
         plan: get_plan_info(),
     })
 }
@@ -6429,5 +6460,40 @@ mod tests {
         assert_eq!(totals.by_model[0].sessions, 2);
         assert_eq!(totals.by_project[0].label, "pulse");
         assert!((totals.by_project[0].cost - 14.0).abs() < 0.000_001);
+    }
+
+    /// Fault injection for the poisoned/unavailable shared Discord-settings
+    /// state. Poisons the process-global shared mutex, so it must not run
+    /// beside other tests in this binary: run it explicitly with
+    /// `cargo test --lib snapshot_survives_poisoned -- --ignored`.
+    /// (The equivalent degradation contract is exercised against the real IPC
+    /// payload by `src-tauri/tests/snapshot_degradation.rs`, whose malformed
+    /// and unreadable fixtures fail the settings read without poisoning.)
+    #[test]
+    #[ignore = "poisons the process-global shared state; run in isolation"]
+    fn snapshot_survives_poisoned_discord_settings_state() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("snapshot-poisoned");
+        super::set_active_provider("claude".to_string()).expect("save Claude provider");
+
+        // Poison the shared mutex exactly like a panicking poller iteration would.
+        let shared = super::shared();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = shared.lock().unwrap();
+            panic!("simulated poller panic while holding the shared lock");
+        }));
+
+        let lock_error =
+            super::get_discord_settings().expect_err("a poisoned lock must fail the settings read");
+        assert!(
+            lock_error.contains("unavailable"),
+            "unexpected error shape: {lock_error}"
+        );
+
+        let snapshot = super::build_app_snapshot("live").expect("core snapshot must survive");
+        assert!(snapshot.discord_settings.is_none());
+        assert!(
+            snapshot.discord_settings_error.is_some(),
+            "the poisoned-lock fault must be diagnosable from the snapshot"
+        );
     }
 }

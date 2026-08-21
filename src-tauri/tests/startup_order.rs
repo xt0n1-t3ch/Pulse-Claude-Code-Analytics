@@ -15,6 +15,25 @@ fn single_instance_plugin_is_registered_before_the_background_poller() {
     );
 }
 
+/// The GUI process has no other subscriber source: without this call every
+/// `tracing::warn!` in the backend, including background-poller failure
+/// diagnostics, is compiled in and then silently discarded.
+#[test]
+fn tracing_subscriber_is_installed_before_the_background_poller_starts() {
+    let source = include_str!("../src/main.rs");
+    let subscriber = source
+        .find("cc_discord_presence::util::setup_tracing()")
+        .expect("tracing subscriber installation");
+    let poller = source
+        .find("commands::start_background_poller")
+        .expect("background poller startup");
+
+    assert!(
+        subscriber < poller,
+        "poller failure diagnostics must not be dropped for lack of a subscriber"
+    );
+}
+
 #[test]
 fn installed_pulse_is_bypassed_only_by_the_isolated_debug_probe() {
     let source = include_str!("../src/main.rs");

@@ -38,6 +38,62 @@ export const discordSettings = writable<DiscordSettings | null>(null);
 export const planInfo = writable<PlanInfo | null>(null);
 export const accessSnapshot = writable<AccessSnapshot | null>(null);
 export const backendConnection = writable<"connecting" | "live" | "disconnected">("connecting");
+
+/** Diagnostics for the snapshot transport and its degraded payloads.
+ *
+ *  `lastError`/`consecutiveFailures` describe the IPC/transport path;
+ *  `discordSettingsError` is a subsystem degradation carried inside an
+ *  otherwise healthy snapshot (Discord settings unreadable). Neither is
+ *  related to provider quota authentication, which the access routes report
+ *  on their own. */
+export interface SnapshotDiagnostics {
+    lastError: string | null;
+    lastErrorAt: number | null;
+    consecutiveFailures: number;
+    lastSuccessAt: number | null;
+    discordSettingsError: string | null;
+}
+
+export const snapshotDiagnostics = writable<SnapshotDiagnostics>({
+    lastError: null,
+    lastErrorAt: null,
+    consecutiveFailures: 0,
+    lastSuccessAt: null,
+    discordSettingsError: null,
+});
+
+function recordSnapshotSuccess(snapshot: AppSnapshot): void {
+    const now = Date.now();
+    snapshotDiagnostics.set({
+        lastError: null,
+        lastErrorAt: null,
+        consecutiveFailures: 0,
+        lastSuccessAt: now,
+        discordSettingsError: snapshot.discord_settings === null
+            ? (snapshot.discord_settings_error ?? "Discord settings unavailable")
+            : null,
+    });
+}
+
+function recordSnapshotFailure(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    snapshotDiagnostics.update((d) => ({
+        ...d,
+        lastError: message,
+        lastErrorAt: Date.now(),
+        consecutiveFailures: d.consecutiveFailures + 1,
+    }));
+}
+
+function resetSnapshotDiagnostics(): void {
+    snapshotDiagnostics.set({
+        lastError: null,
+        lastErrorAt: null,
+        consecutiveFailures: 0,
+        lastSuccessAt: null,
+        discordSettingsError: null,
+    });
+}
 export const selectedAccessSourceId = writable<string>("all");
 export const sourceInspectorExpanded = writable(false);
 const knownAnalyticsScopes = new Map<string, AnalyticsProviderScope>();
@@ -197,7 +253,10 @@ export function poll(): Promise<void> {
       // Stale-while-revalidate: keep the last coherent snapshot on screen, but
       // revoke its live status. Provider changes still clear because crossing
       // that trust boundary must never show one provider as another.
-      if (startedAtSequence === snapshotSequence) backendConnection.set("disconnected");
+      if (startedAtSequence === snapshotSequence) {
+        backendConnection.set("disconnected");
+        recordSnapshotFailure(error);
+      }
       console.warn("Snapshot error:", error);
     })
     .finally(() => {
@@ -215,6 +274,7 @@ export function poll(): Promise<void> {
  *  prevents an already-running poll for the prior provider from winning. */
 export function invalidateLiveSnapshotForProviderChange(): void {
   snapshotSequence++;
+  resetSnapshotDiagnostics();
   clearLiveSnapshot("connecting");
 }
 
@@ -232,7 +292,13 @@ function applySnapshot(snapshot: AppSnapshot): void {
     rateLimits.set(snapshot.rate_limits);
     planInfo.set(snapshot.plan);
     accessSnapshot.set(snapshot.access);
-    applyDiscordSettings(snapshot.discord_settings);
+    // A degraded Discord-settings payload keeps the last coherent settings on
+    // screen (they are cached state, not fabricated) while the diagnostic
+    // records that the persisted configuration is currently unreadable.
+    if (snapshot.discord_settings !== null) {
+      applyDiscordSettings(snapshot.discord_settings);
+    }
+    recordSnapshotSuccess(snapshot);
 }
 
 /** Clears provider-bound state when changing trust domains. Transient polling

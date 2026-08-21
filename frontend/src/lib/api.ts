@@ -327,7 +327,11 @@ export interface AppSnapshot {
     sessions: SessionInfo[];
     rate_limits: RateLimitInfo | null;
     discord_preview: DiscordPresencePreview;
-    discord_settings: DiscordSettings;
+    /** Null only when the persisted presence configuration could not be read
+     *  or parsed; `discord_settings_error` then says why. Never fabricated. */
+    discord_settings: DiscordSettings | null;
+    /** Present only alongside a null `discord_settings`. */
+    discord_settings_error?: string | null;
     plan: PlanInfo;
     access: AccessSnapshot;
 }

@@ -7,6 +7,8 @@
     sessions,
     selectedAccessRoutes,
     selectedAnalyticsProviderScope,
+    snapshotDiagnostics,
+    poll,
   } from "../lib/stores";
   import { providerMatchesAnalyticsScope } from "../lib/access";
   import { fmtTokens, fmtCost, fmtExactCost, fmtDuration, fmtPct, fmtTps } from "../lib/utils";
@@ -270,6 +272,26 @@
   ] : []);
   let burnRate = $derived(focusDuration > 0 ? focusCost / (focusDuration / 3600) : 0);
   let hasAllowanceRoutes = $derived($selectedAccessRoutes.length > 0);
+
+  // Snapshot transport diagnostics. A couple of failed reads is a transient
+  // reconnect; several in a row means the last coherent snapshot is aging
+  // without a replacement. Missing provider quota authentication is NOT part
+  // of this state — it renders as its own access card, never as a reconnect.
+  const PERSISTENT_FAILURE_THRESHOLD = 3;
+  let snapshotFailing = $derived(
+    $backendConnection === "disconnected" &&
+      $snapshotDiagnostics.consecutiveFailures >= PERSISTENT_FAILURE_THRESHOLD,
+  );
+  let connectionDetail = $derived.by(() => {
+    const d = $snapshotDiagnostics;
+    const parts: string[] = [];
+    if (d.lastError) parts.push(`Last error: ${d.lastError}`);
+    if (d.consecutiveFailures > 0) parts.push(`Failed reads: ${d.consecutiveFailures}`);
+    if (d.lastSuccessAt)
+      parts.push(`Last good snapshot: ${new Date(d.lastSuccessAt).toLocaleTimeString()}`);
+    if (d.discordSettingsError) parts.push(`Discord settings: ${d.discordSettingsError}`);
+    return parts.join(" · ");
+  });
 </script>
 
 <div class="dashboard app-view" data-dashboard-layout="direction-two">
@@ -285,10 +307,21 @@
         </div>
         {#if $backendConnection !== "live"}
           <div class="home-status" aria-label="Connection status">
-            <span class="status-chip" class:warn={$backendConnection === "disconnected"}>
+            <span
+              class="status-chip"
+              class:warn={$backendConnection === "disconnected"}
+              title={connectionDetail || null}
+            >
               <i></i>
-              {$backendConnection === "disconnected" ? "Reconnecting…" : "Syncing…"}
+              {$backendConnection === "disconnected"
+                ? snapshotFailing
+                  ? "Snapshot failing"
+                  : "Reconnecting…"
+                : "Syncing…"}
             </span>
+            {#if $backendConnection === "disconnected"}
+              <button type="button" onclick={() => void poll()}>Retry</button>
+            {/if}
           </div>
         {/if}
       </header>

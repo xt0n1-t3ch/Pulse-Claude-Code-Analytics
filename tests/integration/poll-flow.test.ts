@@ -314,6 +314,13 @@ describe("poll() to stores to Dashboard full flow", () => {
     r.set(null);
     p.set(null);
     a.set(null);
+    stores.snapshotDiagnostics.set({
+      lastError: null,
+      lastErrorAt: null,
+      consecutiveFailures: 0,
+      lastSuccessAt: null,
+      discordSettingsError: null,
+    });
     await Promise.resolve();
     await Promise.resolve();
     getDiscordPreview.mockClear();
@@ -506,5 +513,112 @@ describe("poll() to stores to Dashboard full flow", () => {
     await stores.poll();
 
     expect(get(stores.toasts)).toEqual([]);
+  });
+
+  it("records transport failures in diagnostics and clears them on recovery", async () => {
+    await stores.poll();
+    expect(get(stores.snapshotDiagnostics).lastSuccessAt).not.toBeNull();
+    expect(get(stores.snapshotDiagnostics).consecutiveFailures).toBe(0);
+
+    getAppSnapshot.mockRejectedValueOnce(new Error("ipc bridge down"));
+    await stores.poll();
+    let diagnostics = get(stores.snapshotDiagnostics);
+    expect(diagnostics.lastError).toBe("ipc bridge down");
+    expect(diagnostics.lastErrorAt).not.toBeNull();
+    expect(diagnostics.consecutiveFailures).toBe(1);
+    // The failure timestamp survives a subsequent success only as cleared state.
+    expect(get(stores.backendConnection)).toBe("disconnected");
+
+    // Recovery: the next successful snapshot restores live and resets the trail.
+    await stores.poll();
+    diagnostics = get(stores.snapshotDiagnostics);
+    expect(get(stores.backendConnection)).toBe("live");
+    expect(diagnostics.lastError).toBeNull();
+    expect(diagnostics.lastErrorAt).toBeNull();
+    expect(diagnostics.consecutiveFailures).toBe(0);
+    expect(diagnostics.lastSuccessAt).not.toBeNull();
+  });
+
+  it("keeps cached Discord settings and surfaces the read error for a degraded payload", async () => {
+    await stores.poll();
+    const healthySettings = get(stores.discordSettings);
+    expect(healthySettings).not.toBeNull();
+
+    const degraded = {
+      ...(await getAppSnapshot()),
+      discord_settings: null,
+      discord_settings_error: "invalid JSON in discord-presence-config.json",
+    };
+    getAppSnapshot.mockResolvedValueOnce(degraded);
+    await stores.poll();
+
+    // Connection stays live — analytics telemetry is healthy. The subsystem
+    // degradation is reported separately, never substituted with defaults.
+    expect(get(stores.backendConnection)).toBe("live");
+    expect(get(stores.discordSettings)).toEqual(healthySettings);
+    expect(get(stores.snapshotDiagnostics).discordSettingsError).toBe(
+      "invalid JSON in discord-presence-config.json",
+    );
+    expect(get(stores.snapshotDiagnostics).consecutiveFailures).toBe(0);
+
+    // A later healthy payload clears the subsystem diagnostic.
+    getAppSnapshot.mockResolvedValueOnce(await getAppSnapshot());
+    await stores.poll();
+    expect(get(stores.snapshotDiagnostics).discordSettingsError).toBeNull();
+  });
+
+  it("treats missing authenticated quota proof as live access, not a reconnect", async () => {
+    const unauthenticated = {
+      ...(await getAppSnapshot()),
+      access: {
+        routes: [
+          {
+            source: {
+              id: "claude-subscription:default",
+              kind: "claude_subscription",
+              provider: "claude",
+              auth_method: "oauth",
+              proof: "none",
+              plan: null,
+            },
+            availability: "unavailable",
+            freshness: "stale",
+            provenance: "local_history",
+            observed_at: null,
+            fetched_at: null,
+            expires_at: null,
+            windows: [],
+            credits: null,
+            extra_usage: null,
+            error: "No authenticated usage source",
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof getAppSnapshot>>;
+
+    getAppSnapshot.mockResolvedValueOnce(unauthenticated);
+    await stores.poll();
+
+    expect(get(stores.backendConnection)).toBe("live");
+    expect(get(stores.snapshotDiagnostics).lastError).toBeNull();
+    expect(get(stores.snapshotDiagnostics).consecutiveFailures).toBe(0);
+    expect(get(stores.selectedAccessRoutes)).toEqual([]);
+  });
+
+  it("clears snapshot diagnostics when the provider trust domain changes", async () => {
+    await stores.poll();
+    getAppSnapshot.mockRejectedValueOnce(new Error("transient"));
+    await stores.poll();
+    expect(get(stores.snapshotDiagnostics).consecutiveFailures).toBe(1);
+
+    stores.invalidateLiveSnapshotForProviderChange();
+    expect(get(stores.snapshotDiagnostics)).toEqual({
+      lastError: null,
+      lastErrorAt: null,
+      consecutiveFailures: 0,
+      lastSuccessAt: null,
+      discordSettingsError: null,
+    });
+    expect(get(stores.backendConnection)).toBe("connecting");
   });
 });
