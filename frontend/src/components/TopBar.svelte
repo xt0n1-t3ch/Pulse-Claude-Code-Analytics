@@ -7,6 +7,7 @@
   } from "@tabler/icons-svelte";
   import PulseMark from "./PulseMark.svelte";
   import NotificationCenter from "./NotificationCenter.svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     currentView,
     health,
@@ -46,21 +47,42 @@
     return verifiedPlanLabel(provider, subscriptionRoute.source.plan);
   });
 
+  function currentWindow(): ReturnType<typeof getCurrentWindow> | null {
+    return window.__TAURI__ ? getCurrentWindow() : null;
+  }
+
+  function isDraggableTarget(target: EventTarget | null): boolean {
+    return !(target instanceof Element && target.closest(".app-nav, .header-actions"));
+  }
+
+  function handleHeaderMouseDown(event: MouseEvent): void {
+    if (event.button !== 0 || !isDraggableTarget(event.target)) return;
+    const win = currentWindow();
+    if (!win) return;
+    if (event.detail === 2) {
+      void win.isMaximized().then((maximized) => maximized ? win.unmaximize() : win.maximize());
+      return;
+    }
+    void win.startDragging().catch(() => undefined);
+  }
+
   function minimize(): void {
-    window.__TAURI__?.window.getCurrentWindow().minimize();
+    void currentWindow()?.minimize();
   }
 
   function toggleMaximize(): void {
-    const win = window.__TAURI__?.window.getCurrentWindow();
-    win?.isMaximized().then((maximized: boolean) => maximized ? win.unmaximize() : win.maximize());
+    const win = currentWindow();
+    if (!win) return;
+    void win.isMaximized().then((maximized) => maximized ? win.unmaximize() : win.maximize());
   }
 
   function close(): void {
-    window.__TAURI__?.window.getCurrentWindow().close();
+    void currentWindow()?.close();
   }
 </script>
 
-<header class="app-header" data-tauri-drag-region>
+<!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions -->
+<header class="app-header" onmousedown={handleHeaderMouseDown}>
   <div class="brand">
     <PulseMark size={22} accent="var(--accent)" />
     <span>
@@ -114,7 +136,6 @@
     background: color-mix(in srgb, var(--bg-primary) 96%, transparent);
     border-bottom: 1px solid var(--border);
     user-select: none;
-    -webkit-app-region: drag;
   }
 
   .brand {
@@ -138,7 +159,6 @@
     display: flex;
     align-items: stretch;
     gap: 3px;
-    -webkit-app-region: no-drag;
   }
 
   .app-nav button {
@@ -194,7 +214,6 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    -webkit-app-region: no-drag;
   }
 
   .header-actions button {
