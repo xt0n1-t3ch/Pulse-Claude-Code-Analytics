@@ -212,6 +212,8 @@ jobs:
       - name: Generate and verify Windows SPDX SBOM
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          PLATFORM: ${{ matrix.label }}
         run: |
           $artifact = @(Get-ChildItem -LiteralPath dist -File -Filter *.exe)
           if ($artifact.Count -ne 1) { throw "Expected exactly one Windows executable, found $($artifact.Count)" }

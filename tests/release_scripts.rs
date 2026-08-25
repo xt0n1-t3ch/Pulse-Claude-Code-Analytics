@@ -710,6 +710,9 @@ fn manual_release_workflow_pins_actions_and_gates_publication_on_preflight() {
     assert!(release.contains("No release assets"));
     assert!(release.contains("new-windows-sbom.ps1"));
     assert!(release.contains("check-windows-sbom.ps1"));
+    assert!(release.contains(
+        "- name: Generate and verify Windows SPDX SBOM\n        if: runner.os == 'Windows'\n        shell: pwsh\n        env:\n          PLATFORM: ${{ matrix.label }}"
+    ));
     assert!(local_release.contains("prepare-local-release-assets.ps1"));
     assert!(local_release.contains("new-windows-sbom.ps1"));
     assert!(local_release.contains("check-windows-sbom.ps1"));
