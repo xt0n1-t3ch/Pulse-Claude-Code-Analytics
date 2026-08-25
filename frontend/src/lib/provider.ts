@@ -54,7 +54,7 @@ const BASE: Record<Provider, ProviderProfile> = {
         label: "Codex",
         productName: "Codex",
         tagline: "Codex Analytics",
-        accent: "#3b82f6",
+        accent: "#4c9cff",
         defaultAssetKey: "codex-logo",
         supportsExtraUsage: false,
         sessionsPath: "~/.codex/sessions/",

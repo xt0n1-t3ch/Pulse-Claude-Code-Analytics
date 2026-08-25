@@ -30,8 +30,8 @@
   /* Provider identity as a structural accent. Codex blue, Claude coral.
      `--provider-accent` is resolved from html[data-provider]; before the
      backend resolves the active provider it falls back to neutral info blue. */
-  --codex: #6f95c7;
-  --codex-dim: rgba(111, 149, 199, 0.13);
+  --codex: #4c9cff;
+  --codex-dim: rgba(76, 156, 255, 0.16);
   --claude: #c78770;
   --claude-dim: rgba(199, 135, 112, 0.14);
   --provider-accent: var(--info);
@@ -55,15 +55,15 @@
   --danger-dim: rgba(217, 107, 115, 0.11);
   --on-danger: #ffffff;
   --modal-backdrop: rgba(0, 0, 0, 0.62);
-  --info: #82a8c9;
-  --info-glow: rgba(130, 168, 201, 0.20);
-  --info-dim: rgba(130, 168, 201, 0.11);
+  --info: #4c9cff;
+  --info-glow: rgba(76, 156, 255, 0.22);
+  --info-dim: rgba(76, 156, 255, 0.13);
 
   --chart-1: #dfe6ed;
   --chart-2: #a5b0bb;
   --chart-3: #74808c;
   --chart-4: #5dbb88;
-  --chart-5: #82a8c9;
+  --chart-5: #4c9cff;
   --chart-6: #d6a65c;
   --token-output: var(--info);
   --token-cache-write: #77dd77;

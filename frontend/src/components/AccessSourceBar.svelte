@@ -160,6 +160,9 @@
   data-source-count={selectorCount}
   aria-label={isDiscordProviderSelector ? "Discord broadcast provider" : "Usage and analytics sources"}
 >
+  <span class="source-rail-mark" aria-hidden="true">
+    <IconStack2 size={16} stroke={1.9} />
+  </span>
   <div class="source-list">
     {#if visibleRoutes.length === 0}
       <button
@@ -244,35 +247,36 @@
 <style>
   .access-bar {
     flex: 0 0 auto;
-    position: relative;
-    min-height: 54px;
-    display: flex;
+    min-height: 52px;
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) 42px;
     align-items: center;
-    justify-content: center;
-    padding: 6px 52px;
-    background: var(--bg-secondary);
+    gap: 8px;
+    padding: 5px 8px;
+    background: var(--bg-primary);
     border-bottom: 1px solid var(--border);
   }
   .access-bar.empty {
     min-height: 46px;
+    grid-template-columns: 1fr;
     align-items: center;
     padding-block: 6px;
   }
+  .access-bar.empty .source-rail-mark { display: none; }
   .access-bar.empty .source-list { width: 100%; max-width: none; }
 
   .source-list {
     width: 100%;
-    max-width: 1100px;
     min-width: 0;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
     align-items: stretch;
-    gap: 7px;
+    gap: 6px;
     overflow-x: auto;
   }
-  .access-bar[data-source-count="1"] .source-list { max-width: 340px; grid-template-columns: 1fr; }
-  .access-bar[data-source-count="2"] .source-list { max-width: 640px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .access-bar[data-source-count="3"] .source-list { max-width: 920px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .access-bar[data-source-count="1"] .source-list { grid-template-columns: 1fr; }
+  .access-bar[data-source-count="2"] .source-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .access-bar[data-source-count="3"] .source-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
   .source-card {
     width: auto;
@@ -284,7 +288,7 @@
     gap: 8px;
     padding: 6px 9px;
     color: var(--text-secondary);
-    background: color-mix(in srgb, var(--bg-card) 70%, transparent);
+    background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     text-align: left;
@@ -294,8 +298,16 @@
   .source-card:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
   .source-card.selected {
     color: var(--text-primary);
-    background: color-mix(in srgb, var(--provider-accent) 8%, var(--bg-card));
-    border-color: color-mix(in srgb, var(--provider-accent) 58%, var(--border));
+    background: color-mix(in srgb, var(--provider-accent) 13%, var(--bg-card));
+    border-color: var(--provider-accent);
+  }
+
+  .source-rail-mark {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    color: var(--provider-accent);
   }
 
   .source-card img,
@@ -360,19 +372,15 @@
   }
 
   .health-summary {
-    position: absolute;
-    right: 14px;
-    top: 50%;
-    transform: translateY(-50%);
     display: grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 42px;
+    height: 42px;
     padding: 0;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     color: var(--text-muted);
-    background: transparent;
-    border: 1px solid transparent;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
   }
 
   .health-summary:hover {
@@ -436,10 +444,10 @@
   }
 
   @media (max-width: 900px) {
-    .access-bar { min-height: 52px; display: block; padding: 6px 10px; }
+    .access-bar { grid-template-columns: minmax(0, 1fr); padding: 5px 10px; }
+    .source-rail-mark,
     .health-summary { display: none; }
     .source-list {
-      max-width: none !important;
       display: flex;
       justify-content: flex-start;
       overflow-x: auto;
@@ -449,11 +457,12 @@
   }
 
   @media (max-width: 520px) {
-    .access-bar { display: block; min-height: 52px; padding-inline: 8px; }
+    .access-bar { min-height: 50px; gap: 6px; padding-inline: 8px; }
     .source-list { width: 100%; justify-content: flex-start; }
     .source-list { gap: 7px; }
     .source-card { width: 160px; min-width: 154px; min-height: 40px; padding: 5px 8px; }
     .source-card img, .aggregate-mark { width: 22px; height: 22px; }
+    .health-summary { width: 40px; height: 40px; }
     .source-empty { min-width: 0; }
   }
 </style>

@@ -4,6 +4,12 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- The repository status row now links to Pulse's real local quality gate instead
+  of a removed CI workflow, and the dashboard source strip uses the full
+  operational width with a higher-contrast Codex signal color.
+
 ## [1.7.5] - 2026-08-25
 
 Pulse 1.7.5 isolates analytics scope from Discord publishing, keeps Codex

@@ -10,7 +10,7 @@
 
 The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard** and **Discord Rich Presence** for **Claude Pro / Max / Teams** and **ChatGPT Plus / Pro / Business**.<br>Measure provider-aware cost, cache, context, and limits; catch runaway sessions; and send one-click fix prompts back to the active coding agent. Native desktop. 100 % local. Zero telemetry.
 
-[![CI](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/ci.yml/badge.svg)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/ci.yml)
+[![Local quality gate](https://img.shields.io/badge/quality_gate-local-4c9cff?logo=githubactions&logoColor=white)](docs/releasing.md)
 [![Release](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/release.yml/badge.svg)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/release.yml)
 [![Latest](https://img.shields.io/github/v/release/xt0n1-t3ch/Pulse-Claude-Code-Analytics?color=0a0a0a&label=latest&logo=github)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/xt0n1-t3ch/Pulse-Claude-Code-Analytics/total?color=0a0a0a&logo=github)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases)

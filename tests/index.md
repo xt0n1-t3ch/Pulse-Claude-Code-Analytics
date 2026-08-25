@@ -40,8 +40,10 @@ substitute for another:
   dark/light browser visual matrix, global reflow, and rendered WCAG checks
   against a running URL (`PULSE_VISUAL_URL`, default `http://127.0.0.1:1420`).
   Its desktop Home control also enforces exact source-list centering, at least
-  67% source-strip occupancy, and a content-driven horizontal allowance ledger
-  no taller than 300 pixels.
+  90% source-strip occupancy, and a content-driven horizontal allowance ledger
+  no taller than 300 pixels. The current Codex acceptance snapshot is
+  weekly-only with zero credits; separate provider fixtures retain multi-window
+  coverage without advertising an absent quota in screenshots.
   The fixture runner's Browser mode only starts Vite and probes `/`; it does
   not silently claim Playwright or Tauri coverage.
 - **Tauri CDP** is available through
@@ -101,7 +103,7 @@ the [fixtures/ChartStub.svelte](fixtures/ChartStub.svelte) stub so canvas-bound 
 
 | File | Component | Coverage |
 |:---|:---|:---|
-| [DesignSystem.test.ts](components/DesignSystem.test.ts) | shared UI contract | canonical neutral dark surfaces, monochrome shell accent, semantic status tokens, Codex-blue provider identity, labeled navigation, coherent primary-view headers/states, flat metric strips, and removal of the Sessions decorative glyph |
+| [DesignSystem.test.ts](components/DesignSystem.test.ts) | shared UI contract | true-black dark canvas, high-contrast Codex signal color, valid repository status links, labeled navigation, coherent primary-view headers/states, flat metric strips, and removal of the Sessions decorative glyph |
 | [PulseMark.test.ts](components/PulseMark.test.ts) | `PulseMark` | svg sized to the `size` prop, P-glyph-only when `showPulse` is false (1 path), P glyph + pulse line when true (2 paths) |
 | [TopBar.test.ts](components/TopBar.test.ts) | `TopBar` | native drag capability, left-button titlebar drag, control exclusion boundary, and double-click maximize without an accidental drag |
 | [SessionCard.test.ts](components/SessionCard.test.ts) | `SessionCard` | fast badge present/absent on the `fast` flag, inflated-tokenizer marker shown for opus 4.7+ and Sonnet 5 (sourced from the backend `has_inflated_tokenizer` flag, not a local regex) and omitted for 4.6, Opus 4.8 model display name, Fable/Mythos badges without tokenizer warnings, Sonnet 5 "Intro Pricing" badge presence/absence driven by `session.intro_pricing` |

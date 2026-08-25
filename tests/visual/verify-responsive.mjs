@@ -15,12 +15,28 @@ const matrix = process.env.PULSE_VISUAL_QUICK === "1" ? [fullMatrix[0]] : fullMa
 const themes = process.env.PULSE_VISUAL_QUICK === "1" ? ["dark"] : ["dark", "light"];
 const idleVerificationMs = Number(process.env.PULSE_IDLE_VERIFY_MS ?? 1200);
 const views = ["Home", "Sessions", "Context", "Costs", "Reports", "Discord", "Settings"];
-const accessFixture = JSON.parse(
+const multiWindowFixture = JSON.parse(
   await fs.readFile(
     new URL("../fixtures/providers/hybrid/fixture.json", import.meta.url),
     "utf8",
   ),
 );
+const accessFixture = structuredClone(multiWindowFixture);
+const codexAccessRoute = accessFixture.expected_dto.routes.find(
+  (route) => route.source.provider === "codex",
+);
+codexAccessRoute.observed_at = "2026-08-25T18:00:00Z";
+codexAccessRoute.fetched_at = "2026-08-25T18:00:00Z";
+codexAccessRoute.expires_at = "2026-08-25T18:00:30Z";
+codexAccessRoute.windows = [{
+  key: "weekly",
+  label: "Weekly usage limit",
+  window_minutes: 10080,
+  used_percent: 7,
+  remaining_percent: 93,
+  resets_at: "2026-08-31T00:41:00Z",
+}];
+codexAccessRoute.credits = { balance: "0", has_credits: false, unlimited: false };
 
 await fs.mkdir(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -53,19 +69,18 @@ for (const theme of themes) {
           signals: ["codex_subscription_usage"],
         },
         scopes: [
-          { id: "codex", name: null, kind: "global_account", windows: [{ window_minutes: 10080, used_percent: 4, remaining_percent: 96, resets_at: "2026-07-22T23:16:00Z" }] },
-          { id: "codex_bengalfox", name: "GPT-5.3-Codex-Spark", kind: "model", windows: [{ window_minutes: 10080, used_percent: 0, remaining_percent: 100, resets_at: null }] },
+          { id: "codex", name: null, kind: "global_account", windows: [{ window_minutes: 10080, used_percent: 7, remaining_percent: 93, resets_at: "2026-08-31T00:41:00Z" }] },
         ],
-        credits: { balance: "2500", has_credits: true, unlimited: false },
-        observed_at: "2026-07-16T02:00:00Z", provenance_source: "Codex account API",
+        credits: { balance: "0", has_credits: false, unlimited: false },
+        observed_at: "2026-08-25T18:00:00Z", provenance_source: "Codex account API",
       };
       const prefs = { show_project: true, show_branch: false, show_model: true, show_activity: true, show_tokens: true, show_cost: true, show_limits: true, show_credits: true, show_context: true, show_systems: true };
       const discordSettings = { provider: "codex", enabled: true, status: "Connected", publisher: "pulse", display_prefs: prefs, desktop_design: "chatgpt_app", supports_desktop_design: true, supports_field_order: true, field_order: ["project", "branch", "model", "activity", "tokens", "cost", "quotas", "credits", "context", "systems"] };
-      const discordPreview = { provider: "codex", app_name: "ChatGPT App", details: "Implementing premium native UI · cc-discord-presence", state: "GPT-5.6 Sol · Extra High · ⚡ Fast · 7d 96% · Credits 2,500", large_image_key: "chatgpt-app", large_text: "ChatGPT App", small_image_key: null, small_text: null, has_session: true, duration_secs: 6420 };
+      const discordPreview = { provider: "codex", app_name: "ChatGPT App", details: "Implementing premium native UI · cc-discord-presence", state: "GPT-5.6 Sol · Extra High · ⚡ Fast · 7d 93% · Credits 0", large_image_key: "chatgpt-app", large_text: "ChatGPT App", small_image_key: null, small_text: null, has_session: true, duration_secs: 6420 };
       const health = { version: "1.7.0", uptime_seconds: 6420, discord_status: "Connected", discord_enabled: true };
       const metrics = { total_cost: 195.79, cost_available: true, cost_basis: "exact", input_tokens: 8500000, pure_input_tokens: 8500000, output_tokens: 809200, cache_write_tokens: 0, cache_read_tokens: 258400000, total_tokens: 267600000, session_count: 1, input_cost: 42.33, output_cost: 24.27, cache_write_cost: 0, cache_read_cost: 129.19, cache_hit_ratio: 97, models: [{ model: session.model, sessions: 1, cost: 195.79, tokens: 267600000 }] };
       const plan = { provider: "codex", plan_key: "pro_20x", plan_name: "Pro 20x ($200/month)", detected: true };
-      const rateLimits = { provider: "codex", usage, five_hour_pct: 0, five_hour_resets: "N/A", five_hour_label: "", five_hour_window_minutes: null, seven_day_pct: 4, seven_day_resets: "2026-07-22T23:16:00Z", seven_day_label: "7d Window", seven_day_window_minutes: 10080, sonnet_pct: null, sonnet_resets: null, extra_enabled: false, extra_limit: null, extra_used: null, extra_pct: null, source: usage.provenance_source };
+      const rateLimits = { provider: "codex", usage, five_hour_pct: 0, five_hour_resets: "N/A", five_hour_label: "", five_hour_window_minutes: null, seven_day_pct: 7, seven_day_resets: "2026-08-31T00:41:00Z", seven_day_label: "7d Window", seven_day_window_minutes: 10080, sonnet_pct: null, sonnet_resets: null, extra_enabled: false, extra_limit: null, extra_used: null, extra_pct: null, source: usage.provenance_source };
       const snapshot = {
         revision: 1,
         health,
@@ -213,6 +228,10 @@ for (const theme of themes) {
       if (selectedSource !== "true") {
         throw new Error(`${view} lost selected source identity.`);
       }
+      const renderedText = await page.locator("body").innerText();
+      if (renderedText.includes("Codex-Spark") || renderedText.includes("5h 100%")) {
+        throw new Error(`${view} resurrected a quota window absent from the fresh provider snapshot.`);
+      }
       const overflow = await page.evaluate(() => ({
         document: document.documentElement.scrollWidth - window.innerWidth,
         body: document.body.scrollWidth - window.innerWidth,
@@ -274,7 +293,7 @@ for (const theme of themes) {
       }
       if (homeGeometry && (
         homeGeometry.source_center_delta > 1
-        || homeGeometry.source_occupancy < 0.67
+        || homeGeometry.source_occupancy < 0.90
         || !homeGeometry.allowance_stacked
         || homeGeometry.allowance_height > 300
       )) {
