@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { get } from "svelte/store";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -91,16 +92,43 @@ describe("AccessSourceBar", () => {
     expect(getByText("All sources live")).toBeTruthy();
   });
 
-  it("switches the active provider when the only source is auto-selected", async () => {
+  it("keeps the Discord provider when the only analytics source is auto-selected", async () => {
     provider.set("claude");
     accessSnapshot.set({ routes: [route("codex-sub", "codex_subscription")] });
 
     render(AccessSourceBar);
 
     await waitFor(() => {
-      expect(get(provider)).toBe("codex");
       expect(get(selectedAccessSourceId)).toBe("codex-sub");
+      expect(get(selectedAnalyticsProviderScope)).toBe("codex");
+      expect(get(provider)).toBe("claude");
     });
+  });
+
+  it("changes the broadcaster only from the Discord provider selector", async () => {
+    provider.set("claude");
+    currentView.set("discord");
+    accessSnapshot.set({ routes: [route("codex-sub", "codex_subscription")] });
+
+    const { getByRole, queryByRole } = render(AccessSourceBar);
+    await tick();
+    await Promise.resolve();
+
+    expect(queryByRole("button", { name: /All providers/ })).toBeNull();
+    expect(get(provider)).toBe("claude");
+    expect(get(selectedAccessSourceId)).toBe("all");
+    expect(get(selectedAnalyticsProviderScope)).toBe("all");
+
+    const codex = getByRole("button", { name: /Codex Pro 20x Subscription/ });
+    expect(codex.getAttribute("aria-pressed")).toBe("false");
+    await fireEvent.click(codex);
+
+    await waitFor(() => {
+      expect(get(provider)).toBe("codex");
+      expect(codex.getAttribute("aria-pressed")).toBe("true");
+    });
+    expect(get(selectedAccessSourceId)).toBe("all");
+    expect(get(selectedAnalyticsProviderScope)).toBe("all");
   });
 
   it("shows an honest empty state when no route has provider proof", () => {

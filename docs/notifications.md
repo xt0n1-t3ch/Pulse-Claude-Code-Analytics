@@ -22,6 +22,12 @@ Each record carries a stable provider/window key, title, body, optional action,
 creation time, read time, and dismissal time. `list()` excludes dismissed rows;
 `list_all()` includes them. `unread_count()`, `mark_read()`,
 `mark_all_read()`, `dismiss()`, and `undismiss()` are durable operations.
+Named scopes with more than one provider window append the duration to that
+machine key (`gpt_5.3_codex_spark_five_hour` and
+`gpt_5.3_codex_spark_weekly`, for example). Their display labels remain
+provider-facing (`GPT-5.3-Codex-Spark · 5h` / `· 7d`). This separation prevents
+two windows from sharing one transition ledger without leaking an internal key
+into notification copy.
 
 ## Dedupe and triggers
 
@@ -50,6 +56,13 @@ after v1 ran. The v2 sweep dismisses every row that existed before its own
 commit, then records its marker in the same transaction; genuine transitions
 inserted afterward remain visible. This prevents timestamp-only false resets
 from resurfacing while keeping the complete audit trail.
+
+Migration `dismiss_collided_quota_reset_rows_v3` handles the later
+duration-collision bug. Pre-v3 reset rows did not persist enough window identity
+to distinguish a genuine model reset from a 5-hour/weekly collision after the
+fact, so the migration preserves every row for `list_all()` and dismisses it
+from the user-facing feed exactly once. Duration-specific ledgers are created
+after that marker; a later real reset edge remains visible.
 
 A later one-time migration, `dismiss_spurious_poll_cadence_alerts_v1`, dismisses
 every `provider_health`, `quota_threshold`, and `discord_connectivity` row and

@@ -326,8 +326,9 @@ export interface AppSnapshot {
     metrics: MetricsResponse;
     sessions: SessionInfo[];
     rate_limits: RateLimitInfo | null;
-    discord_preview: DiscordPresencePreview;
-    discord_settings: DiscordSettings;
+    discord_preview: DiscordPresencePreview | null;
+    discord_settings: DiscordSettings | null;
+    discord_settings_error?: string | null;
     plan: PlanInfo;
     access: AccessSnapshot;
 }

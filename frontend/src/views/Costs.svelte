@@ -494,7 +494,7 @@
 <div class="costs-view app-view">
   <div class="view-header">
     <div>
-      <h2 class="view-title">Usage &amp; cost</h2>
+      <h1 class="view-title">Usage &amp; cost</h1>
       <p class="view-subtitle">Provider-billed spend and API-equivalent value, kept as separate facts.</p>
     </div>
     <div class="filters">
@@ -502,6 +502,7 @@
            backend refetch, so the assignment needs to be visible at the seam
            the aggregate depends on. -->
       <select
+        aria-label="Filter costs by project"
         value={projectFilter}
         onchange={(event) => {
           projectFilter = event.currentTarget.value;
@@ -537,7 +538,7 @@
       <header class="ledger-head">
         <div>
           <span class="ledger-eyebrow">Last 30 days · provenance-aware value</span>
-          <h3>Known monetary value by provenance</h3>
+          <h2>Known monetary value by provenance</h2>
           <p>Provider-billed amounts and API-equivalent estimates stay distinct. Every value comes from observed usage; unavailable billing is never guessed.</p>
         </div>
         <span
@@ -598,10 +599,10 @@
       <div class="usage-ledger-grid">
         <section class="usage-token-mix">
           <div class="ledger-section-head">
-            <h4>Token mix</h4>
+            <h3>Token mix</h3>
             <span>{fmtTokens(usageTotalTokens)} observed</span>
           </div>
-          <div class="token-mix-bar" aria-label="Token mix">
+          <div class="token-mix-bar" role="img" aria-label="Token mix">
             {#each usageTokenMix as item}
               <span
                 class={item.className}
@@ -622,7 +623,7 @@
 
         <section class="token-trend">
           <div class="ledger-section-head">
-            <h4>Token trend</h4>
+            <h3>Token trend</h3>
             <span>Provider scope · 30d</span>
           </div>
           {#if tokenTrend.length > 0}
@@ -714,7 +715,7 @@
 
       <div class="charts-row">
     <section class="pane">
-      <h3 class="pane-title">Monetary value by type</h3>
+      <h2 class="pane-title">Monetary value by type</h2>
       {#if costAvailable && costTotal > 0}
         <div class="cost-type-bar">
           <div class="cost-seg input" style="width:{(totalInputCost / costTotal) * 100}%"></div>
@@ -737,7 +738,7 @@
 
     {#if modelCosts.length > 0}
       <section class="pane">
-        <h3 class="pane-title">Monetary value per model</h3>
+        <h2 class="pane-title">Monetary value per model</h2>
         <div class="model-cost-list">
           {#each modelCosts as [model, cost]}
             <div class="mc-row">
@@ -755,7 +756,7 @@
 
       {#if costByProject.length > 0}
         <div class="card surface-matte">
-          <h3 class="card-title">Monetary value by project</h3>
+          <h2 class="card-title">Monetary value by project</h2>
           <div
             class="chart-container"
             style="height: {Math.max(140, Math.min(360, 44 + costByProject.length * 44))}px"
@@ -776,12 +777,13 @@
 
     <div class="card surface-matte">
     <div class="card-title-row">
-      <h3 class="card-title">Session details</h3>
+      <h2 class="card-title">Session details</h2>
       {#if filtered.length > 0}
         <button class="export-btn" onclick={() => showExport = true}>Export</button>
       {/if}
     </div>
-    <div class="detail-table">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="detail-table" role="region" tabindex="0" aria-label="Scrollable session cost details">
       <div class="dt-header">
         <span class="dt-col status"></span>
         <span class="dt-col project">Project</span>
@@ -876,7 +878,7 @@
     letter-spacing: var(--letter-wider);
     text-transform: uppercase;
   }
-  .ledger-head h3 {
+  .ledger-head h2 {
     margin-top: 6px;
     font-size: clamp(20px, 2.4vw, 28px);
     letter-spacing: var(--letter-tight);
@@ -962,7 +964,7 @@
     justify-content: space-between;
     gap: 16px;
   }
-  .ledger-section-head h4 {
+  .ledger-section-head h3 {
     color: var(--text-primary);
     font-size: var(--fs-sm);
     font-weight: 700;

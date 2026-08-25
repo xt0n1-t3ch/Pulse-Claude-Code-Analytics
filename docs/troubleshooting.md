@@ -60,6 +60,11 @@ HTTP results.
 **The Pulse GUI does not write a log file** and does not install a `tracing`
 subscriber, so its `tracing` lines are discarded unless you launch the GUI
 binary from a console with `RUST_LOG` set. Reproduce GUI-side issues that way.
+If the Discord config cannot be read while the rest of the snapshot is healthy,
+Home shows **Discord settings degraded** and keeps only the same provider's
+last-good Discord view. Changing provider clears that retained view. The status
+chip's tooltip carries the current parse/read error; it is an in-app diagnostic,
+not a persistent log claim.
 
 **Explorer-launch diagnostic log.** When the daemon binary is started by
 double-clicking it in Explorer (not from a terminal), it appends a few

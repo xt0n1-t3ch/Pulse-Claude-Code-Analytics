@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
+import { get } from "svelte/store";
 import type {
   DiscordDisplayPrefs,
   DiscordSettings,
@@ -338,15 +339,14 @@ describe("Discord.svelte", () => {
     expect(container.querySelector(".dp-activity-state")?.textContent).not.toContain("Weekly 88% used");
   });
 
-  it("previews a session from the selected provider instead of the first global session", async () => {
-    const { sessions, selectedAccessSourceId } = await import("@/lib/stores");
-    const claude = makeSession("claude-1", "claude-project");
-    const codex = makeSession("codex-1", "codex-project");
+  it("renders a fresh Codex weekly-only route without inventing a 5h quota", async () => {
+    const { accessSnapshot, sessions, discordPresencePreview } = await import("@/lib/stores");
+    const { provider } = await import("@/lib/provider");
+    const codex = makeSession("codex-weekly", "pulse");
     codex.provider = "codex";
-    codex.model = "GPT-5.6 Sol";
-    sessions.set([claude, codex]);
-    selectedAccessSourceId.set("codex-subscription:default");
-    const { accessSnapshot } = await import("@/lib/stores");
+    sessions.set([codex]);
+    provider.set("codex");
+    discordPresencePreview.set(null);
     accessSnapshot.set({
       routes: [{
         source: {
@@ -355,11 +355,66 @@ describe("Discord.svelte", () => {
           provider: "codex",
           auth_method: "app_server",
           proof: "quota_response",
-          plan: "pro_20x",
+          plan: "pro",
         },
         availability: "available",
         freshness: "fresh",
         provenance: "app_server",
+        observed_at: "2026-08-24T18:00:00Z",
+        fetched_at: "2026-08-24T18:00:00Z",
+        expires_at: "2026-08-24T18:00:30Z",
+        windows: [{
+          key: "weekly",
+          label: null,
+          window_minutes: 10080,
+          used_percent: 5,
+          remaining_percent: 95,
+          resets_at: null,
+        }],
+        credits: { balance: "0", has_credits: false, unlimited: false },
+        extra_usage: null,
+        local_history: { available: true, sessions: 1 },
+        error: null,
+      }],
+    });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    const state = container.querySelector(".dp-activity-state")?.textContent ?? "";
+    expect(state).toContain("7d 95% remaining");
+    expect(state).not.toContain("5h");
+    expect(state).toContain("Credits 0");
+  });
+
+  it("previews the active Discord provider independently of analytics scope", async () => {
+    const {
+      sessions,
+      discordPresencePreview,
+      selectedAccessSourceId,
+      accessSnapshot,
+    } = await import("@/lib/stores");
+    const { provider } = await import("@/lib/provider");
+    const claude = makeSession("claude-1", "claude-project");
+    const codex = makeSession("codex-1", "codex-project");
+    codex.provider = "codex";
+    codex.model = "GPT-5.6 Sol";
+    sessions.set([claude, codex]);
+    provider.set("codex");
+    accessSnapshot.set({
+      routes: [{
+        source: {
+          id: "claude-subscription:default",
+          kind: "claude_subscription",
+          provider: "claude",
+          auth_method: "oauth",
+          proof: "quota_response",
+          plan: "max_20x",
+        },
+        availability: "available",
+        freshness: "fresh",
+        provenance: "provider_api",
         observed_at: "2026-08-03T10:00:00Z",
         fetched_at: "2026-08-03T10:00:00Z",
         expires_at: null,
@@ -369,12 +424,32 @@ describe("Discord.svelte", () => {
         error: null,
       }],
     });
+    selectedAccessSourceId.set("claude-subscription:default");
+    const payload = {
+      provider: "codex",
+      app_name: "Codex App",
+      details: "Running command · codex-project",
+      state: "GPT-5.6 Sol · Ultra | Pro 20x ($200/month)",
+      large_image_key: "codex-logo",
+      large_text: "Codex App",
+      small_image_key: null,
+      small_text: null,
+      has_session: true,
+      duration_secs: 90,
+    };
+    discordSettings = { ...discordSettings, provider: "codex" };
+    discordPreviewPayload = payload;
+    discordPresencePreview.set(payload);
 
     const Discord = (await import("@/views/Discord.svelte")).default;
     const { container } = render(Discord);
-    await tick();
+    await waitFor(() => {
+      expect(container.querySelector(".dp-activity-details")?.textContent)
+        .toBe("Running command · codex-project");
+    });
 
-    expect(container.querySelector(".dp-activity-details")?.textContent).toContain("codex-project");
+    expect(container.querySelector(".dp-activity-state")?.textContent).toContain("Ultra");
+    expect(get(selectedAccessSourceId)).toBe("claude-subscription:default");
   });
 
   it("marks provider-unsupported fields unavailable instead of offering a switch that reverts", async () => {

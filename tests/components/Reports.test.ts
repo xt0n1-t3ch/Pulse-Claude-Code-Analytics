@@ -83,7 +83,14 @@ function makeBundle(): ReportsBundle {
       high_complexity_sessions: 1,
       low_specificity_sessions: 0,
       diagnosis: "Prompts are specific.",
-      top_sessions: [],
+      top_sessions: [{
+        session_id: "sensitive-session",
+        project: "private-project",
+        complexity_score: 72,
+        specificity_score: 66,
+        label: "High",
+        preview: "PRIVATE prompt excerpt that requires an intentional reveal",
+      }],
     },
     session_health: {
       available: true,
@@ -194,6 +201,21 @@ describe("Reports.svelte", () => {
     expect(await findByText("Trim memory files")).toBeTruthy();
     expect(await findByText("Cache is doing its job.")).toBeTruthy();
     expect(getReportsBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps prompt excerpts hidden until the user explicitly reveals one", async () => {
+    const Reports = (await import("@/views/Reports.svelte")).default;
+    const { findByRole, findByText, queryByText, getByText } = render(Reports);
+
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    flushAll();
+    await findByText("Prompt complexity");
+
+    expect(queryByText("PRIVATE prompt excerpt that requires an intentional reveal")).toBeNull();
+    expect(getByText("Prompt excerpt hidden")).toBeTruthy();
+
+    await fireEvent.click(await findByRole("button", { name: "Reveal prompt excerpt for private-project" }));
+    expect(getByText("PRIVATE prompt excerpt that requires an intentional reveal")).toBeTruthy();
   });
 
   it("shows loading feedback on a re-fetch triggered by a filter change", async () => {

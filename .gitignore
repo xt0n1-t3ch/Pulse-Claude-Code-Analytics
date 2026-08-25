@@ -11,6 +11,10 @@ frontend/node_modules/
 dist/
 frontend/dist/
 releases/
+test-results/
+playwright-report/
+coverage/
+frontend/coverage/
 .svelte-kit/
 .pnpm-store/
 .pnpm-debug.log

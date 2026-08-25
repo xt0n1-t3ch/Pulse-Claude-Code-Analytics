@@ -296,7 +296,9 @@ fn dispatch(target: &BridgeTarget) -> Result<String, DispatchError> {
         "get_access_snapshot" => serialize(crate::commands::get_access_snapshot()),
         "get_metrics" => serialize(crate::commands::get_metrics()),
         "get_live_sessions" => serialize(crate::commands::get_live_sessions()),
-        "get_discord_preview" => serialize(crate::commands::get_discord_preview()),
+        "get_discord_preview" => crate::commands::get_discord_preview()
+            .map_err(DispatchError::Unavailable)
+            .and_then(serialize),
         "get_discord_settings" => crate::commands::get_discord_settings()
             .map_err(DispatchError::Unavailable)
             .and_then(serialize),
