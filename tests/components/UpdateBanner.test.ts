@@ -56,6 +56,7 @@ describe("UpdateBanner.svelte", () => {
     openAppReleasePage.mockReset();
     openAppReleasePage.mockResolvedValue(undefined);
     updaterCheck.mockReset();
+    updaterCheck.mockResolvedValue({ downloadAndInstall: vi.fn(async () => undefined) });
     relaunch.mockReset().mockResolvedValue(undefined);
     localStorage.clear();
     setSearch("");
@@ -215,7 +216,7 @@ describe("UpdateBanner.svelte", () => {
     const { findByText } = render(UpdateBanner);
 
     await findByText("Feature update");
-    await fireEvent.click(await findByText("Update"));
+    await fireEvent.click(await findByText("Open release"));
 
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
@@ -223,11 +224,27 @@ describe("UpdateBanner.svelte", () => {
     );
   });
 
+  it("never offers Update when the platform updater manifest is unavailable", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate());
+    updaterCheck.mockRejectedValue(new Error("valid release JSON unavailable"));
+
+    const UpdateBanner = await loadBanner();
+    const { findByText, queryByText } = render(UpdateBanner);
+
+    expect(await findByText("Open release")).toBeTruthy();
+    expect(queryByText("Update")).toBeNull();
+    expect(queryByText("Update failed")).toBeNull();
+  });
+
   /** A failed install must stay honest: surface the error and offer the
    *  manual route rather than silently claiming success. */
   it("surfaces a failed install and offers the release page as a fallback", async () => {
     checkAppUpdate.mockResolvedValue(makeUpdate());
-    updaterCheck.mockRejectedValue(new Error("signature mismatch"));
+    updaterCheck.mockResolvedValue({
+      downloadAndInstall: vi.fn(async () => {
+        throw new Error("signature mismatch");
+      }),
+    });
 
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
@@ -242,6 +259,7 @@ describe("UpdateBanner.svelte", () => {
 
   it("synthesizes a fake update from ?fakeUpdate without calling the backend", async () => {
     setSearch("?fakeUpdate=9.9.9");
+    updaterCheck.mockResolvedValue(null);
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
 
@@ -251,7 +269,7 @@ describe("UpdateBanner.svelte", () => {
     expect(await findByText("9.9.9")).toBeTruthy();
     expect(checkAppUpdate).not.toHaveBeenCalled();
 
-    await fireEvent.click(await findByText("Update"));
+    await fireEvent.click(await findByText("Open release"));
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
       "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v9.9.9",

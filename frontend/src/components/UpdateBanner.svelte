@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
+  import type { Update } from "@tauri-apps/plugin-updater";
   import { checkAppUpdate, openAppReleasePage, type AppUpdateAsset, type AppUpdateInfo } from "../lib/api";
 
   const SKIP_KEY = "pulse-update-skipped-version";
@@ -13,6 +14,9 @@
   let visible = $state(false);
   let notesOpen = $state(false);
   let opening = $state(false);
+  type UpdaterAvailability = "checking" | "ready" | "manual";
+  let updaterAvailability = $state<UpdaterAvailability>("checking");
+  let installableUpdate = $state.raw<Update | null>(null);
 
   /** In-app install lifecycle. `idle` also covers "not attempted yet". */
   type InstallPhase = "idle" | "downloading" | "installing" | "relaunching" | "failed" | "relaunch-failed";
@@ -122,7 +126,20 @@
     if (!force && next.latest_version === skippedVersion()) return;
     info = next;
     notesOpen = false;
+    await preflightUpdater();
     visible = true;
+  }
+
+  async function preflightUpdater(): Promise<void> {
+    updaterAvailability = "checking";
+    installableUpdate = null;
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      installableUpdate = await check();
+      updaterAvailability = installableUpdate ? "ready" : "manual";
+    } catch {
+      updaterAvailability = "manual";
+    }
   }
 
   function later(): void {
@@ -165,10 +182,8 @@
     downloadTotal = 0;
 
     try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
+      const update = installableUpdate;
       if (!update) {
-        // Nothing to install through the updater channel; hand off to GitHub.
         phase = "idle";
         await openRelease();
         return;
@@ -328,20 +343,24 @@
       >
         Skip
       </button>
-      {#if installError && phase !== "relaunch-failed"}
+      {#if (installError && phase !== "relaunch-failed") || updaterAvailability === "manual"}
         <button type="button" class="up-btn up-ghost" onclick={openRelease} disabled={opening}>
           {opening ? "Opening…" : "Open release"}
         </button>
       {/if}
-      <button
-        type="button"
-        class="up-btn up-primary"
-        onclick={phase === "relaunch-failed" ? retryRelaunch : installUpdate}
-        disabled={busy}
-        aria-label={phase === "relaunch-failed" ? "Restart Pulse after the installed update" : "Download, install, and restart with the update"}
-      >
-        {phase === "relaunch-failed" ? "Retry restart" : installError ? "Retry update" : busy ? "Updating…" : "Update"}
-      </button>
+      {#if updaterAvailability === "ready" || phase === "relaunch-failed" || installError}
+        <button
+          type="button"
+          class="up-btn up-primary"
+          onclick={phase === "relaunch-failed" ? retryRelaunch : installUpdate}
+          disabled={busy}
+          aria-label={phase === "relaunch-failed" ? "Restart Pulse after the installed update" : "Download, install, and restart with the update"}
+        >
+          {phase === "relaunch-failed" ? "Retry restart" : installError ? "Retry update" : busy ? "Updating…" : "Update"}
+        </button>
+      {:else if updaterAvailability === "checking"}
+        <button type="button" class="up-btn up-primary" disabled>Checking updater…</button>
+      {/if}
     </div>
   </aside>
 {/if}
