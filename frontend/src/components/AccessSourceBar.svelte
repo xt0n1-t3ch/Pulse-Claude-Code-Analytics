@@ -23,10 +23,19 @@
 
   let routes = $derived(displayableAccessRoutes($accessSnapshot?.routes ?? []));
   let diagnosticRoutes = $derived($accessSnapshot?.routes ?? []);
+  let isDiscordProviderSelector = $derived($currentView === "discord");
+  let visibleRoutes = $derived(
+    isDiscordProviderSelector
+      ? routes.filter((route) => providerFor(route.source.kind) !== null)
+      : routes,
+  );
+  let selectorCount = $derived(
+    visibleRoutes.length + (!isDiscordProviderSelector && visibleRoutes.length > 1 ? 1 : 0),
+  );
   let switchingSourceId = $state<string | null>(null);
 
   $effect(() => {
-    if (!$accessSnapshot) return;
+    if (!$accessSnapshot || isDiscordProviderSelector) return;
     if ($selectedAccessSourceId === "all" && routes.length === 1) {
       void selectSource(routes[0]);
     }
@@ -75,26 +84,27 @@
 
   async function selectSource(route: AccessRouteSnapshot): Promise<void> {
     const routeId = route.source.id;
-    if (route.source.proof === "none") {
+    if (!isDiscordProviderSelector) {
       selectedAccessSourceId.set(routeId);
       return;
     }
     const nextProvider = providerFor(route.source.kind);
-    if (!nextProvider) {
-      selectedAccessSourceId.set(routeId);
-      return;
-    }
+    if (!nextProvider) return;
     switchingSourceId = routeId;
     try {
       if (nextProvider !== $provider) {
         await setProvider(nextProvider);
       }
-      selectedAccessSourceId.set(routeId);
     } catch {
       addToast("Provider switch failed. Pulse kept the previous source selected.", "danger");
     } finally {
       if (switchingSourceId === routeId) switchingSourceId = null;
     }
+  }
+
+  function isSelected(route: AccessRouteSnapshot): boolean {
+    if (!isDiscordProviderSelector) return $selectedAccessSourceId === route.source.id;
+    return providerFor(route.source.kind) === $provider;
   }
 
   function inspectSourceHealth(): void {
@@ -144,9 +154,14 @@
   );
 </script>
 
-<section class="access-bar" class:empty={routes.length === 0} aria-label="Usage and analytics sources">
+<section
+  class="access-bar"
+  class:empty={visibleRoutes.length === 0}
+  data-source-count={selectorCount}
+  aria-label={isDiscordProviderSelector ? "Discord broadcast provider" : "Usage and analytics sources"}
+>
   <div class="source-list">
-    {#if routes.length === 0}
+    {#if visibleRoutes.length === 0}
       <button
         class="source-empty"
         type="button"
@@ -159,15 +174,15 @@
         </div>
       </button>
     {:else}
-      {#each routes as route (route.source.id)}
+      {#each visibleRoutes as route (route.source.id)}
         {@const label = accessKindLabel(route.source.kind)}
         {@const status = sourceState(route)}
         <button
           class="source-card"
-          class:selected={$selectedAccessSourceId === route.source.id}
+          class:selected={isSelected(route)}
           data-access-source={route.source.id}
           data-kind={route.source.kind}
-          aria-pressed={$selectedAccessSourceId === route.source.id}
+          aria-pressed={isSelected(route)}
           disabled={switchingSourceId !== null}
           onclick={() => selectSource(route)}
         >
@@ -188,7 +203,7 @@
         </button>
       {/each}
 
-      {#if routes.length > 1}
+      {#if !isDiscordProviderSelector && visibleRoutes.length > 1}
         <button
           class="source-card aggregate"
           class:selected={$selectedAccessSourceId === "all"}
@@ -209,12 +224,19 @@
     {/if}
   </div>
 
-  {#if routes.length > 0}
-    <button class="health-summary" onclick={inspectSourceHealth} aria-label="Inspect source health">
-      <span class="hs-chip" data-state={healthState}>
+  {#if visibleRoutes.length > 0}
+    <button
+      class="health-summary"
+      onclick={inspectSourceHealth}
+      aria-label="Inspect source health"
+      aria-describedby="source-health-status"
+      title={healthLabel}
+    >
+      <span class="health-icon" data-state={healthState} aria-hidden="true">
         <IconActivityHeartbeat size={15} stroke={1.9} aria-hidden="true" />
-        <span class="hs-label">{healthLabel}</span>
+        <span class="health-dot"></span>
       </span>
+      <span id="source-health-status" class="sr-only">{healthLabel}</span>
     </button>
   {/if}
 </section>
@@ -222,12 +244,12 @@
 <style>
   .access-bar {
     flex: 0 0 auto;
-    min-height: 76px;
+    position: relative;
+    min-height: 54px;
     display: flex;
-    align-items: stretch;
-    justify-content: space-between;
-    gap: 20px;
-    padding: 10px 22px;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 52px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
   }
@@ -236,25 +258,31 @@
     align-items: center;
     padding-block: 6px;
   }
-  .access-bar.empty .source-list { width: 100%; }
+  .access-bar.empty .source-list { width: 100%; max-width: none; }
 
   .source-list {
+    width: 100%;
+    max-width: 1100px;
     min-width: 0;
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
     align-items: stretch;
-    gap: 9px;
+    gap: 7px;
     overflow-x: auto;
   }
+  .access-bar[data-source-count="1"] .source-list { max-width: 340px; grid-template-columns: 1fr; }
+  .access-bar[data-source-count="2"] .source-list { max-width: 640px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .access-bar[data-source-count="3"] .source-list { max-width: 920px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
   .source-card {
-    width: 244px;
-    min-width: 214px;
-    min-height: 54px;
+    width: auto;
+    min-width: 0;
+    min-height: 42px;
     display: grid;
-    grid-template-columns: 30px minmax(0, 1fr) auto;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
-    padding: 9px 12px;
+    gap: 8px;
+    padding: 6px 9px;
     color: var(--text-secondary);
     background: color-mix(in srgb, var(--bg-card) 70%, transparent);
     border: 1px solid var(--border);
@@ -266,14 +294,14 @@
   .source-card:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
   .source-card.selected {
     color: var(--text-primary);
-    border-color: var(--provider-accent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--provider-accent) 42%, transparent);
+    background: color-mix(in srgb, var(--provider-accent) 8%, var(--bg-card));
+    border-color: color-mix(in srgb, var(--provider-accent) 58%, var(--border));
   }
 
   .source-card img,
   .aggregate-mark {
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     border-radius: 6px;
     object-fit: contain;
   }
@@ -303,7 +331,7 @@
   .source-copy small,
   .source-empty span {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.25;
   }
   .source-copy small.st-danger { color: var(--danger); font-weight: 600; }
@@ -312,8 +340,8 @@
   /* One small state dot instead of a loud pill on every card. */
   .source-dot {
     justify-self: end;
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--text-placeholder);
     flex-shrink: 0;
@@ -324,7 +352,6 @@
   .source-dot[data-state="expired"] { background: var(--danger); }
   .source-dot[data-state="neutral"] { background: var(--provider-accent); }
 
-  .health-summary,
   .source-empty {
     display: flex;
     align-items: center;
@@ -333,28 +360,54 @@
   }
 
   .health-summary {
-    justify-content: flex-end;
-    padding-right: 4px;
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid transparent;
   }
 
-  /* One compact chip: icon + status, tinted by state. No stacked label. */
-  .hs-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    height: 30px;
-    padding: 0 12px 0 10px;
-    border-radius: var(--radius-full);
-    color: var(--text-secondary);
-    background: var(--surface-panel-soft);
-    border: 1px solid var(--border);
-    transition: border-color 140ms var(--ease), background 140ms var(--ease), color 140ms var(--ease);
+  .health-summary:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border-color: var(--border);
   }
-  .hs-label { font-size: 11px; font-weight: 650; letter-spacing: var(--letter-tight); }
-  .health-summary:hover .hs-chip { border-color: var(--border-hover); background: var(--bg-elevated); }
-  .hs-chip[data-state="live"] { color: var(--success); background: var(--success-dim); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
-  .hs-chip[data-state="waiting"] { color: var(--warning); background: var(--warning-dim); border-color: color-mix(in srgb, var(--warning) 30%, transparent); }
-  .hs-chip[data-state="expired"] { color: var(--danger); background: var(--danger-dim); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+
+  .health-icon { position: relative; display: grid; place-items: center; }
+  .health-icon[data-state="live"] { color: var(--success); }
+  .health-icon[data-state="waiting"] { color: var(--warning); }
+  .health-icon[data-state="expired"] { color: var(--danger); }
+  .health-icon[data-state="neutral"] { color: var(--provider-accent); }
+  .health-dot {
+    position: absolute;
+    right: -3px;
+    bottom: -2px;
+    width: 5px;
+    height: 5px;
+    border: 1px solid var(--bg-secondary);
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   .source-empty div {
     display: grid;
@@ -383,16 +436,24 @@
   }
 
   @media (max-width: 900px) {
-    .access-bar { min-height: 68px; padding: 8px 12px; }
+    .access-bar { min-height: 52px; display: block; padding: 6px 10px; }
     .health-summary { display: none; }
-    .source-card { width: 176px; }
+    .source-list {
+      max-width: none !important;
+      display: flex;
+      justify-content: flex-start;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .source-card { flex: 0 0 190px; width: 190px; }
   }
 
   @media (max-width: 520px) {
-    .access-bar { min-height: 62px; padding-inline: 8px; }
+    .access-bar { display: block; min-height: 52px; padding-inline: 8px; }
+    .source-list { width: 100%; justify-content: flex-start; }
     .source-list { gap: 7px; }
-    .source-card { width: 160px; min-width: 154px; min-height: 46px; padding: 7px 9px; }
-    .source-card img, .aggregate-mark { width: 26px; height: 26px; }
+    .source-card { width: 160px; min-width: 154px; min-height: 40px; padding: 5px 8px; }
+    .source-card img, .aggregate-mark { width: 22px; height: 22px; }
     .source-empty { min-width: 0; }
   }
 </style>

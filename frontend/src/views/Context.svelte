@@ -329,7 +329,7 @@
 <div class="ctx-page app-view">
   <div class="view-header">
     <div class="view-title-line">
-      <h2 class="view-title">Context</h2>
+      <h1 class="view-title">Context</h1>
       {#if scopedLiveSessions.length > 0}<span class="active-count">{scopedLiveSessions.length} active</span>{/if}
     </div>
     <div class="header-meta">
@@ -341,7 +341,7 @@
   {#if contextError}
     <section class="context-state state-panel error" role="alert">
       <span class="state-eyebrow">Context</span>
-      <h3>Context data unavailable</h3>
+      <h2>Context data unavailable</h2>
       <p>{contextError.replace(/^Context data unavailable\.\s*/, "")}</p>
       <button type="button" class="btn" onclick={retryContext}>Retry</button>
     </section>
@@ -349,7 +349,7 @@
     {#if scopedLiveSessions.length > 0}
       <div class="active-section">
         <div class="advice-title-row">
-          <h3 class="advice-title">Active windows</h3>
+          <h2 class="advice-title">Active windows</h2>
           <span class="advice-sub">Select a session to inspect how full its context window is.</span>
         </div>
         <div class="active-grid">
@@ -442,7 +442,7 @@
       <div class="advice-card">
         <div class="advice-header">
           <div class="advice-title-row">
-            <h3 class="advice-title">Recommendations</h3>
+            <h2 class="advice-title">Recommendations</h2>
             <span class="advice-count">{advice.length}</span>
           </div>
           <p class="advice-sub">
@@ -459,7 +459,7 @@
                 >
                   {item.severity}
                 </span>
-                <h4 class="advice-item-title">{item.title}</h4>
+                <h3 class="advice-item-title">{item.title}</h3>
               </div>
               <p class="advice-desc">{item.description}</p>
               {#if item.fix_prompt}
@@ -541,14 +541,14 @@
   {:else if !loaded}
     <section class="context-state state-panel" aria-live="polite">
       <span class="state-eyebrow">Context</span>
-      <h3>Reading the active context window</h3>
+      <h2>Reading the active context window</h2>
       <p>Pulse is resolving session usage, instruction inventory, and compaction headroom.</p>
       <div class="state-progress" aria-hidden="true"><span></span></div>
     </section>
   {:else}
     <section class="context-state state-panel">
       <span class="state-eyebrow">Context</span>
-      <h3>No active context to inspect</h3>
+      <h2>No active context to inspect</h2>
       <p>Start a session and Pulse will place its live window, inventory, and pressure signals here.</p>
     </section>
   {/if}
@@ -648,10 +648,10 @@
   .hero-owner span { color: var(--text-muted); font: 600 10px var(--font-mono); }
   .hero-owner strong { color: var(--text-primary); font-size: 14px; }
   .context-state { min-height: 196px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 28px 30px; }
-  .context-state h3 { margin-top: 8px; font-size: 18px; }
+  .context-state h2 { margin-top: 8px; font-size: 18px; }
   .context-state p { max-width: 540px; margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
   .context-state.error { border-color: color-mix(in srgb, var(--danger) 34%, var(--border)); }
-  .context-state.error h3 { color: var(--danger); }
+  .context-state.error h2 { color: var(--danger); }
   .context-state .btn { margin-top: 18px; }
   .state-eyebrow { color: var(--text-secondary); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
   .state-progress { width: min(360px, 100%); height: 3px; margin-top: 22px; overflow: hidden; background: var(--bg-elevated); }

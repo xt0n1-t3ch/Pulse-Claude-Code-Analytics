@@ -119,7 +119,12 @@
                   </div>
                   <div
                     class="window-meter"
-                    aria-label={`${windowLabel(window)} ${presentation == null ? "unavailable" : `${Math.round(presentation.percent)}% ${presentation.direction}`}`}
+                    role="progressbar"
+                    aria-label={windowLabel(window)}
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={presentation?.percent}
+                    aria-valuetext={presentation == null ? "Unavailable" : `${Math.round(presentation.percent)}% ${presentation.direction}`}
                   >
                     <span style={`width:${presentation?.percent ?? 0}%`}></span>
                   </div>
@@ -196,8 +201,11 @@
 <style>
   .allowance-rail {
     min-width: 0;
-    height: 100%;
-    padding: 20px;
+    height: auto;
+    display: grid;
+    grid-template-columns: minmax(205px, 0.26fr) minmax(0, 1fr);
+    align-items: start;
+    padding: 18px 20px;
     /* Column of the shared Dashboard home-grid card. It contributes no border,
        radius, or shadow of its own; the parent grid owns the surface. */
     background: transparent;
@@ -208,18 +216,34 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
-    margin-bottom: 18px;
+    margin: 0;
+    padding-right: 24px;
   }
 
   .rail-head h2 { font-size: 19px; letter-spacing: -0.03em; }
   .rail-head p { max-width: 260px; margin-top: 5px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
 
-  .allowance-list { display: grid; }
+  .allowance-list,
+  .allowance-local,
+  .allowance-empty {
+    min-width: 0;
+    margin: 0;
+    padding-left: 24px;
+    border-top: 0;
+    border-left: 1px solid var(--divider);
+  }
+
+  .allowance-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
   .allowance-card {
     min-width: 0;
-    padding: 15px 0;
-    border-top: 1px solid var(--divider);
+    padding: 0 20px;
+    border-top: 0;
   }
+  .allowance-card:first-child { padding-left: 0; }
+  .allowance-card + .allowance-card { border-left: 1px solid var(--divider); }
   .allowance-card:last-child { padding-bottom: 0; }
 
   .allowance-card header {
@@ -237,8 +261,8 @@
   .allowance-card i { width: 6px; height: 6px; background: var(--text-placeholder); border-radius: 50%; }
   .allowance-card i.available { background: var(--success); }
 
-  .window-list { display: grid; }
-  .window-row { display: grid; gap: 8px; padding: 11px 0; border-top: 1px solid var(--divider); }
+  .window-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 18px; }
+  .window-row { display: grid; gap: 8px; padding: 10px 0 0; border-top: 1px solid var(--divider); }
   .window-row:last-child { border-bottom: 0; }
   .window-copy { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .window-copy span { color: var(--text-secondary); font-size: 11px; }
@@ -293,11 +317,12 @@
   .reset-credit small { color: var(--text-muted); font-size: 9px; }
 
   .allowance-empty {
-    min-height: 92px;
+    min-height: 70px;
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 16px 0 2px;
+    padding-top: 0;
+    padding-bottom: 0;
     color: var(--text-muted);
     border-top: 1px solid var(--divider);
   }
@@ -311,8 +336,8 @@
     grid-template-columns: 34px minmax(0, 1fr);
     gap: 12px;
     align-items: start;
-    padding: 16px 0 2px;
-    border-top: 1px solid var(--divider);
+    padding-top: 0;
+    padding-bottom: 0;
   }
   .allowance-local img { width: 32px; height: 32px; object-fit: contain; border-radius: 8px; }
   .al-copy { min-width: 0; display: grid; gap: 5px; }
@@ -338,10 +363,19 @@
   }
   .al-sub { color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 
-  @media (max-width: 980px) {
-    .allowance-list { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
-    .allowance-card { padding-right: 18px; }
-    .allowance-card + .allowance-card { padding-left: 18px; border-left: 1px solid var(--divider); }
+  @media (max-width: 760px) {
+    .allowance-rail { grid-template-columns: 1fr; padding: 18px; }
+    .rail-head { padding: 0 0 14px; }
+    .allowance-list,
+    .allowance-local,
+    .allowance-empty {
+      padding: 14px 0 0;
+      border-left: 0;
+      border-top: 1px solid var(--divider);
+    }
+    .allowance-list { grid-template-columns: 1fr; }
+    .allowance-card { padding: 0; }
+    .allowance-card + .allowance-card { padding-top: 16px; border-left: 0; border-top: 1px solid var(--divider); }
   }
 
   @media (max-width: 620px) {

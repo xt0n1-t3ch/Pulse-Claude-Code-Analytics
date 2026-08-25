@@ -2,6 +2,54 @@
 
 All notable changes to **Pulse** are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning is [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- The frameless Windows title bar uses Tauri's native drag command again,
+  preserves double-click maximize, and excludes navigation, notifications,
+  theme, and window controls from the draggable surface.
+- Analytics source changes no longer switch the provider published to Discord.
+  The Discord view keeps its own Claude/Codex broadcaster selector while Home,
+  Sessions, Context, Costs, and Reports retain their independent provider scope.
+- Codex quota presentation now projects the provider's effective account scope.
+  A newly reported weekly-only response removes an older or model-scoped 5-hour
+  window from Pulse surfaces instead of presenting an invented `100% remaining`
+  value; reported zero usage remains distinct from an absent window.
+- Model-scoped quota windows now keep duration-specific identities, so a 5-hour
+  and weekly window cannot alternately recreate the same reset notification on
+  every poll. Dismissal remains durable across refreshes and restarts, and a
+  one-time migration hides pre-fix collision rows without deleting the audit
+  trail or suppressing later genuine reset events.
+- A malformed Discord configuration now degrades only Discord settings and
+  preview data. Core analytics remain live, same-provider last-good Discord
+  data stays visible with an explicit warning, provider changes revoke that
+  cache, and poisoned shared state fails the whole snapshot instead of
+  publishing fabricated empty telemetry.
+- Snapshot freshness uses the backend capture timestamp, including restored
+  startup snapshots, rather than the time the frontend happened to receive it.
+  Direct Discord preview reads now report configuration errors instead of
+  silently composing a presence from defaults.
+- Reports now normalizes and bounds stored prompt excerpts, keeps them out of
+  the rendered DOM by default, and requires an explicit per-session reveal.
+
+### Changed
+
+- Refreshed the Svelte compiler and checker, user-interaction test harness, and
+  Rust error-derive lockfile to their compatible patch releases.
+- Refined the desktop analytics shell while preserving its ultra-dark canvas, clearer
+  text hierarchy, a compact provider strip, a less crowded Discord field
+  editor, and a bounded Reports loading state across desktop and narrow widths.
+- Reflowed account limits into a content-driven horizontal ledger above the
+  live workspace and widened the centered source selector, removing the empty
+  full-height rail and unused chrome space without changing provider ownership.
+- Split non-dashboard views into route-loaded production chunks. The measured
+  entry JavaScript fell from 506.28 kB to 148.06 kB (167.01 kB to 51.67 kB
+  gzip) while Home remains eagerly available.
+- Added rendered axe-core coverage to the existing dark/light Playwright
+  matrix, including the 390-pixel narrow shell across every primary view and
+  geometry checks for centered source occupancy and content-driven allowances.
+
 ## [1.7.2] - 2026-08-12
 
 Pulse 1.7.2 makes local analytics incremental and provenance-correct, removes

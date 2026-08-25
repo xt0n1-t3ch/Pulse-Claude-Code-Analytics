@@ -3,8 +3,7 @@
   import {
     sessions,
     activeSessions,
-    selectedAccessRoutes,
-    selectedAnalyticsProviderScope,
+    accessSnapshot,
     discordUser,
     health,
     discordPreview,
@@ -25,9 +24,8 @@
   } from "../lib/api";
   import type { SessionInfo } from "../lib/api";
   import {
-    accessKindLabel,
     allowancePresentation,
-    providerMatchesAnalyticsScope,
+    authenticatedAccessRoutes,
   } from "../lib/access";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
   import { rpArtFor } from "../lib/rpArt";
@@ -152,12 +150,13 @@
       settingsPending = false;
     }
   }
-
-
-  let previewProvider = $derived(
-    $selectedAnalyticsProviderScope === "all"
-      ? $provider
-      : $selectedAnalyticsProviderScope,
+  let previewProvider = $derived($provider);
+  let broadcastAccessRoutes = $derived(
+    authenticatedAccessRoutes($accessSnapshot?.routes ?? []).filter((route) =>
+      route.source.kind === (
+        previewProvider === "codex" ? "codex_subscription" : "claude_subscription"
+      ),
+    ),
   );
   let previewSession = $derived(
     previewProvider
@@ -167,17 +166,12 @@
   );
   let scopedPresencePreview = $derived(
     $discordPresencePreview
-    && providerMatchesAnalyticsScope(
-      $discordPresencePreview.provider,
-      $selectedAnalyticsProviderScope,
-    )
+    && $discordPresencePreview.provider === previewProvider
       ? $discordPresencePreview
       : null,
   );
   let activeSessionCount = $derived(
-    $activeSessions.filter((session) =>
-      providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
-    ).length,
+    $activeSessions.filter((session) => session.provider === previewProvider).length,
   );
   let previewProfile = $derived.by(() => {
     const candidate = scopedPresencePreview?.provider ?? previewSession?.provider ?? previewProvider;
@@ -258,16 +252,13 @@
   }
 
   function sessionLimitPart(): string | null {
-    return $selectedAccessRoutes
+    return broadcastAccessRoutes
       .flatMap((route) => {
         return route.windows.flatMap((window) => {
           const presentation = allowancePresentation(route, window);
           if (!presentation) return [];
-          const sourcePrefix = $selectedAnalyticsProviderScope === "all"
-            ? `${accessKindLabel(route.source.kind).product} `
-            : "";
           return [
-            `${sourcePrefix}${window.label || windowLabel(window.window_minutes ?? 0)} `
+            `${window.label || windowLabel(window.window_minutes ?? 0)} `
             + `${presentation.percent.toFixed(0)}% ${presentation.direction}`,
           ];
         });
@@ -286,7 +277,7 @@
   }
 
   function creditsPart(): string | null {
-    const presentations = $selectedAccessRoutes
+    const presentations = broadcastAccessRoutes
       .filter((route) =>
         route.availability === "available"
         && route.freshness === "fresh"
@@ -295,14 +286,11 @@
       .flatMap((route) => {
         const credits = route.credits;
         if (!credits) return [];
-        const prefix = $selectedAnalyticsProviderScope === "all"
-          ? `${accessKindLabel(route.source.kind).product} `
-          : "";
-        if (credits.unlimited) return [`${prefix}Credits Unlimited`];
+        if (credits.unlimited) return ["Credits Unlimited"];
         if (credits.balance == null) return [];
         const numeric = Number(credits.balance);
         const display = Number.isFinite(numeric) ? numeric.toLocaleString() : credits.balance;
-        return [`${prefix}Credits ${display}`];
+        return [`Credits ${display}`];
       });
     return presentations.join(" • ") || null;
   }
@@ -440,7 +428,7 @@
 <div class="discord-view app-view" style="--provider-accent: {previewProfile.accent}">
   <div class="view-header">
     <div class="view-title-group">
-      <h2 class="view-title">Broadcast</h2>
+      <h1 class="view-title">Broadcast</h1>
       <span class="view-sub">
         {activeCount}/{availableFieldCount} fields · {previewProfile.productName}
       </span>
@@ -499,7 +487,7 @@
         <div class="cc-section identity-section">
           <div class="cc-section-head">
             <div class="cc-section-text">
-              <h3 class="cc-section-title">Desktop identity</h3>
+              <h2 class="cc-section-title">Desktop identity</h2>
               <p class="cc-section-desc">Choose the Discord app name and large artwork for Codex Desktop.</p>
             </div>
             <div class="preset-seg identity-seg" role="group" aria-label="Codex desktop design">
@@ -528,7 +516,7 @@
       <div class="cc-section">
         <div class="cc-section-head">
           <div class="cc-section-text">
-            <h3 class="cc-section-title">Preset</h3>
+            <h2 class="cc-section-title">Preset</h2>
             <p class="cc-section-desc">Pick a density, or hand-tune the fields below.</p>
           </div>
           <div class="preset-seg" role="tablist" aria-label="Field preset">
@@ -551,7 +539,7 @@
       <div class="cc-section cc-section-fields">
         <div class="cc-section-head cc-fields-head">
           <div class="cc-section-text">
-            <h3 class="cc-section-title">Fields</h3>
+            <h2 class="cc-section-title">Fields</h2>
             <p class="cc-section-desc">Toggle visibility and reorder fields. The backend generates the exact preview.</p>
           </div>
           <span class="field-count">
@@ -780,8 +768,8 @@
   /* ── LAYOUT ── */
   .discord-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
-    gap: 18px;
+    grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
+    gap: 16px;
     align-items: start;
     min-width: 0;
   }
@@ -794,25 +782,23 @@
   /* ── CONTROL CARD (flat, Dashboard-aligned) ── */
   .control-card {
     min-width: 0;
-    background: var(--bg-card);
+    background: var(--surface-panel);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    transition: border-color 0.18s var(--ease);
   }
-  .control-card:hover { border-color: var(--border-hover); }
 
   .cc-toggle-row {
-    padding: 20px 22px;
+    padding: 15px 18px;
     border-bottom: 1px solid var(--border);
   }
 
   .big-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 16px;
+    gap: 12px;
     cursor: pointer;
     width: 100%;
   }
@@ -870,10 +856,10 @@
 
   .cc-section-head {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 16px 22px 14px;
+    padding: 12px 18px;
   }
   .cc-section-text { min-width: 0; }
   .cc-section-title {
@@ -890,7 +876,7 @@
     margin: 0;
   }
 
-  .cc-section-fields .cc-section-head { padding-bottom: 10px; }
+  .cc-section-fields .cc-section-head { padding-bottom: 9px; }
 
   .field-count {
     display: inline-flex;
@@ -899,7 +885,7 @@
     font-family: var(--font-mono);
     letter-spacing: var(--letter-tight);
   }
-  .fc-num { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+  .fc-num { font-size: 18px; font-weight: 700; color: var(--text-primary); }
   .fc-den { font-size: 13px; color: var(--text-muted); margin-left: 1px; }
 
   /* ── preset segmented control ── */
@@ -936,13 +922,15 @@
   .field-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 0;
-    border-top: 1px solid var(--border);
+    gap: 1px;
+    margin: 0 14px 14px;
+    overflow: hidden;
+    background: var(--divider);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-md);
   }
   @media (max-width: 1180px) {
     .field-grid { grid-template-columns: 1fr; }
-    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; }
-    .field-cell:first-child { border-top: none !important; }
   }
   @media (max-width: 620px) {
     .field-grid { grid-template-columns: 1fr; }
@@ -951,24 +939,18 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 14px;
-    padding: 14px 22px;
-    border-top: 1px solid var(--border);
-    border-left: 1px solid var(--border);
-    min-height: 64px;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 0;
+    min-height: 56px;
+    background: var(--surface-panel);
     transition: background 0.15s var(--ease);
   }
-  .field-cell:hover { background: var(--bg-card-hover); }
+  .field-cell:hover { background: var(--surface-raised); }
   /* Provider cannot broadcast this field, so it reads as unavailable rather than
      as an switch that would silently revert. */
   .field-cell.unavailable { opacity: 0.45; }
   .field-cell.unavailable:hover { background: transparent; }
-  .field-cell:nth-child(-n+2) { border-top: none; }
-  .field-cell:nth-child(2n+1) { border-left: none; }
-  @media (max-width: 620px) {
-    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; }
-    .field-cell:first-child { border-top: none !important; }
-  }
   .field-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .field-label {
     font-size: var(--fs-base);
@@ -987,8 +969,8 @@
     margin-left: auto;
   }
   .field-order button {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
@@ -1004,7 +986,7 @@
     flex-direction: column;
     gap: 10px;
     position: sticky;
-    top: 0;
+    top: 8px;
   }
   .stage-label {
     display: flex;
@@ -1210,7 +1192,7 @@
   }
   .dp-activity-elapsed {
     font-size: 11.5px;
-    color: var(--preview-faint);
+    color: var(--preview-muted);
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
   }
@@ -1221,8 +1203,7 @@
     .cc-section-head { align-items: flex-start; flex-direction: column; padding: 14px; }
     .cc-toggle-row { padding-inline: 14px; }
     .field-grid { grid-template-columns: 1fr; }
-    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; padding: 12px 14px; }
-    .field-cell:first-child { border-top: none !important; }
+    .field-cell { padding: 11px 12px; }
     .field-order button { width: 36px; height: 36px; }
     .dp-activity-card { margin-inline: 10px; }
   }

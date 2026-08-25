@@ -4,12 +4,14 @@ import { tick } from "svelte";
 import Dashboard from "@/views/Dashboard.svelte";
 import {
   accessSnapshot,
+  backendConnection,
   metrics,
   planInfo,
   rateLimits,
   selectedAccessSourceId,
   selectedAnalyticsProviderScope,
   sessions,
+  snapshotDiagnostics,
 } from "@/lib/stores";
 import { provider } from "@/lib/provider";
 import { formatResetDateTime } from "@/lib/utils";
@@ -254,6 +256,14 @@ describe("Dashboard.svelte", () => {
     accessSnapshot.set(null);
     selectedAccessSourceId.set("all");
     selectedAnalyticsProviderScope.set("all");
+    backendConnection.set("live");
+    snapshotDiagnostics.set({
+      lastError: null,
+      lastErrorAt: null,
+      consecutiveFailures: 0,
+      lastSuccessAt: null,
+      discordSettingsError: null,
+    });
     planInfo.set({ provider: "claude", plan_key: "max_20x", plan_name: "Max 20x ($200/mo)", detected: true });
     rateLimits.set({
       provider: "claude",
@@ -312,6 +322,22 @@ describe("Dashboard.svelte", () => {
     expect(container.textContent).not.toContain("Work now");
     expect(container.textContent).not.toContain("Source diagnostics");
     expect(container.querySelector("[data-session-focus]")?.textContent).toContain("180.0K");
+  });
+
+  it("surfaces Discord config degradation while the main snapshot remains live", async () => {
+    snapshotDiagnostics.set({
+      lastError: null,
+      lastErrorAt: null,
+      consecutiveFailures: 0,
+      lastSuccessAt: Date.parse("2026-05-28T12:10:00Z"),
+      discordSettingsError: "Discord config is unreadable",
+    });
+
+    const { findByRole } = render(Dashboard);
+
+    const status = await findByRole("status", { name: "Discord presence degraded" });
+    expect(status.textContent).toContain("Discord settings degraded");
+    expect(status.getAttribute("title")).toBe("Discord config is unreadable");
   });
 
   it("surfaces analytics backend failure instead of rendering historical zeroes", async () => {

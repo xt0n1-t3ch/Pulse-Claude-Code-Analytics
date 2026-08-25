@@ -225,11 +225,12 @@
 <div class="sessions-view app-view">
   <div class="view-header">
     <div class="title-line">
-      <h2 class="view-title">Sessions</h2>
+      <h1 class="view-title">Sessions</h1>
       <span class="view-sub">{filtered.length} active</span>
     </div>
     <div class="filters">
       <select
+        aria-label="Filter active sessions by project"
         value={projectFilter}
         onchange={(event) => {
           projectFilter = event.currentTarget.value;
@@ -239,7 +240,7 @@
         <option value="">All Projects</option>
         {#each projects as p}<option value={p}>{p}</option>{/each}
       </select>
-      <select bind:value={sortBy}>
+      <select aria-label="Sort active sessions" bind:value={sortBy}>
         <option value="cost">Sort: Monetary value</option>
         <option value="tokens">Sort: Tokens</option>
         <option value="duration">Sort: Duration</option>
@@ -273,7 +274,7 @@
 
   <div class="card surface-matte">
     <div class="card-title-row">
-      <h3 class="card-title">Session history</h3>
+      <h2 class="card-title">Session history</h2>
       <div class="title-actions">
         <button class="action-btn" class:active={compareMode} onclick={() => { compareMode = !compareMode; compareIds = new Set(); }}>
           {compareMode ? "Exit Compare" : "Compare"}
@@ -285,7 +286,7 @@
     </div>
     <div class="history-controls">
       <div class="history-filters">
-        <select bind:value={historyDays} onchange={() => loadHistory()}>
+        <select aria-label="History window" bind:value={historyDays} onchange={() => loadHistory()}>
           <option value={1}>Today</option>
           <option value={7}>Last 7 days</option>
           <option value={30}>Last 30 days</option>
@@ -352,7 +353,7 @@
 
     {#if compareMode && compareList.length >= 2}
       <div class="compare-panel">
-        <h4 class="compare-title">Comparison · {compareList.length} sessions</h4>
+        <h3 class="compare-title">Comparison · {compareList.length} sessions</h3>
         <div class="compare-grid" style="--compare-cols:{compareList.length}">
           <div class="compare-label"></div>
           {#each compareList as c}<div class="compare-head">{c.project}</div>{/each}

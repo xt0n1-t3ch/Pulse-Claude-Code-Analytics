@@ -52,6 +52,7 @@
   let loadError = $state<string | null>(null);
   let days = $state(30);
   let severityFilter = $state<"all" | Severity>("all");
+  let revealedPromptIds = $state<Set<string>>(new Set());
   let reportRequest = 0;
 
   function clearReportData(): void {
@@ -65,6 +66,17 @@
     trace = null;
     dailyCosts = [];
     totalSessions = 0;
+    revealedPromptIds = new Set();
+  }
+
+  function togglePromptPreview(sessionId: string): void {
+    const next = new Set(revealedPromptIds);
+    if (next.has(sessionId)) {
+      next.delete(sessionId);
+    } else {
+      next.add(sessionId);
+    }
+    revealedPromptIds = next;
   }
 
   async function loadReports(): Promise<void> {
@@ -243,7 +255,7 @@
 <div class="reports-view app-view">
   <header class="view-header">
     <div class="view-title-group">
-      <h2 class="view-title">Reports</h2>
+      <h1 class="view-title">Reports</h1>
       <p class="view-sub">{days === 365 ? "1 year" : `${days} days`} · selected analysis window</p>
     </div>
     <div class="controls">
@@ -265,12 +277,15 @@
   </header>
 
   {#if loading && !hasLoaded}
-    <div class="skeleton-stack">
-      <div class="skeleton hero"></div>
-      <div class="skeleton row"></div>
-      <div class="skeleton row"></div>
-      <div class="skeleton row short"></div>
-    </div>
+    <section class="report-loading" role="status" aria-live="polite">
+      <div class="loading-copy">
+        <strong>Building the {days === 365 ? "1-year" : `${days}-day`} report</strong>
+        <span>Reading saved sessions and calculating operational signals.</span>
+      </div>
+      <div class="loading-lines" aria-hidden="true">
+        <span></span><span></span><span></span>
+      </div>
+    </section>
   {:else if loadError}
     <section class="report-error" role="alert">
       <strong>{days === 365 ? "1-year" : `${days}-day`} report unavailable</strong>
@@ -294,7 +309,7 @@
     <section class="timeline-hero">
       <div class="th-head">
         <div class="th-titles">
-          <h3 class="th-title">Monetary value timeline</h3>
+          <h2 class="th-title">Monetary value timeline</h2>
           <p class="th-sub">Daily monetary value across the selected window, with provenance-aware inflections marked on the curve.</p>
         </div>
         <div class="cost-coverage" data-basis={timelineCostBasis}>
@@ -391,7 +406,7 @@
     <div class="two-col" class:single={!(capabilities.model_routing && routing)}>
       {#if routing && capabilities.model_routing}
         <section class="card">
-          <h3 class="card-title">Model routing</h3>
+          <h2 class="card-title">Model routing</h2>
           <p class="card-sub">{routing.diagnosis}</p>
           <p class="routing-coverage">
             {routing.priced_sessions} of {routing.total_sessions} sessions priced · {routing.cost_basis.replace("_", " ")}
@@ -436,7 +451,7 @@
       {/if}
 
       <section class="card">
-        <h3 class="card-title">Inflection detail</h3>
+        <h2 class="card-title">Inflection detail</h2>
         <p class="card-sub">
           The days marked on the timeline, with what moved on each one.
         </p>
@@ -474,7 +489,7 @@
       <section class="card trace-card">
         <header class="trace-head">
           <div>
-            <h3 class="card-title">Session topology</h3>
+            <h2 class="card-title">Session topology</h2>
             <p class="card-sub">
               Telemetry shape across {trace.total_sessions} session{trace.total_sessions === 1 ? "" : "s"} in the last {days}d
               · {trace.provider_display} · {trace.instruction_file}
@@ -518,7 +533,7 @@
       <div class="grid-2" class:single={!(healthOn && toolsOn)}>
         {#if health && health.available}
           <section class="card">
-            <h3 class="card-title">Session health</h3>
+            <h2 class="card-title">Session health</h2>
             <div class="health-hero">
               <div class="health-grade grade-{health.grade.toLowerCase()}">{health.grade}</div>
               <div class="health-score">{health.health_score}<span class="health-score-sub">/100</span></div>
@@ -537,7 +552,7 @@
 
         {#if tools && tools.available}
           <section class="card">
-            <h3 class="card-title">Tool frequency</h3>
+            <h2 class="card-title">Tool frequency</h2>
             <p class="card-sub">{tools.diagnosis}</p>
             <div class="mini-grid">
               <div class="mini-kv"><span>Total calls</span><strong>{tools.total_tool_calls.toLocaleString()}</strong></div>
@@ -565,7 +580,7 @@
 
     {#if prompts && prompts.available}
       <section class="card">
-        <h3 class="card-title">Prompt complexity</h3>
+        <h2 class="card-title">Prompt complexity</h2>
         <p class="card-sub">{prompts.diagnosis}</p>
         <div class="mini-grid four">
           <div class="mini-kv"><span>Prompts analyzed</span><strong>{prompts.prompts_analyzed.toLocaleString()}</strong></div>
@@ -582,7 +597,23 @@
                   <span class="prompt-label">{s.label}</span>
                   <span class="prompt-scores">C:{s.complexity_score} · S:{s.specificity_score}</span>
                 </div>
-                <div class="prompt-preview">{s.preview}</div>
+                <div class="prompt-disclosure">
+                  <span class="prompt-privacy">
+                    {revealedPromptIds.has(s.session_id) ? "Prompt excerpt visible" : "Prompt excerpt hidden"}
+                  </span>
+                  <button
+                    type="button"
+                    class="prompt-toggle"
+                    aria-expanded={revealedPromptIds.has(s.session_id)}
+                    aria-label={`${revealedPromptIds.has(s.session_id) ? "Hide" : "Reveal"} prompt excerpt for ${s.project}`}
+                    onclick={() => togglePromptPreview(s.session_id)}
+                  >
+                    {revealedPromptIds.has(s.session_id) ? "Hide" : "Reveal"}
+                  </button>
+                </div>
+                {#if revealedPromptIds.has(s.session_id)}
+                  <div class="prompt-preview">{s.preview}</div>
+                {/if}
               </div>
             {/each}
           </div>
@@ -593,7 +624,7 @@
     <section class="card">
       <header class="recs-header">
         <div>
-          <h3 class="card-title">Recommendations</h3>
+          <h2 class="card-title">Recommendations</h2>
           <p class="card-sub">
             Things worth acting on from your last {days === 365 ? "year" : `${days} days`} of sessions.
           </p>
@@ -639,7 +670,7 @@
                 >
                   {rec.severity}
                 </span>
-                <h4 class="rec-title">{rec.title}</h4>
+                <h3 class="rec-title">{rec.title}</h3>
               </div>
               <p class="rec-desc">{rec.description}</p>
               {#if rec.estimated_savings}
@@ -1051,7 +1082,6 @@
   .bar-fill {
     height: 100%;
     border-radius: 99px;
-    transition: width 0.3s var(--ease);
   }
 
   .bar-value {
@@ -1092,15 +1122,15 @@
     padding: 12px 14px;
     background: var(--bg-elevated);
     border-radius: var(--radius-md);
-    border-left: 3px solid var(--text-muted);
+    border: 1px solid var(--border);
   }
 
   .inflection-item.spike {
-    border-left-color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 6%, var(--bg-elevated));
   }
 
   .inflection-item.drop {
-    border-left-color: var(--success);
+    background: color-mix(in srgb, var(--success) 6%, var(--bg-elevated));
   }
 
   .inflection-head {
@@ -1163,7 +1193,7 @@
     padding: 14px 16px;
     background: var(--bg-elevated);
     border-radius: var(--radius-md);
-    border-left: 3px solid var(--rec-color, var(--accent));
+    border: 1px solid color-mix(in srgb, var(--rec-color, var(--accent)) 26%, var(--border));
   }
 
   .rec-head {
@@ -1287,37 +1317,34 @@
     to { transform: rotate(360deg); }
   }
 
-  .skeleton-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .skeleton {
-    background: linear-gradient(
-      90deg,
-      var(--bg-card) 0%,
-      var(--bg-elevated) 50%,
-      var(--bg-card) 100%
-    );
-    background-size: 200% 100%;
+  .report-loading {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.7fr);
+    align-items: center;
+    gap: 24px;
+    min-height: 116px;
+    padding: 22px 24px;
+    background: var(--surface-panel);
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    animation: shimmer 1.5s infinite;
   }
 
-  .skeleton.hero {
-    height: 180px;
+  .loading-copy { display: flex; flex-direction: column; gap: 5px; }
+  .loading-copy strong { color: var(--text-primary); font-size: 14px; }
+  .loading-copy span { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+  .loading-lines { display: grid; gap: 7px; }
+  .loading-lines span {
+    height: 5px;
+    border-radius: 99px;
+    background: var(--border-strong);
+    animation: loading-pulse 1.2s ease-in-out infinite alternate;
   }
-  .skeleton.row {
-    height: 120px;
-  }
-  .skeleton.row.short {
-    height: 60px;
-  }
+  .loading-lines span:nth-child(2) { width: 76%; animation-delay: 120ms; }
+  .loading-lines span:nth-child(3) { width: 48%; animation-delay: 240ms; }
 
-  @keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
+  @keyframes loading-pulse {
+    from { opacity: 0.35; }
+    to { opacity: 0.85; }
   }
 
   /* cchubber analyzers — phase 4 */
@@ -1345,7 +1372,7 @@
   .tool-row { display: grid; grid-template-columns: 120px 1fr 110px; gap: 10px; align-items: center; font-size: 12px; }
   .tool-name { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tool-bar-wrap { background: var(--bg-elevated); height: 6px; border-radius: 99px; overflow: hidden; }
-  .tool-bar { background: var(--accent); height: 100%; border-radius: 99px; transition: width 0.4s var(--ease); }
+  .tool-bar { background: var(--accent); height: 100%; border-radius: 99px; }
   .tool-count { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 11px; }
 
   .prompt-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
@@ -1354,7 +1381,37 @@
   .prompt-project { font-weight: 700; color: var(--text-primary); }
   .prompt-label { color: var(--accent); background: var(--accent-dim); padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; }
   .prompt-scores { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 11px; }
-  .prompt-preview { font-size: 11px; color: var(--text-secondary); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+  .prompt-disclosure { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+  .prompt-privacy { font-size: 11px; color: var(--text-muted); }
+  .prompt-toggle {
+    padding: 4px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 650;
+    cursor: pointer;
+  }
+  .prompt-toggle:hover { color: var(--text-primary); border-color: var(--border-hover); }
+  .prompt-preview {
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 640px) {
+    .report-loading { grid-template-columns: 1fr; gap: 16px; min-height: 0; padding: 18px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .loading-lines span { animation: none; opacity: 0.65; }
+  }
 
   /* Session Topology (trace) */
   .trace-card { background: var(--panel-sheen), var(--surface-panel); box-shadow: var(--elev-1); }

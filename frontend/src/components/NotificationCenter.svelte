@@ -256,7 +256,6 @@
     display: grid;
     place-items: center;
     flex: 0 0 30px;
-    -webkit-app-region: no-drag;
   }
   .notification-trigger {
     position: relative;

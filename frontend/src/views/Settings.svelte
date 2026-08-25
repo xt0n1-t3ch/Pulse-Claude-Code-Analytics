@@ -272,7 +272,7 @@
 <div class="settings-view app-view">
   <div class="view-header">
     <div class="settings-title">
-      <h2 class="view-title">Settings</h2>
+      <h1 class="view-title">Settings</h1>
       <span class="version-chip">{$health?.version ? `v${$health.version}` : "Version unavailable"}</span>
     </div>
     <button type="button" class="btn check-updates-btn" onclick={checkForUpdates} aria-label="Check for application updates">
@@ -387,7 +387,7 @@
       <header class="s-card-head">
         <div class="head-accent" aria-hidden="true"></div>
         <div class="head-text">
-          <h3 class="s-card-title">Data sources</h3>
+          <h2 class="s-card-title">Data sources</h2>
           <p class="s-card-desc">Where Pulse reads session, usage, and presence signals from.</p>
         </div>
       </header>
@@ -420,7 +420,7 @@
       <header class="s-card-head">
         <div class="head-accent" aria-hidden="true"></div>
         <div class="head-text">
-          <h3 class="s-card-title">Data management</h3>
+          <h2 class="s-card-title">Data management</h2>
           <p class="s-card-desc">Export or reset the local analytics database. Destructive actions are irreversible.</p>
         </div>
       </header>

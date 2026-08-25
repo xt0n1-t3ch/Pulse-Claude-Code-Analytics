@@ -7,6 +7,7 @@
     sessions,
     selectedAccessRoutes,
     selectedAnalyticsProviderScope,
+    snapshotDiagnostics,
   } from "../lib/stores";
   import { providerMatchesAnalyticsScope } from "../lib/access";
   import { fmtTokens, fmtCost, fmtExactCost, fmtDuration, fmtPct, fmtTps } from "../lib/utils";
@@ -283,12 +284,26 @@
           <h2>Live workspace</h2>
           <p>Your current session — context, monetary value, and throughput.</p>
         </div>
-        {#if $backendConnection !== "live"}
+        {#if $backendConnection !== "live" || $snapshotDiagnostics.discordSettingsError}
           <div class="home-status" aria-label="Connection status">
-            <span class="status-chip" class:warn={$backendConnection === "disconnected"}>
-              <i></i>
-              {$backendConnection === "disconnected" ? "Reconnecting…" : "Syncing…"}
-            </span>
+            {#if $backendConnection !== "live"}
+              <span class="status-chip" class:warn={$backendConnection === "disconnected"}>
+                <i aria-hidden="true"></i>
+                {$backendConnection === "disconnected" ? "Reconnecting…" : "Syncing…"}
+              </span>
+            {/if}
+            {#if $snapshotDiagnostics.discordSettingsError}
+              <span
+                class="status-chip warn"
+                role="status"
+                aria-label="Discord presence degraded"
+                title={$snapshotDiagnostics.discordSettingsError}
+                data-discord-settings-status
+              >
+                <i aria-hidden="true"></i>
+                Discord settings degraded
+              </span>
+            {/if}
           </div>
         {/if}
       </header>
@@ -523,7 +538,7 @@
 
 <style>
   .dashboard {
-    min-height: 100%;
+    min-height: 0;
     display: flex;
     flex-direction: column;
   }
@@ -545,12 +560,13 @@
   .status-chip.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
   .status-chip.warn i { background: var(--warning); }
   .home-grid {
-    flex: 1;
+    flex: 0 0 auto;
     display: grid;
-    grid-template-columns: clamp(280px, 23vw, 360px) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0;
-    align-items: stretch;
-    min-height: 100%;
+    align-items: start;
+    align-content: start;
+    min-height: 0;
     /* One unified surface: the grid itself is the card. Its two columns
        (Provider limits + Live workspace) share this matte panel and are separated by
        a single interior divider, never two floating cards. */
@@ -578,11 +594,9 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    /* Column of the shared home-grid card, divided from Provider limits by one
-       interior hairline instead of its own border/shadow. */
-    border-left: 1px solid var(--divider);
+    border-top: 1px solid var(--divider);
   }
-  .home-grid.without-allowances .work-now { border-left: 0; }
+  .home-grid.without-allowances .work-now { border-top: 0; }
   .work-now-head {
     display: flex;
     align-items: flex-start;

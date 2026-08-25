@@ -19,6 +19,12 @@ const TABLE: &str = "pulse_notifications";
 const DEDUPE_TABLE: &str = "pulse_notification_state";
 const MIGRATION_TABLE: &str = "pulse_notification_migrations";
 const LEGACY_RESET_MIGRATION: &str = "dismiss_legacy_quota_reset_rows_v2";
+/// Before access-window keys included the duration, two windows from one
+/// model-scoped envelope shared a ledger and could alternate into a false reset
+/// on every poll. Those rows do not carry enough source identity to repair
+/// retrospectively, so preserve them for audit while removing them from the
+/// user-visible feed once the corrected producer starts.
+const COLLIDED_RESET_MIGRATION: &str = "dismiss_collided_quota_reset_rows_v3";
 /// One-time cleanup of provider-health / quota-threshold / Discord-connectivity
 /// rows written by a build that alerted on every poll-cadence transition. Those
 /// kinds are no longer emitted natively, so every existing row is spam; dismiss
@@ -104,6 +110,17 @@ struct ObserveOptions {
     repeat_unchanged: bool,
     suppress_unnotified_recovery: bool,
     notify_on_change: fn(&str, &str) -> bool,
+}
+
+/// One provider-window observation at the reset state-machine boundary.
+pub struct QuotaResetObservation<'a> {
+    pub provider: &'a str,
+    pub window_identity: &'a str,
+    pub window_label: &'a str,
+    pub used_percent: f64,
+    pub remaining_percent: f64,
+    pub reset_at: Option<DateTime<Utc>>,
+    pub observed_at: DateTime<Utc>,
 }
 
 impl<'conn> NotificationStore<'conn> {
@@ -202,6 +219,32 @@ impl<'conn> NotificationStore<'conn> {
                      VALUES (?1, ?2)"
                 ),
                 params![SPURIOUS_ALERT_MIGRATION, Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        let collided_reset_applied: Option<String> = transaction
+            .query_row(
+                &format!("SELECT migration FROM {MIGRATION_TABLE} WHERE migration = ?1"),
+                [COLLIDED_RESET_MIGRATION],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if collided_reset_applied.is_none() {
+            let applied_at = Utc::now().to_rfc3339();
+            transaction.execute(
+                &format!(
+                    "UPDATE {TABLE}
+                     SET dismissed_at = COALESCE(dismissed_at, ?1)
+                     WHERE kind = 'quota_reset'"
+                ),
+                [&applied_at],
+            )?;
+            transaction.execute(
+                &format!(
+                    "INSERT INTO {MIGRATION_TABLE} (migration, applied_at)
+                     VALUES (?1, ?2)"
+                ),
+                params![COLLIDED_RESET_MIGRATION, &applied_at],
             )?;
         }
         transaction.commit()?;
@@ -311,6 +354,34 @@ impl<'conn> NotificationStore<'conn> {
         reset_at: Option<DateTime<Utc>>,
         at: DateTime<Utc>,
     ) -> Result<Option<NotificationRecord>> {
+        let display_window = humanize_window(window);
+        self.observe_quota_reset_transition_for_window(QuotaResetObservation {
+            provider,
+            window_identity: window,
+            window_label: &display_window,
+            used_percent,
+            remaining_percent,
+            reset_at,
+            observed_at: at,
+        })
+    }
+
+    /// Variant used by access-route consumers that own a stable machine key
+    /// and a separate human label. Dedupe always follows the machine identity;
+    /// notification copy follows the provider-facing label.
+    pub fn observe_quota_reset_transition_for_window(
+        &self,
+        observation: QuotaResetObservation<'_>,
+    ) -> Result<Option<NotificationRecord>> {
+        let QuotaResetObservation {
+            provider,
+            window_identity,
+            window_label,
+            used_percent,
+            remaining_percent,
+            reset_at,
+            observed_at,
+        } = observation;
         let provider = provider.trim().to_ascii_lowercase();
         let (state, notify_on_change) = match provider.as_str() {
             "codex"
@@ -330,11 +401,16 @@ impl<'conn> NotificationStore<'conn> {
             _ => return Ok(None),
         };
         let display_provider = humanize_provider(&provider);
-        let display_window = humanize_window(window);
+        let display_window = sanitize_display_text(window_label);
+        let display_window = if display_window.is_empty() {
+            humanize_window(window_identity)
+        } else {
+            display_window
+        };
         let spec = NotificationSpec {
             kind: NotificationKind::QuotaReset,
             provider: provider.to_string(),
-            key: window.to_string(),
+            key: window_identity.to_string(),
             title: format!("{display_provider} limit reset"),
             body: reset_at
                 .map(|reset| {
@@ -348,12 +424,12 @@ impl<'conn> NotificationStore<'conn> {
                 }),
             action: Some("View quota details".to_string()),
         };
-        let key = format!("quota_reset:{provider}:{window}");
+        let key = format!("quota_reset:{provider}:{window_identity}");
         self.observe_with_key(
             spec,
             &key,
             state,
-            at,
+            observed_at,
             ObserveOptions {
                 notify_initial: false,
                 repeat_unchanged: false,

@@ -6,6 +6,8 @@ use crate::db::HistoricalSession;
 
 use super::session_trace::SessionTrace;
 
+const MAX_PROMPT_PREVIEW_CHARS: usize = 240;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptComplexitySession {
     pub session_id: String,
@@ -50,7 +52,7 @@ pub fn analyze(
             complexity_score: complexity,
             specificity_score: specificity,
             label: complexity_label(complexity),
-            preview: prompt.to_string(),
+            preview: bounded_prompt_preview(prompt),
         });
     }
 
@@ -110,6 +112,20 @@ pub fn analyze(
         diagnosis,
         top_sessions: scored.into_iter().take(8).collect(),
     }
+}
+
+fn bounded_prompt_preview(prompt: &str) -> String {
+    let normalized = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= MAX_PROMPT_PREVIEW_CHARS {
+        return normalized;
+    }
+
+    let mut preview = normalized
+        .chars()
+        .take(MAX_PROMPT_PREVIEW_CHARS - 1)
+        .collect::<String>();
+    preview.push('…');
+    preview
 }
 
 pub(crate) fn complexity_score(prompt: &str) -> u8 {
@@ -247,5 +263,17 @@ mod tests {
     fn vague_prompt_scores_low_specificity() {
         let prompt = "help me with this weird bug";
         assert!(specificity_score(prompt) < 45);
+    }
+
+    #[test]
+    fn prompt_preview_is_single_line_bounded_and_omits_the_tail() {
+        let prompt = format!("Start\nwith\tcontext {} SECRET_TAIL", "x".repeat(400));
+        let preview = bounded_prompt_preview(&prompt);
+
+        assert!(preview.chars().count() <= 240);
+        assert!(!preview.contains('\n'));
+        assert!(!preview.contains('\t'));
+        assert!(!preview.contains("SECRET_TAIL"));
+        assert!(preview.ends_with('…'));
     }
 }
