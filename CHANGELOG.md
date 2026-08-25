@@ -4,6 +4,18 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [1.7.7] - 2026-08-25
+
+Pulse 1.7.7 publishes the complete 1.7.6 patch candidate after renewing the
+time-bounded RustSec review contract that correctly stopped the first release
+attempt before any artifacts were published.
+
+### Security
+
+- Re-reviewed the 19 accepted Tauri/GTK3 and build-time RustSec warnings against
+  the current advisory database and extended their fail-closed review window to
+  September 25, 2026. No new vulnerability exception was added.
+
 ## [1.7.6] - 2026-08-25
 
 Pulse 1.7.6 is a patch release that makes update availability truthful on each
