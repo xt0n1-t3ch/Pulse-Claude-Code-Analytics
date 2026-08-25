@@ -46,7 +46,7 @@ Pulse uses an ultra-dark operational shell with a true-black canvas. The canonic
 ## Persistence and updates
 
 - Discord settings save through the existing Tauri commands. The UI exposes `Saving changes...` and `Saved automatically`; a failed write still rolls back to backend truth.
-- Update discovery runs automatically. `New Update Available` exposes one explicit **Update** action; after the signed updater successfully downloads and installs, Pulse relaunches itself.
+- Update discovery runs automatically. `New Update Available` exposes **Update** only after a signed platform updater passes preflight; otherwise it offers **Open release**. A successful signed install relaunches Pulse.
 
 ## Focused validators
 

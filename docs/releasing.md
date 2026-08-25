@@ -14,7 +14,7 @@ README, docs-index, and changelog version surface, plus
 
 Pulse additionally refuses release when `codex-presence-core` is a path
 dependency. Pulse v1.7.5 consumes core 2.0.0 from the immutable upstream
-`v1.10.2` release at its full 40-character Git revision; the canonical Git
+`v1.10.3` release at its full 40-character Git revision; the canonical Git
 dependency and `src/codex/UPSTREAM.json` must carry the same SHA.
 
 ## Local verification (replaces CI)

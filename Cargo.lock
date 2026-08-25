@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "cc-discord-presence"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -658,7 +658,7 @@ checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 [[package]]
 name = "codex-presence-core"
 version = "2.0.0"
-source = "git+https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence?rev=a508507e0849fd5c9e09c7d1c55eebe2d199cfc0#a508507e0849fd5c9e09c7d1c55eebe2d199cfc0"
+source = "git+https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence?rev=9d20ffdb1c4ec6fa37edc00952badd041ec5bc02#9d20ffdb1c4ec6fa37edc00952badd041ec5bc02"
 dependencies = [
  "chrono",
  "serde",
@@ -3374,7 +3374,7 @@ dependencies = [
 
 [[package]]
 name = "pulse"
-version = "1.7.5"
+version = "1.7.6"
 dependencies = [
  "anyhow",
  "cc-discord-presence",

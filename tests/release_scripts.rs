@@ -126,11 +126,11 @@ fn vendored_windows_polling_commands_use_silent_launcher() {
 
     assert!(
         manifest.contains(r#""schema_version": 3"#)
-            && manifest.contains(r#""canonical_release": "v1.10.2""#)
+            && manifest.contains(r#""canonical_release": "v1.10.3""#)
             && manifest
-                .contains(r#""canonical_commit": "a508507e0849fd5c9e09c7d1c55eebe2d199cfc0""#)
+                .contains(r#""canonical_commit": "9d20ffdb1c4ec6fa37edc00952badd041ec5bc02""#)
             && manifest.contains(r#""mode": "git-rev""#)
-            && manifest.contains(r#""rev": "a508507e0849fd5c9e09c7d1c55eebe2d199cfc0""#)
+            && manifest.contains(r#""rev": "9d20ffdb1c4ec6fa37edc00952badd041ec5bc02""#)
             && manifest.contains(r#""version": "2.0.0""#)
             && manifest.contains(r#""package": "codex-presence-core""#),
         "Pulse must declare the promoted immutable core contract"
@@ -610,12 +610,16 @@ fn write_complete_platform_artifacts(artifacts: &Path) {
     for platform in ["linux-x64", "linux-arm64"] {
         for extension in ["deb", "rpm", "AppImage"] {
             write(
-                artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.{extension}")),
+                artifacts.join(format!(
+                    "pulse-{platform}/pulse-{platform}-Pulse.{extension}"
+                )),
                 extension,
             );
         }
         write(
-            artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.AppImage.sig")),
+            artifacts.join(format!(
+                "pulse-{platform}/pulse-{platform}-Pulse.AppImage.sig"
+            )),
             &format!("signature-for-{platform}"),
         );
     }
@@ -778,7 +782,10 @@ fn release_matrix_requires_native_arm64_artifacts_for_windows_and_linux() {
         "ubuntu-22.04-arm",
         "aarch64-unknown-linux-gnu",
     ] {
-        assert!(workflow.contains(value), "release matrix is missing {value}");
+        assert!(
+            workflow.contains(value),
+            "release matrix is missing {value}"
+        );
     }
     for platform in ["windows-arm64", "linux-arm64"] {
         assert!(

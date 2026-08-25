@@ -4,6 +4,12 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-08-25
+
+Pulse 1.7.6 is a patch release that makes update availability truthful on each
+supported platform, completes native x64 and ARM64 release coverage, and
+refines the operational workspace without changing public data contracts.
+
 ### Fixed
 
 - The repository status row now links to Pulse's real local quality gate instead
@@ -12,6 +18,19 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 - Cross-platform releases now build and verify native Windows, macOS, and Linux
   artifacts for both x64 and ARM64, including architecture-specific updater
   targets, Windows SBOMs, checksums, and installer selection.
+- Pulse now offers **Update** only after Tauri confirms that the current
+  platform has a signed updater manifest. Missing or invalid updater metadata
+  shows **Open release** immediately instead of failing after approval, and the
+  verified update handle is reused for download and installation.
+- Pulse's local Codex adapter recognizes `codex_work_desktop` sessions as the
+  desktop app, matching the canonical Rich Presence classifier.
+
+### Changed
+
+- Refreshed Svelte and the frontend interaction test harness to compatible
+  patch releases.
+- Promoted the immutable Codex Presence Core pin to canonical v1.10.3 while
+  retaining Pulse-owned desktop classification at the adapter boundary.
 
 ## [1.7.5] - 2026-08-25
 

@@ -864,6 +864,17 @@ mod tests {
     }
 
     #[test]
+    fn session_meta_treats_work_desktop_originator_as_desktop() {
+        let snapshot = parse_one(
+            r#"{"type":"session_meta","payload":{"id":"work-desktop","cwd":"C:\\repo\\app","originator":"codex_work_desktop","source":"vscode"}}"#,
+        );
+        assert_eq!(
+            snapshot.detected_surface(),
+            Some(crate::codex::config::PresenceSurface::Desktop)
+        );
+    }
+
+    #[test]
     fn session_meta_ignores_non_string_source_values() {
         let snapshot = parse_one(
             r#"{"type":"session_meta","payload":{"id":"subagent","cwd":"C:\\repo\\app","originator":"codex_vscode","source":{"subagent":{"thread_spawn":{"depth":1}}}}}"#,
