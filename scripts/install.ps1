@@ -7,14 +7,20 @@ $Api  = "https://api.github.com/repos/$Repo/releases/latest"
 
 Write-Host "→ Fetching latest release..." -ForegroundColor Cyan
 $release = Invoke-RestMethod -Uri $Api -Headers @{ 'User-Agent' = 'pulse-installer' }
+$architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+$assetArchitecture = switch ($architecture) {
+  'X64' { 'x64' }
+  'Arm64' { 'arm64' }
+  default { throw "Unsupported Windows architecture: $architecture" }
+}
 
 $asset = $release.assets |
-  Where-Object { $_.name -match '_x64-setup\.exe$' } |
+  Where-Object { $_.name -match "_$assetArchitecture-setup\.exe$" } |
   Select-Object -First 1
 
 if (-not $asset) {
   $asset = $release.assets |
-    Where-Object { $_.name -match '_x64_en-US\.msi$' } |
+    Where-Object { $_.name -match "_${assetArchitecture}_en-US\.msi$" } |
     Select-Object -First 1
 }
 

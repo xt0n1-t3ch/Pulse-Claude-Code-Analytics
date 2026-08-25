@@ -18,6 +18,10 @@ $requirements = @(
   [pscustomobject]@{ Prefix = "pulse-windows-x64-"; Suffix = ".exe.sig"; UpdaterTarget = "windows-x86_64" },
   [pscustomobject]@{ Prefix = "pulse-windows-x64-"; Suffix = ".msi" },
   [pscustomobject]@{ Prefix = "pulse-windows-x64"; Suffix = ".spdx.json" },
+  [pscustomobject]@{ Prefix = "pulse-windows-arm64-"; Suffix = ".exe" },
+  [pscustomobject]@{ Prefix = "pulse-windows-arm64-"; Suffix = ".exe.sig"; UpdaterTarget = "windows-aarch64" },
+  [pscustomobject]@{ Prefix = "pulse-windows-arm64-"; Suffix = ".msi" },
+  [pscustomobject]@{ Prefix = "pulse-windows-arm64"; Suffix = ".spdx.json" },
   [pscustomobject]@{ Prefix = "pulse-macos-arm64-"; Suffix = ".app.tar.gz" },
   [pscustomobject]@{ Prefix = "pulse-macos-arm64-"; Suffix = ".app.tar.gz.sig"; UpdaterTarget = "darwin-aarch64" },
   [pscustomobject]@{ Prefix = "pulse-macos-arm64-"; Suffix = ".dmg" },
@@ -27,7 +31,11 @@ $requirements = @(
   [pscustomobject]@{ Prefix = "pulse-linux-x64-"; Suffix = ".deb" },
   [pscustomobject]@{ Prefix = "pulse-linux-x64-"; Suffix = ".rpm" },
   [pscustomobject]@{ Prefix = "pulse-linux-x64-"; Suffix = ".AppImage" },
-  [pscustomobject]@{ Prefix = "pulse-linux-x64-"; Suffix = ".AppImage.sig"; UpdaterTarget = "linux-x86_64" }
+  [pscustomobject]@{ Prefix = "pulse-linux-x64-"; Suffix = ".AppImage.sig"; UpdaterTarget = "linux-x86_64" },
+  [pscustomobject]@{ Prefix = "pulse-linux-arm64-"; Suffix = ".deb" },
+  [pscustomobject]@{ Prefix = "pulse-linux-arm64-"; Suffix = ".rpm" },
+  [pscustomobject]@{ Prefix = "pulse-linux-arm64-"; Suffix = ".AppImage" },
+  [pscustomobject]@{ Prefix = "pulse-linux-arm64-"; Suffix = ".AppImage.sig"; UpdaterTarget = "linux-aarch64" }
 )
 
 if ($Tag -notmatch '^v(?<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?)$') {
