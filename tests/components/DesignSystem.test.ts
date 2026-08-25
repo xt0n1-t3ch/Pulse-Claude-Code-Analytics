@@ -10,6 +10,8 @@ describe("Signal Ledger design system", () => {
     expect(css).toContain("--bg-primary: #000000");
     expect(css).toContain("--surface-panel: #070707");
     expect(css).toContain("--accent: #e8edf2");
+    expect(css).toContain("--codex: #4c9cff");
+    expect(css).toContain("--info: #4c9cff");
     expect(css).toContain("--success: #5dbb88");
     expect(css).toContain("--warning: #d6a65c");
     expect(css).toContain("--danger: #d96b73");
@@ -23,7 +25,15 @@ describe("Signal Ledger design system", () => {
   it("keeps provider identity scoped and uses blue for Codex", () => {
     const provider = readFileSync(resolve(process.cwd(), "src/lib/provider.ts"), "utf8");
     expect(provider).toContain('codex: {');
-    expect(provider).toContain('accent: "#3b82f6"');
+    expect(provider).toContain('accent: "#4c9cff"');
+  });
+
+  it("links repository status badges only to workflows that exist", () => {
+    const readme = readFileSync(resolve(process.cwd(), "..", "README.md"), "utf8");
+
+    expect(readme).not.toContain("actions/workflows/ci.yml");
+    expect(readme).toContain("quality_gate-local");
+    expect(readme).toContain("docs/releasing.md");
   });
 
   it("gives every primary view one concise header and one centralized matte surface language", () => {

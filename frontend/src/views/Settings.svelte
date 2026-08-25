@@ -291,7 +291,7 @@
         <div class="it-text">
           <span class="it-kicker">Active identity</span>
           <div class="it-line">
-            <span class="it-product" style="color: {$providerProfile.accent}">{$providerProfile.productName}</span>
+            <span class="it-product">{$providerProfile.productName}</span>
             <span class="it-sep">·</span>
             <span class="it-plan">{activePlanInfo ? activePlanLabel : "Detecting plan…"}</span>
           </div>
@@ -577,7 +577,10 @@
     line-height: 1.15;
     color: var(--text-primary);
   }
-  .it-product { font-weight: 700; }
+  .it-product { color: var(--provider-accent); font-weight: 700; }
+  :global([data-theme="light"]) .it-product {
+    color: color-mix(in srgb, var(--provider-accent) 62%, #000);
+  }
   .it-sep { color: var(--border-strong); font-weight: 400; }
   .it-plan { color: var(--text-secondary); font-weight: 500; }
   .it-sub {
