@@ -25,7 +25,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [ui-design-system.md](ui-design-system.md) | Ultra-dark operational shell, semantic colors, one-fact/one-owner hierarchy, sensitive-content disclosure, responsive states, autosave and updater affordances |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
-## Unreleased docs refresh
+## v1.7.5 docs refresh
 
 - Documented the dynamic Codex account-quota contract: only windows reported by
   the effective global response reach shared Pulse surfaces; fresh reads remove
@@ -225,10 +225,10 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- Released app: **v1.7.2**
-- Unreleased target: **v1.7.5**
+- Released app: **v1.7.5**
+- Unreleased target: **not selected**
 - Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v5**
-- Last docs refresh: 2026-08-24 (provider isolation, dynamic quotas,
+- Last docs refresh: 2026-08-25 (provider isolation, dynamic quotas,
   durable notification identity, responsive UI overhaul, and route-split
   performance evidence)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

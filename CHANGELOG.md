@@ -4,6 +4,13 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-08-25
+
+Pulse 1.7.5 isolates analytics scope from Discord publishing, keeps Codex
+quota windows faithful to fresh provider data, makes reset dismissals durable,
+and ships a tighter, faster desktop workspace without changing public command
+or database contracts.
+
 ### Fixed
 
 - The frameless Windows title bar uses Tauri's native drag command again,

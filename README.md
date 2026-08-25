@@ -24,12 +24,13 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.2</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.5</h2>
 
-- **Incremental by construction** — unchanged transcripts read no historical body bytes; appends read only their bounded tail anchor and delta, while active-session checkpoints recover safely after restart.
-- **Money with provenance** — provider-billed spend and documented API-equivalent value remain separate through SQLite, dashboards, reports, budgets, and exports; unknown values stay unavailable.
-- **Native Daybreak models** — `gpt-daybreak-blue-latest` and `gpt-5.6-cyber` resolve as GPT-5.6-Cyber-Blue and GPT-5.6-Cyber-Red with six observed reasoning tiers and no invented Blue pricing.
-- **Published typed core** — Pulse pins `codex-presence-core` 2.0.0 to the immutable upstream `v1.10.2` release and its exact Git revision.
+- **Independent provider controls** — analytics scope changes never switch the Claude or Codex provider currently published to Discord.
+- **Provider-truthful limits** — fresh Codex responses add and remove dynamic quota windows; an absent five-hour window stays absent instead of becoming `100% remaining`.
+- **Durable reset notifications** — equivalent reset events keep one identity across polls, refreshes, and restarts while distinct provider windows remain separate.
+- **Faster operational shell** — the centered provider strip, compact allowance ledger, route-loaded views, and bounded Reports excerpts reduce empty space and keep sensitive prompts hidden until reveal.
+- **Safe degraded snapshots** — malformed Discord settings no longer blank analytics, and poisoned shared state fails closed instead of publishing invented telemetry.
 
 <details>
 <summary>Previous v1.6.5 highlights</summary>
@@ -74,7 +75,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 </details>
 
-**[Download v1.7.2](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.7.5](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
