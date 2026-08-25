@@ -9,6 +9,9 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 - The repository status row now links to Pulse's real local quality gate instead
   of a removed CI workflow, and the dashboard source strip uses the full
   operational width with a higher-contrast Codex signal color.
+- Cross-platform releases now build and verify native Windows, macOS, and Linux
+  artifacts for both x64 and ARM64, including architecture-specific updater
+  targets, Windows SBOMs, checksums, and installer selection.
 
 ## [1.7.5] - 2026-08-25
 

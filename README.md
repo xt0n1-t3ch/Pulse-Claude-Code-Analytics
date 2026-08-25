@@ -143,6 +143,8 @@ Or grab an installer from the [latest release](https://github.com/xt0n1-t3ch/Pul
 | :--- | :--- |
 | `Pulse_x.y.z_x64-setup.exe` | NSIS installer — recommended |
 | `Pulse_x.y.z_x64_en-US.msi` | MSI installer |
+| `Pulse_x.y.z_arm64-setup.exe` | Windows on ARM NSIS installer |
+| `Pulse_x.y.z_arm64_en-US.msi` | Windows on ARM MSI installer |
 
 ### macOS
 
@@ -161,11 +163,14 @@ curl -fsSL https://raw.githubusercontent.com/xt0n1-t3ch/Pulse-Claude-Code-Analyt
 curl -fsSL https://raw.githubusercontent.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/main/scripts/install.sh | bash
 ```
 
-| Asset | Distro |
+| Asset | Architecture / distro |
 | :--- | :--- |
-| `pulse_x.y.z_amd64.deb` | Debian / Ubuntu |
-| `pulse-x.y.z-1.x86_64.rpm` | Fedora / RHEL |
-| `pulse_x.y.z_amd64.AppImage` | Any (portable) |
+| `pulse_x.y.z_amd64.deb` | Debian / Ubuntu x64 |
+| `pulse_x.y.z_arm64.deb` | Debian / Ubuntu ARM64 |
+| `pulse-x.y.z-1.x86_64.rpm` | Fedora / RHEL x64 |
+| `pulse-x.y.z-1.aarch64.rpm` | Fedora / RHEL ARM64 |
+| `pulse_x.y.z_amd64.AppImage` | Portable x64 |
+| `pulse_x.y.z_aarch64.AppImage` | Portable ARM64 |
 
 ### From source
 

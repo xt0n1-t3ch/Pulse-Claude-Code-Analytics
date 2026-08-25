@@ -23,12 +23,25 @@ case "$OS" in
     esac
     ;;
   Linux)
+    case "$ARCH" in
+      x86_64|amd64)
+        DEB_ARCH='amd64'
+        RPM_ARCH='x86_64'
+        APPIMAGE_ARCH='amd64'
+        ;;
+      aarch64|arm64)
+        DEB_ARCH='arm64'
+        RPM_ARCH='aarch64'
+        APPIMAGE_ARCH='aarch64'
+        ;;
+      *) die "Unsupported Linux arch: $ARCH" ;;
+    esac
     if [ -f /etc/debian_version ]; then
-      PATTERN='_amd64\.deb$'
+      PATTERN="_${DEB_ARCH}\\.deb$"
     elif [ -f /etc/redhat-release ] || [ -f /etc/fedora-release ]; then
-      PATTERN='\.x86_64\.rpm$'
+      PATTERN="\\.${RPM_ARCH}\\.rpm$"
     else
-      PATTERN='_amd64\.AppImage$'
+      PATTERN="_${APPIMAGE_ARCH}\\.AppImage$"
     fi
     ;;
   *) die "Unsupported OS: $OS (try the manual download)" ;;

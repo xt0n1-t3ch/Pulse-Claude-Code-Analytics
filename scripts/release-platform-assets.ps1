@@ -3,7 +3,7 @@ param(
   [Parameter(Mandatory)] [string]$InputDirectory,
   [Parameter(Mandatory)] [string]$OutputDirectory,
   [Parameter(Mandatory)]
-  [ValidateSet("windows-x64", "macos-arm64", "macos-x64", "linux-x64")]
+  [ValidateSet("windows-x64", "windows-arm64", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64")]
   [string]$Platform
 )
 
@@ -14,9 +14,9 @@ $ErrorActionPreference = "Stop"
 # `createUpdaterArtifacts` is on. They are required, not optional: a release
 # without them cannot be offered through the in-app updater.
 $requiredSuffixes = switch ($Platform) {
-  "windows-x64" { @(".exe", ".exe.sig", ".msi") }
+  { $_ -in @("windows-x64", "windows-arm64") } { @(".exe", ".exe.sig", ".msi") }
   { $_ -in @("macos-arm64", "macos-x64") } { @(".app.tar.gz", ".app.tar.gz.sig", ".dmg") }
-  "linux-x64" { @(".deb", ".rpm", ".AppImage", ".AppImage.sig") }
+  { $_ -in @("linux-x64", "linux-arm64") } { @(".deb", ".rpm", ".AppImage", ".AppImage.sig") }
 }
 
 $inputPath = (Resolve-Path -LiteralPath $InputDirectory).Path

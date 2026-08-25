@@ -394,9 +394,11 @@ fn release_assets_publish_a_signed_updater_manifest_for_every_platform() {
     assert!(manifest.contains(r#""version": "1.6.1""#), "{manifest}");
     for (target, payload) in [
         ("windows-x86_64", "pulse-windows-x64-Pulse.exe"),
+        ("windows-aarch64", "pulse-windows-arm64-Pulse.exe"),
         ("darwin-aarch64", "pulse-macos-arm64-Pulse.app.tar.gz"),
         ("darwin-x86_64", "pulse-macos-x64-Pulse.app.tar.gz"),
         ("linux-x86_64", "pulse-linux-x64-Pulse.AppImage"),
+        ("linux-aarch64", "pulse-linux-arm64-Pulse.AppImage"),
     ] {
         assert!(manifest.contains(target), "{target} missing:\n{manifest}");
         assert!(
@@ -412,7 +414,7 @@ fn release_assets_publish_a_signed_updater_manifest_for_every_platform() {
     // The manifest itself must be covered by the checksum file it ships with.
     let sums = read(output.join("SHA256SUMS.txt"));
     assert!(sums.contains("  latest.json\n"), "{sums}");
-    assert_eq!(sums.lines().count(), 15, "{sums}");
+    assert_eq!(sums.lines().count(), 23, "{sums}");
 }
 
 #[test]
@@ -569,22 +571,24 @@ fn release_assets_reject_a_platform_without_its_updater_signature() {
 /// Writes one complete, signed artifact set so updater assertions start from a
 /// releasable state instead of rebuilding the fixture in each test.
 fn write_complete_platform_artifacts(artifacts: &Path) {
-    write(
-        artifacts.join("pulse-windows-x64/pulse-windows-x64-Pulse.exe"),
-        "exe",
-    );
-    write(
-        artifacts.join("pulse-windows-x64/pulse-windows-x64-Pulse.exe.sig"),
-        "signature-for-windows",
-    );
-    write(
-        artifacts.join("pulse-windows-x64/pulse-windows-x64-Pulse.msi"),
-        "msi",
-    );
-    write(
-        artifacts.join("pulse-windows-x64/pulse-windows-x64.spdx.json"),
-        r#"{"spdxVersion":"SPDX-2.3"}"#,
-    );
+    for platform in ["windows-x64", "windows-arm64"] {
+        write(
+            artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.exe")),
+            "exe",
+        );
+        write(
+            artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.exe.sig")),
+            &format!("signature-for-{platform}"),
+        );
+        write(
+            artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.msi")),
+            "msi",
+        );
+        write(
+            artifacts.join(format!("pulse-{platform}/pulse-{platform}.spdx.json")),
+            r#"{"spdxVersion":"SPDX-2.3"}"#,
+        );
+    }
     for platform in ["macos-arm64", "macos-x64"] {
         write(
             artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.dmg")),
@@ -603,16 +607,18 @@ fn write_complete_platform_artifacts(artifacts: &Path) {
             &format!("signature-for-{platform}"),
         );
     }
-    for extension in ["deb", "rpm", "AppImage"] {
+    for platform in ["linux-x64", "linux-arm64"] {
+        for extension in ["deb", "rpm", "AppImage"] {
+            write(
+                artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.{extension}")),
+                extension,
+            );
+        }
         write(
-            artifacts.join(format!("pulse-linux-x64/pulse-linux-x64-Pulse.{extension}")),
-            extension,
+            artifacts.join(format!("pulse-{platform}/pulse-{platform}-Pulse.AppImage.sig")),
+            &format!("signature-for-{platform}"),
         );
     }
-    write(
-        artifacts.join("pulse-linux-x64/pulse-linux-x64-Pulse.AppImage.sig"),
-        "signature-for-linux",
-    );
 }
 
 #[test]
@@ -753,6 +759,47 @@ fn manual_release_workflow_pins_actions_and_gates_publication_on_preflight() {
             );
         }
     }
+}
+
+#[test]
+fn release_matrix_requires_native_arm64_artifacts_for_windows_and_linux() {
+    let root = repository_root();
+    let workflow = read(root.join(".github/workflows/release.yml"));
+    let platform_assets = read(root.join("scripts/release-platform-assets.ps1"));
+    let release_assets = read(root.join("scripts/release-assets.ps1"));
+    let installer = read(root.join("scripts/install.sh"));
+    let windows_installer = read(root.join("scripts/install.ps1"));
+
+    for value in [
+        "windows-arm64",
+        "windows-11-arm",
+        "aarch64-pc-windows-msvc",
+        "linux-arm64",
+        "ubuntu-22.04-arm",
+        "aarch64-unknown-linux-gnu",
+    ] {
+        assert!(workflow.contains(value), "release matrix is missing {value}");
+    }
+    for platform in ["windows-arm64", "linux-arm64"] {
+        assert!(
+            platform_assets.contains(platform),
+            "platform collector is missing {platform}"
+        );
+        assert!(
+            release_assets.contains(platform),
+            "release assembler is missing {platform}"
+        );
+    }
+    for updater_target in ["windows-aarch64", "linux-aarch64"] {
+        assert!(
+            release_assets.contains(updater_target),
+            "updater manifest is missing {updater_target}"
+        );
+    }
+    assert!(installer.contains("aarch64"));
+    assert!(installer.contains("arm64"));
+    assert!(windows_installer.contains("OSArchitecture"));
+    assert!(windows_installer.contains("Arm64"));
 }
 
 #[test]
