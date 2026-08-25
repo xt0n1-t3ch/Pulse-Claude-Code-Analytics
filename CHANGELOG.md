@@ -4,9 +4,21 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-08-25
+
+Pulse 1.7.8 publishes the complete patch after the immutable release gate caught
+an architecture label missing from the Windows SBOM step before any v1.7.7
+artifacts became public.
+
+### Fixed
+
+- Windows x64 and ARM64 SBOM filenames now receive their matrix platform label
+  in the step that creates them, so the release assembler can verify and
+  publish the complete cross-platform asset set.
+
 ## [1.7.7] - 2026-08-25
 
-Pulse 1.7.7 publishes the complete 1.7.6 patch candidate after renewing the
+Pulse 1.7.7 was an unpublished release candidate that renewed the
 time-bounded RustSec review contract that correctly stopped the first release
 attempt before any artifacts were published.
 

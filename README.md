@@ -24,7 +24,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 ---
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.7</h2>
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.8</h2>
 
 - **Independent provider controls** — analytics scope changes never switch the Claude or Codex provider currently published to Discord.
 - **Provider-truthful limits** — fresh Codex responses add and remove dynamic quota windows; an absent five-hour window stays absent instead of becoming `100% remaining`.
@@ -75,7 +75,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 </details>
 
-**[Download v1.7.7](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.7.8](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
