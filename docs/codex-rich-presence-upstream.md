@@ -8,7 +8,7 @@ parsing or Discord line composition in TypeScript or a second Rust module.
 
 ## Promoted contract
 
-Pulse **v1.7.6** consumes `codex-presence-core` **2.0.0** from the immutable
+Pulse **v1.7.7** consumes `codex-presence-core` **2.0.0** from the immutable
 upstream **v1.10.3** release at commit
 `9d20ffdb1c4ec6fa37edc00952badd041ec5bc02`.
 

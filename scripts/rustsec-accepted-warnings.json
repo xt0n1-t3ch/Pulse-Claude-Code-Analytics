@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-07-09",
-  "review_after": "2026-08-09",
+  "reviewed_at": "2026-08-25",
+  "review_after": "2026-09-25",
   "framework": "Tauri 2.11.5",
   "advisories": [
     {
