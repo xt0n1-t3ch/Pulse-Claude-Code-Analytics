@@ -25,6 +25,13 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [ui-design-system.md](ui-design-system.md) | Ultra-dark operational shell, semantic colors, one-fact/one-owner hierarchy, sensitive-content disclosure, responsive states, autosave and updater affordances |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
 
+## v1.7.9 docs refresh
+
+Pulse v1.7.9 ships the operator-console overhaul: real local Discord identity in the
+Broadcast preview, canonical Codex limit naming (5-hour / Weekly), a subscription-real
+cost cockpit, de-nested Costs surfaces, Reports bundle caching with loading skeletons,
+`llms.txt` for repository discovery, and the promoted codex-presence-core v1.10.3 pin.
+
 ## v1.7.8 docs refresh
 
 - Made updater availability platform-truthful: signed preflight owns the

@@ -17,7 +17,7 @@ categories = ["command-line-utilities", "gui", "development-tools"]
 [dependencies]
 anyhow = "1.0.100"
 chrono = { version = "0.4.42", features = ["clock", "serde"] }
-codex-presence-core = { git = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence", rev = "a508507e0849fd5c9e09c7d1c55eebe2d199cfc0", version = "2.0.0" }
+codex-presence-core = { git = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence", rev = "9d20ffdb1c4ec6fa37edc00952badd041ec5bc02", version = "2.0.0" }
 clap = { version = "4.5.51", features = ["derive"] }
 ctrlc = "3.5.1"
 dirs = "6.0.0"
