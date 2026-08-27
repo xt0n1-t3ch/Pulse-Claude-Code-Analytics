@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, fireEvent } from "@testing-library/svelte";
+import { get } from "svelte/store";
 import type { AppUpdateInfo } from "@/lib/api";
+import { toasts } from "@/lib/stores";
 
 const SKIP_KEY = "pulse-update-skipped-version";
 
@@ -83,6 +85,34 @@ describe("UpdateBanner.svelte", () => {
 
     await waitFor(() => expect(checkAppUpdate).toHaveBeenCalledTimes(1));
     expect(container.querySelector(".update-pop")).toBeNull();
+  });
+
+  it("reports a failed forced check while keeping the startup probe silent", async () => {
+    checkAppUpdate.mockRejectedValue(new Error("offline"));
+    const UpdateBanner = await loadBanner();
+    const { container } = render(UpdateBanner);
+
+    await waitFor(() => expect(checkAppUpdate).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(container.querySelector(".update-pop")).toBeNull();
+    expect(get(toasts).map((t) => t.message)).not.toContain("Couldn't reach the update service.");
+
+    window.dispatchEvent(new CustomEvent("pulse:check-updates"));
+    await waitFor(() =>
+      expect(get(toasts).map((t) => t.message)).toContain("Couldn't reach the update service."),
+    );
+  });
+
+  it("tells the user they are current when a forced check finds nothing", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate({ update_available: false, latest_version: null }));
+    const UpdateBanner = await loadBanner();
+    render(UpdateBanner);
+    await waitFor(() => expect(checkAppUpdate).toHaveBeenCalledTimes(1));
+
+    window.dispatchEvent(new CustomEvent("pulse:check-updates"));
+    await waitFor(() =>
+      expect(get(toasts).map((t) => t.message)).toContain("You're already up to date."),
+    );
   });
 
   it("Later dismisses the popup without persisting a skip", async () => {
@@ -168,7 +198,7 @@ describe("UpdateBanner.svelte", () => {
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
 
-    expect(await findByText("New Update Available")).toBeTruthy();
+    expect(await findByText("Update available")).toBeTruthy();
     await fireEvent.click(await findByText("Update"));
 
     await waitFor(() => expect(downloadAndInstall).toHaveBeenCalledTimes(1));
@@ -235,7 +265,7 @@ describe("UpdateBanner.svelte", () => {
     await findByText("Feature update");
     await fireEvent.click(await findByText("Update"));
 
-    expect(await findByText(/In-app install failed/)).toBeTruthy();
+    expect(await findByText(/Update failed/)).toBeTruthy();
     expect(await findByText("Open release")).toBeTruthy();
     expect(await findByText("Retry update")).toBeTruthy();
   });

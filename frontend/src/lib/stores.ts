@@ -259,10 +259,18 @@ export async function refreshDiscordPresencePreview(): Promise<void> {
   }
 }
 
+let discordUserRequestSequence = 0;
+let discordUserAppliedSequence = 0;
+
 export async function loadDiscordUser(): Promise<void> {
+  const requestSequence = ++discordUserRequestSequence;
   try {
     const user = await getDiscordUser();
-    discordUser.set(user);
+    // A completed stale response stays usable when its newer sibling failed.
+    if (requestSequence > discordUserAppliedSequence) {
+      discordUserAppliedSequence = requestSequence;
+      discordUser.set(user);
+    }
   } catch (e) {
     console.warn("Discord user:", e);
   }

@@ -138,6 +138,21 @@ describe("AccessSourceBar", () => {
     expect(get(provider)).toBe("codex");
   });
 
+  it("gives Claude sign-in history one concise accessible name", () => {
+    const claude = route("claude-sub", "claude_subscription", "none");
+    claude.source.plan = null;
+    claude.availability = "unavailable";
+    claude.freshness = "unknown";
+    claude.local_history = { available: true, sessions: 12 };
+    accessSnapshot.set({ routes: [claude] });
+
+    const { getByRole } = render(AccessSourceBar);
+    const source = getByRole("button", { name: "Claude — sign in required" });
+    expect(source.textContent).toContain("Sign in required");
+    expect(source.querySelector(".source-dot")?.getAttribute("aria-label")).toBe("Sign in state");
+    expect(source.querySelector(".source-dot")?.hasAttribute("title")).toBe(false);
+  });
+
   it("turns the empty source state into one compact diagnostics action", () => {
     accessSnapshot.set({
       routes: [route("unproved", "open_ai_api", "none")],
@@ -190,7 +205,7 @@ describe("AccessSourceBar", () => {
     backendConnection.set("live");
 
     const { getByText } = render(AccessSourceBar);
-    expect(getByText("Attention required")).toBeTruthy();
+    expect(getByText("Needs attention")).toBeTruthy();
   });
 
   it("never labels stale provider proof as live", () => {

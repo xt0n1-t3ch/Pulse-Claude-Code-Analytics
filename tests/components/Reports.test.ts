@@ -131,6 +131,10 @@ function makeBundle(): ReportsBundle {
 
 let resolvers: Array<() => void> = [];
 let activeBundle = makeBundle();
+const reportExports = vi.hoisted(() => ({
+  markdown: vi.fn(async () => "# Pulse report"),
+  html: vi.fn(async () => "<html>Pulse report</html>"),
+}));
 const getReportsBundle = vi.fn(
   (_days?: number) =>
     new Promise<ReportsBundle>((resolve) => {
@@ -143,6 +147,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     getReportsBundle: (days?: number) => getReportsBundle(days),
+    generateMarkdownReport: reportExports.markdown,
+    generateHtmlReport: reportExports.html,
   };
 });
 
@@ -154,6 +160,8 @@ function flushAll(): void {
 describe("Reports.svelte", () => {
   beforeEach(() => {
     getReportsBundle.mockClear();
+    reportExports.markdown.mockClear();
+    reportExports.html.mockClear();
     resolvers = [];
     activeBundle = makeBundle();
     provider.set("claude");
@@ -194,6 +202,55 @@ describe("Reports.svelte", () => {
     expect(await findByText("Trim memory files")).toBeTruthy();
     expect(await findByText("Cache is doing its job.")).toBeTruthy();
     expect(getReportsBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows report skeletons without blocking header controls until the first bundle arrives", async () => {
+    const Reports = (await import("@/views/Reports.svelte")).default;
+    const { container, getByRole, findByText } = render(Reports);
+
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+
+    expect(container.querySelector("[data-reports-loading]")).not.toBeNull();
+    expect(container.querySelectorAll("[data-reports-loading] .skeleton").length).toBeGreaterThan(0);
+    expect((getByRole("button", { name: "7d" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((getByRole("button", { name: "Copy report" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((getByRole("button", { name: "Download HTML" }) as HTMLButtonElement).disabled).toBe(false);
+
+    flushAll();
+
+    expect(await findByText("Monetary value timeline")).toBeTruthy();
+    await waitFor(() => {
+      expect(container.querySelector("[data-reports-loading]")).toBeNull();
+    });
+  });
+
+  it("binds the view subtitle to the selected analysis window", async () => {
+    const Reports = (await import("@/views/Reports.svelte")).default;
+    const { getByText, findByText } = render(Reports);
+
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    flushAll();
+    expect(await findByText("30-day window")).toBeTruthy();
+
+    await fireEvent.click(getByText("1y"));
+    expect(await findByText("Year window")).toBeTruthy();
+  });
+
+  it("disables report exports while each request is pending", async () => {
+    let resolveMarkdown!: (value: string) => void;
+    reportExports.markdown.mockImplementationOnce(() => new Promise((resolve) => { resolveMarkdown = resolve; }));
+    const Reports = (await import("@/views/Reports.svelte")).default;
+    const { getByRole } = render(Reports);
+
+    await waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    flushAll();
+    const copy = getByRole("button", { name: "Copy report" });
+    await waitFor(() => expect((copy as HTMLButtonElement).disabled).toBe(false));
+    void fireEvent.click(copy);
+
+    await waitFor(() => expect((getByRole("button", { name: "Copying..." }) as HTMLButtonElement).disabled).toBe(true));
+    resolveMarkdown("# Pulse report");
+    await waitFor(() => expect((getByRole("button", { name: "Copy report" }) as HTMLButtonElement).disabled).toBe(false));
   });
 
   it("shows loading feedback on a re-fetch triggered by a filter change", async () => {

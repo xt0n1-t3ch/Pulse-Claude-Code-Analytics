@@ -20,7 +20,6 @@
   const navItems = [
     { id: "dashboard", label: "Home" },
     { id: "sessions", label: "Sessions" },
-    { id: "context", label: "Context" },
     { id: "costs", label: "Costs" },
     { id: "reports", label: "Reports" },
     { id: "discord", label: "Discord" },
@@ -93,7 +92,7 @@
 
   <div class="header-actions">
     <NotificationCenter />
-    <button title="Toggle theme" aria-label="Toggle theme" onclick={onToggleTheme}>
+    <button title="Toggle dark or light" aria-label="Toggle dark or light" onclick={onToggleTheme}>
       <IconSun size={17} stroke={1.7} />
     </button>
     <span class="action-divider"></span>

@@ -10,6 +10,7 @@
     allowancePresentation,
     windowLabel,
     type AccessKind,
+    type AccessQuotaWindow,
   } from "../lib/access";
   import { formatResetDateTime } from "../lib/utils";
 
@@ -53,6 +54,36 @@
       hour: "numeric",
       minute: "2-digit",
     }).format(date);
+  }
+
+  function canonicalWindowLabel(window: AccessQuotaWindow): string {
+    const minutes = window.window_minutes;
+    if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) {
+      return `${windowLabel(window)} limit`;
+    }
+    if (minutes === 300) return "5-hour limit";
+    if (minutes === 10_080) return "Weekly limit";
+    if (minutes === 43_200) return "30-day limit";
+
+    if (minutes % 1_440 === 0) {
+      const days = minutes / 1_440;
+      return `${days} ${days === 1 ? "day" : "days"} limit`;
+    }
+
+    const hours = minutes / 60;
+    return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} ${hours === 1 ? "hour" : "hours"} limit`;
+  }
+
+  function canonicalWindowTitle(window: AccessQuotaWindow): string {
+    if (window.window_minutes === 10_080) return "Weekly usage limit";
+    return canonicalWindowLabel(window);
+  }
+
+  function modelWindowLabel(window: AccessQuotaWindow): string | null {
+    const label = window.label?.trim();
+    const durationLabel = /^(?:weekly|[0-9]+(?:[ -]?(?:hour|day|week|month)s?|[hdw]))(?: limit)?$/i;
+    if (!label || label === canonicalWindowLabel(window) || durationLabel.test(label)) return null;
+    return label;
   }
 
 </script>
@@ -108,9 +139,14 @@
             <div class="window-list">
               {#each route.windows as window, index (`${route.source.id}:${window.key}:${window.window_minutes ?? "native"}:${index}`)}
                 {@const presentation = allowancePresentation(route, window)}
+                {@const primaryLabel = canonicalWindowLabel(window)}
+                {@const modelLabel = route.source.kind === "codex_subscription" ? modelWindowLabel(window) : null}
                 <section class="window-row">
                   <div class="window-copy">
-                    <span>{windowLabel(window)}</span>
+                    <div class="window-name">
+                      <span title={canonicalWindowTitle(window)}>{primaryLabel}</span>
+                      {#if modelLabel}<small>{modelLabel}</small>{/if}
+                    </div>
                     <strong>
                       {presentation == null
                         ? "Unavailable"
@@ -119,7 +155,7 @@
                   </div>
                   <div
                     class="window-meter"
-                    aria-label={`${windowLabel(window)} ${presentation == null ? "unavailable" : `${Math.round(presentation.percent)}% ${presentation.direction}`}`}
+                    aria-label={`${primaryLabel} ${modelLabel ? `${modelLabel} ` : ""}${presentation == null ? "unavailable" : `${Math.round(presentation.percent)}% ${presentation.direction}`}`}
                   >
                     <span style={`width:${presentation?.percent ?? 0}%`}></span>
                   </div>
@@ -240,9 +276,11 @@
   .window-list { display: grid; }
   .window-row { display: grid; gap: 8px; padding: 11px 0; border-top: 1px solid var(--divider); }
   .window-row:last-child { border-bottom: 0; }
-  .window-copy { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .window-copy { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .window-name { min-width: 0; display: grid; gap: 2px; }
   .window-copy span { color: var(--text-secondary); font-size: 11px; }
-  .window-copy strong { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .window-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .window-copy strong { flex: 0 0 auto; font-size: 12px; font-variant-numeric: tabular-nums; }
   .window-meter { height: 6px; overflow: hidden; background: var(--meter-track); border-radius: var(--radius-full); }
   .window-meter span { display: block; height: 100%; background: var(--info); border-radius: inherit; }
   .window-row small { color: var(--text-muted); font-size: 9px; }

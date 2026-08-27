@@ -1,49 +1,31 @@
 # Pulse
 
-> Open-source native desktop app that reads Claude Code and OpenAI Codex usage transcripts locally and turns them into cost, token, cache-health and context-window analytics, plus a Discord Rich Presence daemon that shows your live coding session. 100% local, zero telemetry. Built with Rust + Tauri 2 + Svelte 5. Apache-2.0.
+> Pulse is a local-first desktop usage tracker and cost dashboard for Claude Code and OpenAI Codex subscriptions on Windows, macOS, and Linux. It uses Tauri 2, Rust, and Svelte 5, stores analytics in SQLite with FTS5 search, and publishes Discord Rich Presence through local IPC. Its provider access-lane model keeps subscription and API proof separate. Pulse sends no telemetry.
 
-Pulse answers the question "where did my Claude Code and Codex usage actually go?" without sending session data off your machine.
+## Docs
 
-## What
+- [Documentation index](docs/index.md): Guide to Pulse architecture, analytics, pricing, provider plans, notifications, and troubleshooting.
+- [Release guide](docs/releasing.md): Local verification, versioning, packaging, signing, and release steps.
+- [Development bridge](docs/architecture/dev-bridge.md): Debug-only authenticated loopback bridge between Vite and the Rust backend.
+- [Discord assets](docs/discord-assets.md): Discord Developer Portal asset setup and Rich Presence image behavior.
 
-Pulse reads the JSONL transcripts and runtime metadata that Claude Code and Codex already write to disk (zero-config — install and launch) and surfaces provider-capable metrics: per-session cost and tokens, cache health, cost-inflection alerts, context-window usage, and live plan limits. Provider-specific analyzers stay gated to the data that actually exists. Every recommendation ships a one-click fix prompt labeled for Claude Code or Codex. A companion daemon pushes Discord Rich Presence showing the live project, model, reasoning effort, and speed.
+## Views
 
-Pulse prices every Claude model correctly, including Claude Opus 4.8 with its fast mode (priority speed at 2x the standard per-token rate, detected per-turn from the transcript's `usage.speed` field), 1M-context GA pricing, and the inflated-tokenizer correction for Opus 4.7+. The headline cost mirrors Claude Code's own statusline total; per-category breakdowns are reconciled to it.
+- [About Pulse](README.md#about): Data sources, provider boundaries, supported platforms, and desktop architecture.
+- [Why Pulse](README.md#why-pulse): Local-first, dual-provider, Discord, cache health, budget, and forecast benefits.
+- [Screenshots](README.md#screenshots): Dashboard, reports, and Discord Rich Presence previews.
+- [Install](README.md#install): Windows, macOS, Linux, and source installation.
+- [Features](README.md#features): Analytics, provider-aware costs, cache grading, reports, and Rich Presence.
+- [Usage](README.md#usage): First launch, Discord setup, reports, and fix-prompt workflow.
 
-Pulse consumes the immutable Codex Discord Rich Presence catalog for OpenAI Codex. It includes GPT-5.6 Sol, Terra, and Luna labels and sourced rates; 372,000 raw / 353,400 usable context from the local App catalog; independent reasoning and Standard/Fast display; and exact, partial, or unavailable cost status. Missing cache-write telemetry and unpublished GPT-5.6 Fast economics remain explicit instead of becoming guessed multipliers. Switch between Claude Code and Codex with one toggle.
+## Configuration
 
-## Stack
+- [Claude configuration](docs/troubleshooting.md): Claude data and configuration live under `~/.claude`, including `~/.claude/discord-presence-config.json` and `~/.claude/pulse-analytics.db`.
+- [Codex plan configuration](docs/plan-detection.md): Codex reads plan and service-tier state from local files under `~/.codex`.
+- [Codex Discord configuration](docs/codex-rich-presence-upstream.md): Codex Rich Presence configuration lives at `~/.codex/discord-presence-config.json`.
+- [Provider access lanes](docs/architecture/adaptive-access.md): Subscription and API routes keep authentication proof, freshness, and analytics scope separate.
 
-- Shell: Tauri 2 with the native OS WebView (no bundled Chromium)
-- Frontend: Svelte 5 (runes) + Vite 6 + TypeScript 5
-- Backend: Rust workspace — the `cc-discord-presence` daemon/analytics core plus the `pulse` Tauri host crate; `rusqlite` (bundled) for the local store, `discord-rich-presence` for the presence socket
-- Storage: SQLite at `~/.claude/pulse-analytics.db`
-- Reports: self-contained offline HTML and Markdown export (no remote fonts or assets)
-- Bundles: Windows (NSIS + MSI), macOS (DMG — Apple Silicon + Intel), Linux (deb, rpm, AppImage)
-- License: Apache-2.0 — see LICENSE and NOTICE
+## Repository
 
-## Footprint
-
-- Binary: about 12 MB on Windows, about 18 MB on macOS
-- Cold start: under 200 ms
-- Telemetry: zero. No analytics, no usage counters, no error reporting
-- Network: none required for analytics. The Discord presence daemon talks only to the local Discord IPC socket; optional asset resolution fetches presence art from Discord's CDN
-
-## Privacy model
-
-- Pulse reads only the local Claude Code / Codex transcript files and writes only the local SQLite database
-- No account, no login, no cloud sync, no identifying information leaves the machine
-- The HTML report is fully self-contained and renders offline
-
-## Links
-
-- Repo: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics
-- Latest release: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest
-- Issues: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/issues
-- Author: https://github.com/xt0n1-t3ch
-- Web: https://xt0n1.com
-- License: https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/blob/main/LICENSE
-
-## Keywords
-
-Claude Code analytics, Claude Code cost tracker, Claude Code usage dashboard, Claude Opus 4.8, fast mode pricing, Anthropic token cost, cache hit ratio, prompt caching, 1M context window, context window usage, model routing, Opus Sonnet Haiku, OpenAI Codex usage, Codex analytics, ChatGPT App analytics, GPT-5.6, GPT-5 family, Codex fast mode, Discord Rich Presence, reasoning effort, Claude Pro, Claude Max, Claude Teams, ChatGPT Plus Pro Business, plan usage limits, Extra Usage, JSONL transcript, local-first, zero telemetry, open source, Rust, Tauri, Svelte, Windows, macOS, Linux desktop app
+- [Changelog](CHANGELOG.md): Versioned release history.
+- [Package manifest](package.json): Package version and local build, check, test, lint, and verification commands.

@@ -14,6 +14,7 @@
   import { setPlanOverride, exportAllData, clearHistory, getDbSize, getPlanInfo, getAnalyticsSummary, getAppSettings, setCloseToTray } from "../lib/api";
   import type { AnalyticsSummary } from "../lib/api";
   import PulseMark from "../components/PulseMark.svelte";
+  import SegmentedControl from "../components/SegmentedControl.svelte";
   import Select from "../components/Select.svelte";
   import IconDownload from "@tabler/icons-svelte/icons/download";
   import IconRefresh from "@tabler/icons-svelte/icons/refresh";
@@ -39,11 +40,14 @@
 
   let closeToTray = $state(true);
   let closeToTraySaving = $state(false);
+  let exportPending = $state(false);
 
   onMount(() => {
     getAppSettings()
       .then((settings) => { closeToTray = settings.close_to_tray; })
-      .catch(() => {});
+      .catch(() => {
+        addToast("Could not load the window close setting. The default was kept.", "warning", 5000);
+      });
   });
 
   async function handleCloseToTray(next: boolean): Promise<void> {
@@ -215,6 +219,8 @@
   }
 
   async function handleExport(): Promise<void> {
+    if (exportPending) return;
+    exportPending = true;
     try {
       const data = await exportAllData($selectedAnalyticsProviderScope);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -226,6 +232,8 @@
       URL.revokeObjectURL(url);
     } catch (error) {
       addToast(`Analytics export failed: ${String(error)}`, "danger", 5000);
+    } finally {
+      exportPending = false;
     }
   }
 
@@ -247,6 +255,22 @@
       clearPending = false;
     }
   }
+
+  function friendlyPlatform(raw: string): string {
+    const normalized = raw.toLowerCase();
+    if (normalized.includes("mac") || normalized.includes("darwin")) return "macOS";
+    if (normalized.startsWith("win") || normalized.includes("windows")) return "Windows";
+    if (normalized.includes("linux") || normalized.includes("x11")) return "Linux";
+    return raw;
+  }
+
+  let platformName = $derived.by(() => {
+    const navigatorWithUserAgentData = navigator as Navigator & {
+      userAgentData?: { platform?: string };
+    };
+    const raw = navigatorWithUserAgentData.userAgentData?.platform ?? navigator.platform;
+    return friendlyPlatform(raw);
+  });
 
   let discordStatus = $derived(($health?.discord_status ?? "—").toLowerCase());
   let discordTone = $derived(
@@ -337,44 +361,25 @@
 
       <div class="rail-ctrl">
         <span class="rail-k">Appearance</span>
-        <div class="theme-toggle" role="radiogroup" aria-label="Theme">
-          <button
-            type="button"
-            class="theme-opt"
-            class:active={currentTheme === "dark"}
-            aria-pressed={currentTheme === "dark"}
-            onclick={() => { if (currentTheme !== "dark") onToggleTheme(); }}
-          >Dark</button>
-          <button
-            type="button"
-            class="theme-opt"
-            class:active={currentTheme === "light"}
-            aria-pressed={currentTheme === "light"}
-            onclick={() => { if (currentTheme !== "light") onToggleTheme(); }}
-          >Light</button>
-        </div>
+        <SegmentedControl
+          value={currentTheme}
+          options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]}
+          onchange={(next) => { if (next !== currentTheme) onToggleTheme(); }}
+          ariaLabel="Theme"
+          size="md"
+        />
       </div>
 
       <div class="rail-ctrl">
         <span class="rail-k">Window close</span>
-        <div class="theme-toggle" role="radiogroup" aria-label="Window close behavior">
-          <button
-            type="button"
-            class="theme-opt"
-            class:active={closeToTray}
-            aria-pressed={closeToTray}
-            disabled={closeToTraySaving}
-            onclick={() => handleCloseToTray(true)}
-          >Minimize to tray</button>
-          <button
-            type="button"
-            class="theme-opt"
-            class:active={!closeToTray}
-            aria-pressed={!closeToTray}
-            disabled={closeToTraySaving}
-            onclick={() => handleCloseToTray(false)}
-          >Quit</button>
-        </div>
+        <SegmentedControl
+          value={closeToTray ? "tray" : "quit"}
+          options={[{ value: "tray", label: "Minimize to tray" }, { value: "quit", label: "Quit" }]}
+          onchange={(next) => handleCloseToTray(next === "tray")}
+          ariaLabel="Window close behavior"
+          disabled={closeToTraySaving}
+          size="md"
+        />
       </div>
     </div>
     {#if settingsError}
@@ -444,9 +449,9 @@
           </div>
         </div>
         <div class="dm-actions">
-          <button class="btn" onclick={handleExport} disabled={dataLoading || !!dataError}>
+          <button class="btn" onclick={handleExport} disabled={dataLoading || !!dataError || exportPending}>
             <IconDownload size={12} stroke={2.2} aria-hidden="true" />
-            Export JSON
+            {exportPending ? "Exporting…" : "Export JSON"}
           </button>
           {#if confirmClear}
             <button class="btn btn-danger" onclick={handleClear} disabled={clearPending}>
@@ -478,7 +483,7 @@
     </div>
     <div class="meta-cell">
       <span class="meta-key">Platform</span>
-      <span class="meta-val mono">{navigator.platform}</span>
+      <span class="meta-val mono">{platformName}</span>
     </div>
   </div>
 </div>
@@ -640,7 +645,7 @@
   .rail {
     position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(200px, 0.8fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     border-top: 1px solid var(--border);
     background: var(--panel-sheen), var(--surface-panel);
     border-bottom-left-radius: var(--radius-lg);
@@ -679,36 +684,8 @@
     color: var(--text-muted);
   }
 
-  .theme-toggle {
-    display: inline-flex;
-    padding: 3px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    gap: 2px;
-    height: 34px;
-    width: 100%;
-  }
-  .theme-opt {
-    flex: 1;
-    padding: 0 14px;
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    color: var(--text-muted);
-    background: transparent;
-    border-radius: 4px;
-    transition: background 0.15s var(--ease), color 0.15s var(--ease);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    letter-spacing: 0.01em;
-  }
-  .theme-opt:hover { color: var(--text-secondary); }
-  .theme-opt.active {
-    background: var(--bg-card-hover);
-    color: var(--text-primary);
-    box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border);
-  }
+  .rail-ctrl :global(.segmented) { width: 100%; }
+  .rail-ctrl :global(.seg-opt) { flex: 1; justify-content: center; }
 
   /* ── sub-cards ── */
   .settings-grid {

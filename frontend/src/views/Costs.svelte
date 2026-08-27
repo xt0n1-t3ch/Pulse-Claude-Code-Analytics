@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Chart from "../components/Chart.svelte";
-  import { sessions, selectedAnalyticsProviderScope } from "../lib/stores";
+  import { sessions, selectedAnalyticsProviderScope, planInfo } from "../lib/stores";
   import { providerMatchesAnalyticsScope } from "../lib/access";
-  import { fmtCost, fmtExactCost, fmtTokens, fmtPct, monetaryValueLabel } from "../lib/utils";
+  import { fmtCost, fmtExactCost, fmtTokens, fmtPct } from "../lib/utils";
   import {
     getCostsBundle,
     getCostTotals,
@@ -22,6 +22,7 @@
   import ExportModal from "../components/ExportModal.svelte";
   import type { ExportColumn } from "../lib/export";
   import BudgetCockpit from "../components/BudgetCockpit.svelte";
+  import StatusPill from "../components/StatusPill.svelte";
 
   let showExport = $state(false);
   let forecast = $state<CostForecast | null>(null);
@@ -35,16 +36,6 @@
   let loading = $state(true);
   let hasLoaded = $state(false);
   let loadError = $state<string | null>(null);
-
-  function costSourceLabel(source: string): string {
-    const normalized = source.trim().toLowerCase();
-    if (normalized === "provider_billed" || normalized === "provider-billed") return "Provider billing";
-    if (normalized.includes("codex")) return "Codex API-equivalent rates";
-    if (normalized.includes("anthropic")) return "Anthropic API-equivalent rates";
-    if (normalized.includes("pricing")) return "Versioned pricing";
-    if (normalized === "legacy-calculated") return "Migrated calculated history";
-    return source.replaceAll("_", " ");
-  }
 
   function themeColor(token: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(token).trim();
@@ -187,6 +178,16 @@
   }
 
   let projectFilter = $state("");
+  let subscriptionPlan = $derived.by(() => {
+    const planName = $planInfo?.plan_name?.trim() ?? "";
+    const match = planName.match(/\$([\d,]+(?:\.\d{2})?)\s*\/\s*mo/i);
+    if (!match) return { price: null, label: "" };
+    const price = Number(match[1].replaceAll(",", ""));
+    return {
+      price: Number.isFinite(price) ? price : null,
+      label: planName.slice(0, match.index).trim().replace(/[\s(]+$/, ""),
+    };
+  });
   let monetaryFingerprint = $derived.by(() =>
     $sessions
       .filter((session) =>
@@ -495,20 +496,22 @@
   <div class="view-header">
     <div>
       <h2 class="view-title">Usage &amp; cost</h2>
-      <p class="view-subtitle">Provider-billed spend and API-equivalent value, kept as separate facts.</p>
+      <p class="view-sub">Provider-billed spend and API-equivalent value, kept as separate facts.</p>
     </div>
     <div class="filters">
       <!-- Explicit handler rather than `bind:value`: the selection drives a
            backend refetch, so the assignment needs to be visible at the seam
            the aggregate depends on. -->
+      <label class="sr-only" for="cost-project-filter">Filter costs by project</label>
       <select
+        id="cost-project-filter"
         value={projectFilter}
         onchange={(event) => {
           projectFilter = event.currentTarget.value;
           visibleDetailLimit = DETAIL_PAGE_SIZE;
         }}
       >
-        <option value="">All Projects</option>
+        <option value="">All projects</option>
         {#each projects as p}<option value={p}>{p}</option>{/each}
       </select>
     </div>
@@ -536,66 +539,52 @@
     <section class="value-ledger" aria-label="Subscription value ledger">
       <header class="ledger-head">
         <div>
-          <span class="ledger-eyebrow">Last 30 days · provenance-aware value</span>
-          <h3>Known monetary value by provenance</h3>
-          <p>Provider-billed amounts and API-equivalent estimates stay distinct. Every value comes from observed usage; unavailable billing is never guessed.</p>
+          <span class="ledger-eyebrow">Last 30 days</span>
+          <h3>Spend and coverage</h3>
+          <p>Billed spend stays separate from API-equivalent estimates.</p>
         </div>
-        <span
-          class="coverage-pill"
-          class:partial={totals?.cost_basis === "partial"}
-          class:estimated={totals?.cost_basis === "estimated"}
-          class:unavailable={totals?.cost_basis === "unavailable"}
-        >
-          {costCoverageLabel(totals?.cost_basis ?? "unavailable")}
-        </span>
+        <StatusPill
+          state={totals?.cost_basis === "partial" ? "waiting" : totals?.cost_basis === "unavailable" ? "paused" : "neutral"}
+          label={costCoverageLabel(totals?.cost_basis ?? "unavailable")}
+        />
       </header>
 
       <div class="ledger-metrics">
         <div class="ledger-metric">
-          <span class="ledger-label">Provider-billed · 30d</span>
+          <span class="ledger-label">Provider billed</span>
           <strong class="ledger-value">
             {fmtExactCost(totals?.billed_spend_usd ?? 0, totals?.billed_spend_usd !== null && totals?.billed_spend_usd !== undefined)}
           </strong>
-          <small>{totals?.billed_sessions ?? 0} provider readbacks</small>
+          <small>{(totals?.billed_sessions ?? 0) > 0 ? `${totals?.billed_sessions ?? 0} billing reads` : "no billing reads yet"}</small>
         </div>
         <div class="ledger-metric">
-          <span class="ledger-label">API-equivalent · 30d</span>
+          <span class="ledger-label">API-equivalent</span>
           <strong class="ledger-value">
             {fmtExactCost(totals?.api_equivalent_usd ?? 0, totals?.api_equivalent_usd !== null && totals?.api_equivalent_usd !== undefined)}
           </strong>
-          <small>{totals?.api_equivalent_sessions ?? 0} priced from published rates</small>
+          <small>{totals?.api_equivalent_sessions ?? 0} sessions priced</small>
         </div>
         <div class="ledger-metric">
-          <span class="ledger-label">Total tokens</span>
+          <span class="ledger-label">Tokens</span>
           <strong class="ledger-value">{fmtTokens(usageTotalTokens)}</strong>
-          <small>Across the selected scope</small>
         </div>
         <div class="ledger-metric">
           <span class="ledger-label">Sessions</span>
           <strong class="ledger-value">{sessionCount}</strong>
-          <small>{projectFilter || "All projects"}</small>
         </div>
         <div class="ledger-metric">
           <span class="ledger-label">Cache reuse</span>
           <strong class="ledger-value">{fmtPct(cacheReusePct)}</strong>
-          <small>{fmtTokens(usageCacheReadTokens)} cache-read tokens</small>
+          <small>{fmtTokens(usageCacheReadTokens)} cache-read</small>
         </div>
         <div class="ledger-metric">
-          <span class="ledger-label">Cost coverage</span>
-          <strong class="ledger-value">{pricedSessionCount} / {sessionCount}</strong>
-          <small>
-            {#if !costAvailable}
-              Not reported
-            {:else if totals?.cost_basis === "estimated"}
-              {fmtCost(totalCost)} estimated
-            {:else}
-              {fmtCost(totalCost)} {monetaryValueLabel(totals?.cost_sources ?? []).toLowerCase()}{totals?.cost_basis === "partial" ? " lower bound" : ""}
-            {/if}
-          </small>
+          <span class="ledger-label">Sessions priced</span>
+          <strong class="ledger-value">{pricedSessionCount}/{sessionCount}</strong>
+          <small>lower bound</small>
         </div>
       </div>
 
-      <div class="usage-ledger-grid">
+      <div class="usage-ledger-sections">
         <section class="usage-token-mix">
           <div class="ledger-section-head">
             <h4>Token mix</h4>
@@ -623,7 +612,7 @@
         <section class="token-trend">
           <div class="ledger-section-head">
             <h4>Token trend</h4>
-            <span>Provider scope · 30d</span>
+            <span>Provider scope · 30 days</span>
           </div>
           {#if tokenTrend.length > 0}
             <div class="trend-bars" aria-label="Daily token trend">
@@ -640,12 +629,24 @@
           {/if}
         </section>
       </div>
+
+      {#if totals && totals.cost_basis === "partial"}
+        <footer class="ledger-coverage" aria-live="polite">
+          <span>
+            Known cost for {totals.priced_sessions} of {totals.sessions} sessions. This is a lower bound.
+          </span>
+          <StatusPill state="waiting" label="API-equivalent · session-calculated" />
+        </footer>
+      {/if}
     </section>
 
     {#if costAvailable}
+      <div class="card surface-matte charts-card">
       <BudgetCockpit
         {forecast}
         budget={budgetStatus}
+        subscriptionPrice={subscriptionPlan.price}
+        subscriptionLabel={subscriptionPlan.label}
         onSetBudget={() => {
           editingBudget = true;
           budgetInput = budgetStatus?.monthly_budget
@@ -654,30 +655,10 @@
         }}
       />
 
-      {#if totals && totals.cost_basis === "partial"}
-        <section class="coverage-strip" aria-live="polite">
-          <div>
-            <strong>Coverage details</strong>
-            <span>
-              {totals.priced_sessions} of {totals.sessions} sessions have a known monetary value; this is a lower bound and excludes unpriced sessions.
-            </span>
-          </div>
-          {#if totals.cost_sources.length > 0}
-            <span class="coverage-source">{totals.cost_sources.map(costSourceLabel).join(" · ")}</span>
-          {/if}
-        </section>
-      {/if}
-
-      {#if forecast?.priced_sessions && (forecast.billed_spend_usd ?? 0) === 0 && (forecast.api_equivalent_usd ?? 0) === 0 && totalCost > 0}
-        <p class="window-context">
-          No month-to-date monetary value is available. The previous 30 days include
-          {fmtCost(totalCost)} from earlier sessions with known provenance.
-        </p>
-      {/if}
-
       {#if editingBudget}
         <div class="budget-edit">
-          <input type="number" min="0" step="10" bind:value={budgetInput} placeholder="Monthly budget ($)" class="budget-input" />
+          <label class="sr-only" for="monthly-budget">Monthly budget in dollars</label>
+          <input id="monthly-budget" type="number" min="0" step="10" bind:value={budgetInput} placeholder="Monthly budget ($)" class="budget-input" />
           <button class="budget-save-btn" onclick={saveBudget}>Save</button>
           <button class="budget-cancel-btn" onclick={() => editingBudget = false}>Cancel</button>
         </div>
@@ -686,35 +667,35 @@
   <!-- Supporting figures: spacing and rules only, no boxes competing with the
        cockpit above. -->
       <div class="inline-stats">
-    <div class="is-item">
-      <span class="is-label">Value / session</span>
-      <span class="is-value">{costAvailable ? fmtCost(avgCost) : "—"}</span>
-       <span class="is-meta">
-         {costAvailable
-           ? `${pricedSessionCount}/${sessionCount} priced`
-           : "cost not reported"}
-       </span>
-    </div>
-    <div class="is-item">
-      <span class="is-label">Value / 1M tokens</span>
-      <span class="is-value">{costAvailable && derivedRatesAvailable ? fmtCost(costPerMToken) : "—"}</span>
-      <span class="is-meta">{costAvailable && derivedRatesAvailable ? "blended rate" : "requires complete coverage"}</span>
-    </div>
-    <div class="is-item">
-      <span class="is-label">Cache savings</span>
-      <span class="is-value">{costAvailable && derivedRatesAvailable ? fmtCost(cacheSavings) : "—"}</span>
-      <span class="is-meta">{costAvailable && derivedRatesAvailable ? "vs uncached input" : "requires complete coverage"}</span>
-    </div>
-    <div class="is-item">
-      <span class="is-label">{monetaryValueLabel(totals?.cost_sources ?? [])} (30d)</span>
-      <span class="is-value">{costAvailable ? fmtCost(totalCost) : "—"}</span>
-      <span class="is-meta">{costAvailable ? (totals?.cost_basis === "partial" ? "known lower bound" : "window total") : "monetary value unavailable"}</span>
-    </div>
+        <div class="is-item">
+          <span class="is-label">Cost per session</span>
+          <span class="is-value">{costAvailable ? fmtCost(avgCost) : "—"}</span>
+          <span class="is-meta">{pricedSessionCount} priced</span>
+        </div>
+        <div class="is-item">
+          <span class="is-label">Cost per 1M tokens</span>
+          <span
+            class="is-value"
+            title={costAvailable && derivedRatesAvailable ? undefined : "needs complete cost coverage"}
+          >{costAvailable && derivedRatesAvailable ? fmtCost(costPerMToken) : "—"}</span>
+        </div>
+        <div class="is-item">
+          <span class="is-label">Cache savings</span>
+          <span
+            class="is-value"
+            title={costAvailable && derivedRatesAvailable ? undefined : "needs complete cost coverage"}
+          >{costAvailable && derivedRatesAvailable ? fmtCost(cacheSavings) : "—"}</span>
+        </div>
+        <div class="is-item">
+          <span class="is-label">30-day total</span>
+          <span class="is-value">{costAvailable ? fmtCost(totalCost) : "—"}</span>
+          <span class="is-meta">known lower bound</span>
+        </div>
       </div>
 
       <div class="charts-row">
     <section class="pane">
-      <h3 class="pane-title">Monetary value by type</h3>
+      <h3 class="pane-title">By token type</h3>
       {#if costAvailable && costTotal > 0}
         <div class="cost-type-bar">
           <div class="cost-seg input" style="width:{(totalInputCost / costTotal) * 100}%"></div>
@@ -737,11 +718,11 @@
 
     {#if modelCosts.length > 0}
       <section class="pane">
-        <h3 class="pane-title">Monetary value per model</h3>
+        <h3 class="pane-title">By model</h3>
         <div class="model-cost-list">
           {#each modelCosts as [model, cost]}
             <div class="mc-row">
-              <span class="mc-name">{model}</span>
+              <span class="mc-name" title={model}>{model}</span>
               <div class="mc-bar-track">
                 <div class="mc-bar-fill" style="width:{modelCosts[0][1] > 0 ? (cost / modelCosts[0][1]) * 100 : 0}%"></div>
               </div>
@@ -754,16 +735,17 @@
       </div>
 
       {#if costByProject.length > 0}
-        <div class="card surface-matte">
-          <h3 class="card-title">Monetary value by project</h3>
+        <section class="chart-section project-section">
+          <h3 class="pane-title">By project</h3>
           <div
             class="chart-container"
             style="height: {Math.max(140, Math.min(360, 44 + costByProject.length * 44))}px"
           >
             <Chart config={costChartConfig} updateData={updateCostChart} />
           </div>
-        </div>
+        </section>
       {/if}
+      </div>
     {:else}
       <section class="cost-boundary" aria-live="polite">
         <div>
@@ -782,32 +764,42 @@
       {/if}
     </div>
     <div class="detail-table">
-      <div class="dt-header">
-        <span class="dt-col status"></span>
-        <span class="dt-col project">Project</span>
-        <span class="dt-col">Input</span>
-        <span class="dt-col">Output</span>
-        <span class="dt-col">Cache W</span>
-        <span class="dt-col">Cache R</span>
-        <span class="dt-col">Tokens</span>
-        <span class="dt-col cost">Monetary value</span>
-      </div>
-      {#each visibleCostRows as s (s.id)}
-        <div class="dt-row">
-          <span class="dt-col status"><span class="status-dot" class:active={s.is_active}></span></span>
-          <span class="dt-col project">{s.project}{s.branch ? " · " + s.branch : ""}</span>
-          <span class="dt-col">{fmtTokens(s.input_tokens)}</span>
-          <span class="dt-col">{fmtTokens(s.output_tokens)}</span>
-          <span class="dt-col">{fmtTokens(s.cache_write_tokens)}</span>
-          <span class="dt-col">{fmtTokens(s.cache_read_tokens)}</span>
-          <span class="dt-col">{fmtTokens(s.tokens)}</span>
-          <span class="dt-col cost" class:unavailable={s.cost === null}>
-            {s.cost === null ? "Not reported" : fmtCost(s.cost)}
-          </span>
-        </div>
-      {:else}
-        <div class="dt-empty">No session data yet</div>
-      {/each}
+      <table>
+        <caption class="sr-only">Session cost and token details</caption>
+        <thead>
+          <tr>
+            <th class="dt-col status" scope="col"><span class="sr-only">Status</span></th>
+            <th class="dt-col project" scope="col">Project</th>
+            <th class="dt-col" scope="col">Input</th>
+            <th class="dt-col" scope="col">Output</th>
+            <th class="dt-col" scope="col">Cache W</th>
+            <th class="dt-col" scope="col">Cache R</th>
+            <th class="dt-col" scope="col">Tokens</th>
+            <th class="dt-col cost" scope="col">Monetary value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each visibleCostRows as s (s.id)}
+            <tr>
+              <td class="dt-col status" title={s.is_active ? "Active" : "Historical"}><span class="status-dot" class:active={s.is_active}></span><span class="sr-only">{s.is_active ? "Active" : "Historical"}</span></td>
+              <td class="dt-col project" title={`${s.project}${s.branch ? ` · ${s.branch}` : ""}`}>
+                <span class="project-name">{s.project}</span>
+                {#if s.branch}<span class="project-ref">{s.branch}</span>{/if}
+              </td>
+              <td class="dt-col">{fmtTokens(s.input_tokens)}</td>
+              <td class="dt-col">{fmtTokens(s.output_tokens)}</td>
+              <td class="dt-col">{fmtTokens(s.cache_write_tokens)}</td>
+              <td class="dt-col">{fmtTokens(s.cache_read_tokens)}</td>
+              <td class="dt-col">{fmtTokens(s.tokens)}</td>
+              <td class="dt-col cost" class:unavailable={s.cost === null}>
+                {s.cost === null ? "Not reported" : fmtCost(s.cost)}
+              </td>
+            </tr>
+          {:else}
+            <tr><td class="dt-empty" colspan="8">No session data yet</td></tr>
+          {/each}
+        </tbody>
+      </table>
     </div>
     {#if sortedFiltered.length > visibleCostRows.length}
       <button
@@ -835,12 +827,12 @@
   .costs-view { display: flex; flex-direction: column; gap: var(--page-gap); }
   .view-header { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
   .view-title { font-size: 20px; font-weight: 700; }
-  .view-subtitle { margin-top: 3px; color: var(--text-muted); font-size: var(--fs-xs); }
+  .view-sub { margin-top: 4px; color: var(--text-muted); font-size: var(--fs-xs); }
   .filters { margin-left: auto; }
   .value-ledger {
     display: grid;
-    gap: 22px;
-    padding: 22px;
+    gap: 24px;
+    padding: 24px;
     /* Matte hero surface only. The old info-tinted gradient fill broke the
        "matte is the only app-panel fill" contract and read as a different
        product from the rest of the app. */
@@ -888,32 +880,6 @@
     font-size: var(--fs-sm);
     line-height: var(--lh-relaxed);
   }
-  .coverage-pill {
-    flex: 0 0 auto;
-    padding: 6px 10px;
-    color: var(--success);
-    background: var(--success-dim);
-    border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border));
-    border-radius: var(--radius-full);
-    font-size: var(--fs-xs);
-    font-weight: 650;
-    white-space: nowrap;
-  }
-  .coverage-pill.partial {
-    color: var(--warning);
-    background: var(--warning-dim);
-    border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
-  }
-  .coverage-pill.estimated {
-    color: var(--info);
-    background: var(--info-dim);
-    border-color: color-mix(in srgb, var(--info) 35%, var(--border));
-  }
-  .coverage-pill.unavailable {
-    color: var(--text-secondary);
-    background: var(--bg-elevated);
-    border-color: var(--border);
-  }
   .ledger-metrics {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -939,23 +905,24 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .ledger-metric small { color: var(--text-muted); font-size: var(--fs-xs); }
-  .usage-ledger-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.18fr) minmax(280px, 0.82fr);
-    gap: 28px;
+  .ledger-metric small {
+    display: block;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
+  .usage-ledger-sections { display: grid; }
   .usage-token-mix,
   .token-trend {
     min-width: 0;
     display: grid;
     align-content: start;
     gap: 13px;
+    padding-top: 20px;
+    border-top: 1px solid var(--divider);
   }
-  .usage-ledger-grid > section + section {
-    padding-left: 28px;
-    border-left: 1px solid var(--divider);
-  }
+  .usage-ledger-sections > section + section { margin-top: 20px; }
   .ledger-section-head {
     display: flex;
     align-items: baseline;
@@ -1084,26 +1051,22 @@
     border-radius: var(--radius-sm);
     cursor: pointer;
   }
-  .window-context {
-    margin-top: -4px;
-    padding: 10px 0;
-    color: var(--text-muted);
-    font-size: var(--fs-xs);
-    border-bottom: 1px solid var(--divider);
-  }
-  .coverage-strip {
+  .ledger-coverage {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 20px;
-    padding: 12px 0;
+    padding-top: 16px;
     color: var(--text-secondary);
-    border-block: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+    border-top: 1px solid var(--divider);
   }
-  .coverage-strip > div { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-  .coverage-strip strong { flex: 0 0 auto; color: var(--warning); font-size: var(--fs-sm); }
-  .coverage-strip span { color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.45; }
-  .coverage-source { flex: 0 0 auto; font-family: var(--font-mono); text-align: right; }
+  .ledger-coverage > span {
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
   /* Supporting figures read as one row of text, separated by rules rather
      than four boxes competing with the cockpit gauge above them. */
   .inline-stats {
@@ -1142,20 +1105,33 @@
     .ledger-metric:nth-child(3),
     .ledger-metric:nth-child(5) { padding-left: 0; border-left: none; }
     .ledger-metric:nth-child(n+3) { border-top: 1px solid var(--divider); }
-    .usage-ledger-grid { grid-template-columns: 1fr; }
-    .usage-ledger-grid > section + section { padding: 20px 0 0; border-left: none; border-top: 1px solid var(--divider); }
     .inline-stats { grid-template-columns: repeat(2, 1fr); row-gap: 18px; }
     .is-item:nth-child(3) { padding-left: 0; border-left: none; }
   }
 
+  .charts-card { display: grid; gap: 0; }
+  .charts-card :global(.cockpit) {
+    padding: 0 0 20px;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .charts-card > .budget-edit,
+  .charts-card > .inline-stats,
+  .charts-card > .charts-row,
+  .charts-card > .chart-section {
+    margin: 0;
+    padding-block: 20px;
+    border-top: 1px solid var(--divider);
+  }
+  .charts-card > .chart-section { padding-bottom: 0; }
   .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
 
-  /* Panes sit on the page surface; a hairline divides the pair instead of
-     wrapping each half in its own card. */
   .pane { display: flex; flex-direction: column; }
   .charts-row .pane + .pane {
     padding-left: 40px;
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--divider);
   }
   .pane-title {
     font-size: 12px;
@@ -1188,11 +1164,24 @@
   .ct-val { font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
   .model-cost-list { display: flex; flex-direction: column; gap: 8px; }
-  .mc-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
-  .mc-name { min-width: 120px; font-weight: 600; font-size: 13px; }
-  .mc-bar-track { flex: 1; height: 8px; background: var(--bg-elevated); border-radius: 99px; overflow: hidden; }
+  .mc-row { display: flex; align-items: center; gap: 12px; min-width: 0; font-size: 12px; }
+  .mc-name {
+    width: 230px;
+    min-width: 230px;
+    overflow: hidden;
+    display: -webkit-box;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+  }
+  .mc-bar-track { min-width: 48px; flex: 1 1 auto; height: 8px; background: var(--bg-elevated); border-radius: 99px; overflow: hidden; }
   .mc-bar-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width 0.3s var(--ease); }
-  .mc-val { min-width: 60px; text-align: right; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .mc-val { width: 72px; flex: 0 0 72px; text-align: right; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
 
   .chart-container { height: 250px; min-height: 140px; }
 
@@ -1203,17 +1192,41 @@
   .show-more { display: block; margin: 12px auto 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-secondary); padding: 7px 16px; font-size: 11px; font-weight: 600; cursor: pointer; }
   .show-more:hover { color: var(--accent); border-color: var(--accent); }
 
-  .detail-table { font-size: 12px; max-height: 400px; overflow-y: auto; --dt-cols: 24px 2fr 80px 80px 80px 80px 80px 80px; }
-  .dt-header { display: grid; grid-template-columns: var(--dt-cols); gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
-  .dt-row { display: grid; grid-template-columns: var(--dt-cols); gap: 8px; padding: 8px 12px; border-radius: var(--radius-sm); transition: background 0.15s var(--ease); }
-  .dt-row:hover { background: var(--bg-elevated); }
-  .dt-col { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dt-col.project { text-align: left; font-weight: 500; color: var(--text-primary); }
-  .dt-col.cost { font-weight: 700; color: var(--accent); }
+  .detail-table { max-height: 400px; overflow-y: auto; font-size: 12px; }
+  .detail-table table { width: 100%; min-width: 760px; border-collapse: collapse; table-layout: fixed; }
+  .detail-table th,
+  .detail-table td { padding: 8px 12px; }
+  .detail-table th:first-child,
+  .detail-table td:first-child { width: 24px; padding-inline: 4px; }
+  .detail-table th:nth-child(2),
+  .detail-table td:nth-child(2) { width: 30%; min-width: 230px; }
+  .detail-table th:not(:first-child):not(:nth-child(2)),
+  .detail-table td:not(:first-child):not(:nth-child(2)) { width: 80px; }
+  .detail-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-card);
+  }
+  .detail-table th {
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .detail-table tbody tr { transition: background 0.15s var(--ease); }
+  .detail-table tbody tr:hover { background: var(--bg-elevated); }
+  .dt-col { overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+  .dt-col.project { color: var(--text-primary); font-family: var(--font-sans); text-align: left; white-space: normal; }
+  .project-name { display: block; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .project-ref { display: block; overflow: hidden; margin-top: 2px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+  .dt-col.cost { color: var(--accent); font-weight: 700; }
   .dt-col.status { text-align: center; }
   .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
   .status-dot.active { background: var(--success); box-shadow: 0 0 4px var(--success-glow); }
-  .dt-empty { text-align: center; padding: 20px; color: var(--text-muted); }
+  .dt-empty { padding: 20px; color: var(--text-muted); text-align: center; }
 
   .empty-hint { text-align: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
 
@@ -1229,7 +1242,17 @@
 
   .card { min-width: 0; }
   .detail-table { overflow-x: auto; overscroll-behavior-inline: contain; }
-  .dt-header, .dt-row { min-width: 760px; }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   @media (max-width: 1050px) {
     .charts-row { grid-template-columns: 1fr; }
@@ -1245,5 +1268,34 @@
   @media (max-width: 620px) {
     .card { padding: 14px; }
     .budget-edit { flex-wrap: wrap; }
+    .ledger-head,
+    .ledger-coverage { align-items: flex-start; flex-direction: column; gap: 10px; }
+    .ledger-metrics { grid-template-columns: 1fr; }
+    .ledger-metric,
+    .ledger-metric:first-child,
+    .ledger-metric:nth-child(3),
+    .ledger-metric:nth-child(4),
+    .ledger-metric:nth-child(5) {
+      padding: 14px 0;
+      border-left: none;
+      border-top: 1px solid var(--divider);
+    }
+    .ledger-metric:first-child { border-top: none; }
+    .ledger-section-head { align-items: flex-start; flex-direction: column; gap: 4px; }
+    .token-mix-legend { grid-template-columns: 1fr; }
+    .inline-stats { grid-template-columns: 1fr; row-gap: 0; }
+    .is-item,
+    .is-item:first-child,
+    .is-item:nth-child(3) {
+      padding: 14px 0;
+      border-left: none;
+      border-top: 1px solid var(--divider);
+    }
+    .is-item:first-child { border-top: none; }
+    .charts-row { gap: 20px; }
+    .mc-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+    .mc-name { width: auto; min-width: 0; }
+    .mc-bar-track { grid-column: 1 / -1; grid-row: 2; }
+    .mc-val { width: auto; }
   }
 </style>

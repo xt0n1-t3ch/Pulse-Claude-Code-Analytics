@@ -12,7 +12,7 @@ const fullMatrix = [
 const matrix = process.env.PULSE_VISUAL_QUICK === "1" ? [fullMatrix[0]] : fullMatrix;
 const themes = process.env.PULSE_VISUAL_QUICK === "1" ? ["dark"] : ["dark", "light"];
 const idleVerificationMs = Number(process.env.PULSE_IDLE_VERIFY_MS ?? 1200);
-const views = ["Home", "Sessions", "Context", "Costs", "Reports", "Discord", "Settings"];
+const views = ["Home", "Sessions", "Costs", "Reports", "Discord", "Settings"];
 const accessFixture = JSON.parse(
   await fs.readFile(
     new URL("../fixtures/providers/hybrid/fixture.json", import.meta.url),
@@ -187,7 +187,6 @@ for (const theme of themes) {
       const scopeCommand = {
         Home: "get_analytics_summary",
         Sessions: "get_session_history",
-        Context: "get_context_breakdowns",
         Costs: "get_cost_totals",
         Reports: "get_reports_bundle",
       }[view];

@@ -213,6 +213,7 @@ export interface UsageSnapshot {
 export interface DiscordUserInfo {
     user_id: string;
     username: string;
+    global_name: string | null;
     discriminator: string;
     avatar_hash: string;
     avatar_url: string;

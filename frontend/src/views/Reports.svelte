@@ -49,10 +49,16 @@
   let totalSessions = $state(0);
   let loading = $state(true);
   let hasLoaded = $state(false);
+  const loadedWindowKeys = new Set<string>();
   let loadError = $state<string | null>(null);
   let days = $state(30);
   let severityFilter = $state<"all" | Severity>("all");
+  let copyingReport = $state(false);
+  let downloadingHtml = $state(false);
   let reportRequest = 0;
+  let windowLabel = $derived(
+    days === 7 ? "7-day" : days === 30 ? "30-day" : days === 90 ? "90-day" : "Year",
+  );
 
   function clearReportData(): void {
     cache = null;
@@ -71,9 +77,10 @@
     const request = ++reportRequest;
     loading = true;
     loadError = null;
-    clearReportData();
     const requestedDays = days;
     const requestedProvider = $selectedAnalyticsProviderScope;
+    const requestedWindowKey = `${requestedDays}:${requestedProvider}`;
+    if (!hasLoaded) clearReportData();
     try {
       const bundle = await getReportsBundle(requestedDays, undefined, requestedProvider);
       if (
@@ -92,6 +99,7 @@
       trace = bundle.trace_overview;
       dailyCosts = bundle.daily_costs ?? [];
       totalSessions = bundle.total_sessions;
+      loadedWindowKeys.add(requestedWindowKey);
     } catch (err) {
       if (
         request !== reportRequest
@@ -111,8 +119,10 @@
   }
 
   let lastReloadKey = $state("");
+  let activeWindowKey = $derived(`${days}:${$selectedAnalyticsProviderScope}`);
+  let bundleReady = $derived(loadedWindowKeys.has(activeWindowKey));
   $effect(() => {
-    const key = `${days}:${$selectedAnalyticsProviderScope}`;
+    const key = activeWindowKey;
     if (key !== lastReloadKey) {
       lastReloadKey = key;
       loadReports();
@@ -143,16 +153,22 @@
   }
 
   async function handleCopyMarkdown(): Promise<void> {
+    if (copyingReport) return;
+    copyingReport = true;
     try {
       const md = await generateMarkdownReport(days, undefined, $selectedAnalyticsProviderScope);
       await navigator.clipboard.writeText(md);
-      addToast("Markdown report copied to clipboard.", "success", 3000);
+      addToast("Report copied to clipboard.", "success", 3000);
     } catch (err) {
       addToast(`Copy failed: ${String(err)}`, "danger", 4000);
+    } finally {
+      copyingReport = false;
     }
   }
 
   async function handleDownloadHtml(): Promise<void> {
+    if (downloadingHtml) return;
+    downloadingHtml = true;
     try {
       const html = await generateHtmlReport(days, undefined, $selectedAnalyticsProviderScope);
       const stamp = new Date().toISOString().slice(0, 10);
@@ -173,6 +189,8 @@
       addToast("Report downloaded.", "success", 3000);
     } catch (err) {
       addToast(`Download failed: ${String(err)}`, "danger", 4000);
+    } finally {
+      downloadingHtml = false;
     }
   }
 
@@ -244,7 +262,7 @@
   <header class="view-header">
     <div class="view-title-group">
       <h2 class="view-title">Reports</h2>
-      <p class="view-sub">{days === 365 ? "1 year" : `${days} days`} · selected analysis window</p>
+      <p class="view-sub">{windowLabel} window</p>
     </div>
     <div class="controls">
       <SegmentedControl
@@ -253,24 +271,57 @@
         onchange={(value) => (days = Number(value))}
         ariaLabel="Analysis window"
       />
-      <button class="btn-secondary" onclick={handleCopyMarkdown} disabled={loading || !!loadError}>
-        <IconCopy size={14} stroke={1.8} aria-hidden="true" />
-        Copy Markdown
-      </button>
-      <button class="btn-primary" onclick={handleDownloadHtml} disabled={loading || !!loadError}>
-        <IconDownload size={14} stroke={1.8} aria-hidden="true" />
-        Download HTML
-      </button>
+      <div class="export-group">
+        <span class="export-kicker">Exports</span>
+        <div class="export-actions">
+          <button class="btn-secondary" onclick={handleCopyMarkdown} disabled={!!loadError || copyingReport}>
+            <IconCopy size={14} stroke={1.8} aria-hidden="true" />
+            {copyingReport ? "Copying..." : "Copy report"}
+          </button>
+          <button class="btn-primary" onclick={handleDownloadHtml} disabled={!!loadError || downloadingHtml}>
+            <IconDownload size={14} stroke={1.8} aria-hidden="true" />
+            {downloadingHtml ? "Downloading..." : "Download HTML"}
+          </button>
+        </div>
+      </div>
     </div>
   </header>
 
-  {#if loading && !hasLoaded}
-    <div class="skeleton-stack">
-      <div class="skeleton hero"></div>
-      <div class="skeleton row"></div>
-      <div class="skeleton row"></div>
-      <div class="skeleton row short"></div>
-    </div>
+  {#if loading && !bundleReady && !hasLoaded}
+    <section class="reports-loading" aria-label="Loading reports" aria-live="polite" data-reports-loading>
+      <div class="loading-card loading-timeline" aria-hidden="true">
+        <span class="skeleton loading-label"></span>
+        <span class="skeleton loading-copy"></span>
+        <span class="skeleton loading-block timeline-block"></span>
+        <div class="loading-metrics">
+          <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+        </div>
+      </div>
+      <div class="loading-card loading-hero" aria-hidden="true">
+        <span class="skeleton loading-grade"></span>
+        <div class="loading-content">
+          <span class="skeleton loading-label"></span>
+          <span class="skeleton loading-copy"></span>
+          <div class="loading-metrics">
+            <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+          </div>
+        </div>
+      </div>
+      <div class="loading-grid" aria-hidden="true">
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+      </div>
+      <div class="loading-card" aria-hidden="true">
+        <span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span>
+        <div class="loading-metrics"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
+      </div>
+      <div class="loading-grid" aria-hidden="true">
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+      </div>
+      <div class="loading-card" aria-hidden="true"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+      <div class="loading-card" aria-hidden="true"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+    </section>
   {:else if loadError}
     <section class="report-error" role="alert">
       <strong>{days === 365 ? "1-year" : `${days}-day`} report unavailable</strong>
@@ -295,7 +346,7 @@
       <div class="th-head">
         <div class="th-titles">
           <h3 class="th-title">Monetary value timeline</h3>
-          <p class="th-sub">Daily monetary value across the selected window, with provenance-aware inflections marked on the curve.</p>
+          <p class="th-sub">Daily priced value and inflection points in the {windowLabel} window.</p>
         </div>
         <div class="cost-coverage" data-basis={timelineCostBasis}>
           <strong>
@@ -357,7 +408,7 @@
             {cache.grade}
           </div>
           <div class="grade-meta">
-            <div class="label">Cache Health</div>
+            <h3 class="label">Cache health grade</h3>
             <div class="ratio">
               {cache.trend_weighted_ratio.toFixed(0)}<span class="pct">%</span>
               <span class="muted"> hit ratio · {cache.grade_label}</span>
@@ -365,6 +416,7 @@
           </div>
         </div>
         <div class="hero-right">
+          <p class="card-sub hero-sub">Trend-weighted cache reuse for {cache.sessions_analyzed} sessions in the {windowLabel} window.</p>
           <p class="diagnosis">{cache.diagnosis}</p>
           <div class="hero-stats">
             <div class="hero-stat">
@@ -392,7 +444,8 @@
       {#if routing && capabilities.model_routing}
         <section class="card">
           <h3 class="card-title">Model routing</h3>
-          <p class="card-sub">{routing.diagnosis}</p>
+          <p class="card-sub">Priced session share and rerouting estimates for the {windowLabel} window.</p>
+          <p class="diagnosis section-diagnosis">{routing.diagnosis}</p>
           <p class="routing-coverage">
             {routing.priced_sessions} of {routing.total_sessions} sessions priced · {routing.cost_basis.replace("_", " ")}
           </p>
@@ -436,13 +489,11 @@
       {/if}
 
       <section class="card">
-        <h3 class="card-title">Inflection detail</h3>
-        <p class="card-sub">
-          The days marked on the timeline, with what moved on each one.
-        </p>
+        <h3 class="card-title">Inflection points</h3>
+        <p class="card-sub">Daily shifts at least 2x the prior baseline in the {windowLabel} window.</p>
         {#if inflections.length === 0}
           <div class="empty-inline">
-            No significant monetary-value shifts detected — usage is consistent.
+            No monetary-value shift crossed the inflection threshold.
           </div>
         {:else}
           <ul class="inflection-list">
@@ -474,11 +525,9 @@
       <section class="card trace-card">
         <header class="trace-head">
           <div>
-            <h3 class="card-title">Session topology</h3>
-            <p class="card-sub">
-              Telemetry shape across {trace.total_sessions} session{trace.total_sessions === 1 ? "" : "s"} in the last {days}d
-              · {trace.provider_display} · {trace.instruction_file}
-            </p>
+            <h3 class="card-title">Trace coverage</h3>
+            <p class="card-sub">Trace, tool, MCP, and compaction coverage for the {windowLabel} window.</p>
+            <p class="trace-meta">{trace.total_sessions} session{trace.total_sessions === 1 ? "" : "s"} · {trace.provider_display} · {trace.instruction_file}</p>
           </div>
           <div class="trace-badge">
             <span class="trace-badge-num">{tracedPct.toFixed(0)}%</span>
@@ -519,11 +568,12 @@
         {#if health && health.available}
           <section class="card">
             <h3 class="card-title">Session health</h3>
+            <p class="card-sub">Duration, overlap, and compaction signals across the {windowLabel} window.</p>
             <div class="health-hero">
               <div class="health-grade grade-{health.grade.toLowerCase()}">{health.grade}</div>
               <div class="health-score">{health.health_score}<span class="health-score-sub">/100</span></div>
             </div>
-            <p class="card-sub">{health.diagnosis}</p>
+            <p class="diagnosis section-diagnosis">{health.diagnosis}</p>
             <div class="mini-grid">
               <div class="mini-kv"><span>Avg duration</span><strong>{health.avg_duration_minutes.toFixed(1)} min</strong></div>
               <div class="mini-kv"><span>P90 duration</span><strong>{health.p90_duration_minutes} min</strong></div>
@@ -538,7 +588,8 @@
         {#if tools && tools.available}
           <section class="card">
             <h3 class="card-title">Tool frequency</h3>
-            <p class="card-sub">{tools.diagnosis}</p>
+            <p class="card-sub">Tool-call volume and MCP share across the {windowLabel} window.</p>
+            <p class="diagnosis section-diagnosis">{tools.diagnosis}</p>
             <div class="mini-grid">
               <div class="mini-kv"><span>Total calls</span><strong>{tools.total_tool_calls.toLocaleString()}</strong></div>
               <div class="mini-kv"><span>Avg / session</span><strong>{tools.avg_tools_per_session.toFixed(1)}</strong></div>
@@ -566,7 +617,8 @@
     {#if prompts && prompts.available}
       <section class="card">
         <h3 class="card-title">Prompt complexity</h3>
-        <p class="card-sub">{prompts.diagnosis}</p>
+        <p class="card-sub">Complexity and specificity scores for first prompts in the {windowLabel} window.</p>
+        <p class="diagnosis section-diagnosis">{prompts.diagnosis}</p>
         <div class="mini-grid four">
           <div class="mini-kv"><span>Prompts analyzed</span><strong>{prompts.prompts_analyzed.toLocaleString()}</strong></div>
           <div class="mini-kv"><span>Avg complexity</span><strong>{prompts.avg_complexity_score.toFixed(0)}/100</strong></div>
@@ -595,7 +647,7 @@
         <div>
           <h3 class="card-title">Recommendations</h3>
           <p class="card-sub">
-            Things worth acting on from your last {days === 365 ? "year" : `${days} days`} of sessions.
+            Patterns Pulse spotted in your last {days} days.
           </p>
         </div>
         {#if actionableRecs.length > 0}
@@ -623,8 +675,8 @@
       {:else if actionableRecs.length === 0}
         <div class="empty-good">
           <span class="eg-check" aria-hidden="true">✓</span>
-          <strong>You're all set</strong>
-          <span>Nothing needs attention in this window.</span>
+          <strong>Nothing needs attention</strong>
+          <span>No pattern crossed a threshold in this window.</span>
         </div>
       {:else if sortedRecs.length === 0}
         <div class="empty-inline">No items match this filter.</div>
@@ -701,9 +753,19 @@
 
   .controls {
     display: flex;
-    gap: 8px;
-    align-items: center;
+    gap: 12px;
+    align-items: flex-end;
   }
+  .export-group { display: grid; gap: 4px; }
+  .export-kicker {
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .export-actions { display: flex; gap: 8px; }
 
   .count-pill {
     font-size: 10px;
@@ -893,6 +955,8 @@
   @media (max-width: 700px) {
     .view-header { flex-direction: column; }
     .controls { width: 100%; flex-wrap: wrap; align-items: stretch; }
+    .export-group { flex: 1 1 100%; }
+    .export-actions { width: 100%; }
     .btn-primary, .btn-secondary { flex: 1; justify-content: center; }
   }
 
@@ -977,6 +1041,9 @@
     line-height: 1.55;
     color: var(--text-secondary);
   }
+  .hero-sub { margin-bottom: 0; }
+  .section-diagnosis { margin: -4px 0 14px; }
+  .trace-meta { margin-top: -8px; color: var(--text-muted); font-size: 11px; }
 
   .hero-stats {
     display: grid;
@@ -1287,37 +1354,42 @@
     to { transform: rotate(360deg); }
   }
 
-  .skeleton-stack {
+  .reports-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .loading-card {
     display: flex;
     flex-direction: column;
     gap: 12px;
-  }
-
-  .skeleton {
-    background: linear-gradient(
-      90deg,
-      var(--bg-card) 0%,
-      var(--bg-elevated) 50%,
-      var(--bg-card) 100%
-    );
-    background-size: 200% 100%;
+    min-height: 150px;
+    padding: 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    animation: shimmer 1.5s infinite;
   }
-
-  .skeleton.hero {
-    height: 180px;
+  .loading-timeline { min-height: 330px; }
+  .loading-hero {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    align-items: center;
+    min-height: 190px;
   }
-  .skeleton.row {
-    height: 120px;
+  .loading-content { display: flex; flex-direction: column; gap: 12px; }
+  .loading-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .loading-label { width: min(150px, 42%); height: 12px; }
+  .loading-copy { width: min(430px, 72%); height: 10px; }
+  .loading-block { flex: 1; min-height: 76px; }
+  .timeline-block { min-height: 180px; }
+  .loading-grade { width: 116px; height: 112px; }
+  .loading-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .loading-metrics .skeleton { height: 48px; }
+  @media (max-width: 820px) {
+    .loading-hero, .loading-grid { grid-template-columns: 1fr; }
   }
-  .skeleton.row.short {
-    height: 60px;
-  }
-
-  @keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
+  @media (max-width: 620px) {
+    .loading-metrics { grid-template-columns: repeat(2, 1fr); }
   }
 
   /* cchubber analyzers — phase 4 */

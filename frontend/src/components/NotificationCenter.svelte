@@ -59,7 +59,7 @@
       if (generation !== refreshGeneration) return;
       // Preserve the last provider-backed snapshot. Clearing it would make a
       // transport failure look like an authoritative empty notification feed.
-      errorMessage = "Native notifications could not be refreshed.";
+      errorMessage = "Notifications could not be refreshed.";
     }
   }
 
@@ -193,13 +193,13 @@
     <div class="notification-panel" role="dialog" aria-label="Notification center">
       <header>
         <div>
-          <span class="panel-kicker">Pulse events</span>
+          <span class="panel-kicker">Recent events</span>
           <h2>Notifications</h2>
         </div>
         {#if unreadCount > 0}
           <button class="mark-all" onclick={markAllRead}>
             <IconCheck size={14} stroke={1.8} />
-            {mutating ? "Saving…" : "Mark all read"}
+            {mutating ? "Saving..." : "Mark read"}
           </button>
         {/if}
       </header>
@@ -212,11 +212,11 @@
           </div>
         {/if}
         {#if loading}
-          <div class="empty-state">Syncing native events…</div>
+          <div class="empty-state">Loading events...</div>
         {:else if notifications.length === 0}
           <div class="empty-state">
             <strong>All clear</strong>
-            <span>Quota, provider health, and Discord events will appear here.</span>
+            <span>Quota, provider health, and Discord alerts appear here.</span>
           </div>
         {:else}
           {#each notifications as notification (notification.id)}

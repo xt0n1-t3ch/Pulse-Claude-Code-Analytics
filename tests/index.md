@@ -86,7 +86,7 @@ until an authenticated provider route supplies quota proof.
 |:---|:---|:---|
 | [tauri-mock.test.ts](integration/tauri-mock.test.ts) | `lib/api` over the mocked Tauri IPC | list commands resolve to `[]`, mapped scalar (`get_active_provider`→`"claude"`), unmapped command resolves to `undefined` without throwing |
 | [poll-flow.test.ts](integration/poll-flow.test.ts) | `stores.poll()` → global stores → `Dashboard.svelte` | one `poll()` pass calls each loader exactly once and hydrates `health`/`metrics`/`sessions`/`rateLimits`/`planInfo` + derived `activeSessions`; provider changes synchronously clear proof-bound state and reject prior-provider responses in flight; Dashboard then renders the provider/work shell and two live session cards end to end |
-| [phase5-flow.test.ts](integration/phase5-flow.test.ts) | `Context.svelte` + `Reports.svelte` data flow | multi-session context payloads hydrate active context cards; selecting a different session pill re-queries `getContextBreakdown` with the new session id (`"s2"`); Reports renders the bundle through a single `getReportsBundle` call |
+| [phase5-flow.test.ts](integration/phase5-flow.test.ts) | `Reports.svelte` data flow | Reports renders the bundle through a single `getReportsBundle` call |
 
 ## Frontend — component render (`tests/components/`)
 
@@ -105,7 +105,6 @@ the [fixtures/ChartStub.svelte](fixtures/ChartStub.svelte) stub so canvas-bound 
 | [NotificationCenter.test.ts](components/NotificationCenter.test.ts) | `NotificationCenter` | durable notification loading, unread count, quota-action routing, mark-all-read refresh, last-good preservation on transport failure, stale-response rejection, persistence-failure navigation, and native tray-open events |
 | [Sessions.test.ts](components/Sessions.test.ts) | `Sessions` (view) | flat KPI strip labels, live session rows + "2 active", history table loaded from the api layer |
 | [Costs.test.ts](components/Costs.test.ts) | `Costs` (view) | Subscription Value Ledger for unavailable money, exact/partial coverage boundaries, token mix/trend, budget cockpit for known spend, Cost-by-Type reconciliation, window-aggregate KPIs, project refetch, and live-snapshot refresh |
-| [Context.test.ts](components/Context.test.ts) | `Context` (view) | one active-session selector, click-through detail, no duplicate session-pill strip, and no stale historical utilization feed |
 | [Heatmap.test.ts](components/Heatmap.test.ts) | `Heatmap` | 24 local-hour cells, total/coverage/peak summaries, proper AM/PM labels, and accessible volume context |
 | [VersionContract.test.ts](components/VersionContract.test.ts) | release owners | v1.7.0 synchronization across Cargo, Tauri, frontend, lockfiles, release contract, README, and changelog |
 | [UpdateBanner.test.ts](components/UpdateBanner.test.ts) | `UpdateBanner` | automatic update popup, Later/Skip/Open release actions, skipped-version behavior, fake dev update, one explicit Update action followed by signed install and automatic relaunch, retryable failures |
@@ -197,7 +196,7 @@ Run these before cutting the Fable/Mythos + multi-session Context release:
 ```bash
 cargo test --workspace fable mythos
 cargo test --workspace presence
-npm --prefix frontend run test -- tests/components/Context.test.ts tests/integration/phase5-flow.test.ts tests/components/Discord.test.ts tests/components/SessionCard.test.ts
+npm --prefix frontend run test -- tests/integration/phase5-flow.test.ts tests/components/Discord.test.ts tests/components/SessionCard.test.ts
 cargo test -p pulse update_check --lib
 cargo test --workspace --test codex_upstream_contract
 cargo test --workspace session_used_tokens_uses_context_snapshot_not_lifetime_total

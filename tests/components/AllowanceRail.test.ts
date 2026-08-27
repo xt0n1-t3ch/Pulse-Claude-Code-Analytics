@@ -105,6 +105,58 @@ describe("AllowanceRail", () => {
     expect(container.querySelector(".window-row")).toBeNull();
   });
 
+  it("distinguishes Codex model quota windows by canonical duration", async () => {
+    const { accessSnapshot } = await import("@/lib/stores");
+    const route: AccessRouteSnapshot = {
+      source: {
+        id: "codex-subscription:default",
+        kind: "codex_subscription",
+        provider: "codex",
+        auth_method: "app_server",
+        proof: "quota_response",
+        plan: "pro_20x",
+      },
+      availability: "available",
+      freshness: "fresh",
+      provenance: "app_server",
+      observed_at: "2026-08-27T09:00:00Z",
+      fetched_at: "2026-08-27T09:00:00Z",
+      expires_at: "2026-08-27T09:00:30Z",
+      windows: [
+        {
+          key: "model_five_hour",
+          label: "GPT-5.3-Codex-Spark",
+          window_minutes: 300,
+          used_percent: 0,
+          remaining_percent: 100,
+          resets_at: "2026-08-27T14:00:00Z",
+        },
+        {
+          key: "model_weekly",
+          label: "GPT-5.3-Codex-Spark",
+          window_minutes: 10_080,
+          used_percent: 0,
+          remaining_percent: 100,
+          resets_at: "2026-09-03T13:31:00Z",
+        },
+      ],
+      credits: null,
+      extra_usage: null,
+      local_history: { available: true, sessions: 1 },
+      error: null,
+    };
+    accessSnapshot.set({ routes: [route] });
+
+    const { container, getByText, getAllByText } = render(AllowanceRail);
+    await tick();
+
+    expect(getByText("5-hour limit")).toBeTruthy();
+    expect(getByText("Weekly limit")).toBeTruthy();
+    expect(getAllByText("GPT-5.3-Codex-Spark")).toHaveLength(2);
+    expect(container.textContent).not.toContain("1w");
+    expect(container.querySelector('[title="Weekly usage limit"]')).not.toBeNull();
+  });
+
   it("renders extra usage alongside authenticated quota windows", async () => {
     const { accessSnapshot } = await import("@/lib/stores");
     const route: AccessRouteSnapshot = {

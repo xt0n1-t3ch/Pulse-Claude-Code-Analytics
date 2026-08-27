@@ -60,8 +60,15 @@ const ACTIVE_CUTOFF: Duration = Duration::from_secs(600);
 const IDLE_CUTOFF: Duration = Duration::from_secs(300);
 const APP_SNAPSHOT_CACHE_SCHEMA: u32 = 1;
 const APP_SNAPSHOT_CACHE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const DISCORD_USER_CACHE_TTL: Duration = Duration::from_secs(60);
+const REPORTS_BUNDLE_CACHE_TTL: Duration = Duration::from_secs(60);
 
 static START_TIME: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+static DISCORD_USER_CACHE: Mutex<Option<(Instant, Option<DiscordUserInfo>)>> = Mutex::new(None);
+#[allow(clippy::type_complexity)]
+static REPORTS_BUNDLE_CACHE: Mutex<
+    Option<(Instant, (u32, Option<String>, String), ReportsBundle)>,
+> = Mutex::new(None);
 static SNAPSHOT_POLLER_STARTED: AtomicBool = AtomicBool::new(false);
 static INITIAL_SNAPSHOT_READY: AtomicBool = AtomicBool::new(false);
 static SESSION_FINGERPRINTS: std::sync::OnceLock<Mutex<HashMap<String, u64>>> =
@@ -2780,10 +2787,11 @@ pub fn get_rate_limits() -> Option<RateLimitInfo> {
     Some(rate_limit_info_from_access(&active_access_route(&data)))
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DiscordUserInfo {
     pub user_id: String,
     pub username: String,
+    pub global_name: Option<String>,
     pub discriminator: String,
     pub avatar_hash: String,
     pub avatar_url: String,
@@ -2885,31 +2893,53 @@ fn discord_leveldb_dirs() -> Vec<PathBuf> {
 
 #[tauri::command]
 pub fn get_discord_user() -> Option<DiscordUserInfo> {
-    let leveldb_dir = discord_leveldb_dirs().into_iter().find(|d| d.exists())?;
+    let mut cache = DISCORD_USER_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((cached_at, cached_user)) = cache.as_ref()
+        && cached_at.elapsed() < DISCORD_USER_CACHE_TTL
+    {
+        return cached_user.clone();
+    }
 
-    let mut entries: Vec<_> = std::fs::read_dir(&leveldb_dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            name.ends_with(".ldb") || name.ends_with(".log")
-        })
-        .collect();
+    let user = scan_discord_leveldb_dirs(&discord_leveldb_dirs());
+    *cache = Some((Instant::now(), user.clone()));
+    user
+}
 
-    entries.sort_by(|a, b| {
-        let ta = a
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        let tb = b
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        tb.cmp(&ta)
-    });
+fn scan_discord_leveldb_dirs(dirs: &[PathBuf]) -> Option<DiscordUserInfo> {
+    let mut candidates = Vec::new();
+    for (dir_priority, leveldb_dir) in dirs.iter().enumerate() {
+        let Ok(read_dir) = std::fs::read_dir(leveldb_dir) else {
+            continue;
+        };
+        candidates.extend(
+            read_dir
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    name.ends_with(".ldb") || name.ends_with(".log")
+                })
+                .filter_map(|entry| {
+                    let modified = entry.metadata().ok()?.modified().ok()?;
+                    Some((modified, dir_priority, entry.file_name(), entry.path()))
+                }),
+        );
+    }
 
-    for entry in entries {
-        let data = std::fs::read(entry.path()).ok()?;
+    candidates.sort_by(
+        |(modified_a, priority_a, name_a, _), (modified_b, priority_b, name_b, _)| {
+            modified_b
+                .cmp(modified_a)
+                .then_with(|| priority_a.cmp(priority_b))
+                .then_with(|| name_a.cmp(name_b))
+        },
+    );
+    for (_, _, _, path) in candidates {
+        let Ok(data) = std::fs::read(path) else {
+            continue;
+        };
         if let Some(user) = extract_discord_user(&data) {
             return Some(user);
         }
@@ -2917,9 +2947,80 @@ pub fn get_discord_user() -> Option<DiscordUserInfo> {
     None
 }
 
+/// End (exclusive) of the JSON object owning the member that starts at
+/// `start`. The walk honors quoted strings so a `}` inside a display value
+/// never truncates the record, and it stops at the object's own closing brace
+/// so a neighboring account profile never leaks fields into this id's chunk.
+fn discord_user_object_end(data: &[u8], start: usize) -> Option<usize> {
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut depth: usize = 0;
+    for (index, &byte) in data.iter().enumerate().skip(start).take(4096) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match byte {
+            b'\\' if in_string => escaped = true,
+            b'"' => in_string = !in_string,
+            b'{' if !in_string => depth += 1,
+            b'}' if !in_string => {
+                if depth == 0 {
+                    return Some(index + 1);
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Read a JSON string field whose value may carry escape sequences such as
+/// quotes or backslashes (display names do), unlike the strict-charset
+/// identifier fields.
+fn extract_json_escaped_field(chunk: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":\"");
+    let value_start = chunk.find(&needle)? + needle.len();
+    let mut chars = chunk[value_start..].chars();
+    let mut value = String::new();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => return Some(value),
+            '\\' => match chars.next()? {
+                '"' => value.push('"'),
+                '\\' => value.push('\\'),
+                '/' => value.push('/'),
+                'n' => value.push('\n'),
+                'r' => value.push('\r'),
+                't' => value.push('\t'),
+                other => {
+                    value.push('\\');
+                    value.push(other);
+                }
+            },
+            ch => value.push(ch),
+        }
+    }
+    None
+}
+
+fn pick_best_discord_user(candidates: Vec<(usize, DiscordUserInfo)>) -> Option<DiscordUserInfo> {
+    candidates
+        .into_iter()
+        .max_by_key(|(offset, user)| {
+            let score = u8::from(!user.avatar_hash.is_empty()) * 2
+                + u8::from(user.global_name.is_some())
+                + u8::from(user.banner_url.is_some());
+            (score, *offset)
+        })
+        .map(|(_, user)| user)
+}
+
 fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
     let needle = b"\"id\":\"";
     let mut pos = 0;
+    let mut candidates = Vec::new();
     while pos < data.len().saturating_sub(100) {
         if let Some(offset) = data[pos..].windows(needle.len()).position(|w| w == needle) {
             let start = pos + offset;
@@ -2928,7 +3029,11 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                 let id_bytes = &data[id_start..id_start + id_end];
                 if id_bytes.len() >= 17 && id_bytes.iter().all(|b| b.is_ascii_digit()) {
                     let user_id = String::from_utf8_lossy(id_bytes).to_string();
-                    let chunk_end = (start + 600).min(data.len());
+                    // The owning object's real end (or the byte cap when LevelDB
+                    // text is truncated) keeps fields from a neighboring account
+                    // profile out of this id's record.
+                    let chunk_end = discord_user_object_end(data, start)
+                        .unwrap_or((start + 1200).min(data.len()));
                     let chunk = &data[start..chunk_end];
                     let chunk_str = String::from_utf8_lossy(chunk);
 
@@ -2939,6 +3044,9 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                             continue;
                         }
                     };
+
+                    let global_name = extract_json_escaped_field(&chunk_str, "global_name")
+                        .filter(|name| !name.is_empty());
 
                     let discriminator = extract_json_field(&chunk_str, "discriminator")
                         .filter(|d| !d.is_empty())
@@ -2979,16 +3087,20 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
                         _ => (None, None),
                     };
 
-                    return Some(DiscordUserInfo {
-                        user_id,
-                        username,
-                        discriminator,
-                        avatar_hash,
-                        avatar_url,
-                        avatar_default_url,
-                        banner_hash,
-                        banner_url,
-                    });
+                    candidates.push((
+                        start,
+                        DiscordUserInfo {
+                            user_id,
+                            username,
+                            global_name,
+                            discriminator,
+                            avatar_hash,
+                            avatar_url,
+                            avatar_default_url,
+                            banner_hash,
+                            banner_url,
+                        },
+                    ));
                 }
             }
             pos = start + 1;
@@ -2996,7 +3108,7 @@ fn extract_discord_user(data: &[u8]) -> Option<DiscordUserInfo> {
             break;
         }
     }
-    None
+    pick_best_discord_user(candidates)
 }
 
 /// Build the CDN URL for Discord's built-in default avatars.
@@ -4212,7 +4324,7 @@ pub async fn copy_fix_prompt(
     .await
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ReportsBundle {
     pub provider: String,
     pub capabilities: cc_discord_presence::provider::ProviderCapabilities,
@@ -4246,6 +4358,28 @@ pub struct DailyCostPoint {
     pub cost_sources: Vec<String>,
 }
 
+fn cached_reports_bundle(
+    days: u32,
+    project: Option<String>,
+    provider: String,
+    build: impl FnOnce() -> ReportsBundle,
+) -> ReportsBundle {
+    let key = (days, project, provider);
+    let mut cache = REPORTS_BUNDLE_CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((cached_at, cached_key, cached_bundle)) = cache.as_ref()
+        && cached_at.elapsed() < REPORTS_BUNDLE_CACHE_TTL
+        && cached_key == &key
+    {
+        return cached_bundle.clone();
+    }
+
+    let bundle = build();
+    *cache = Some((Instant::now(), key, bundle.clone()));
+    bundle
+}
+
 #[tauri::command]
 pub async fn get_reports_bundle(
     days: Option<i64>,
@@ -4253,23 +4387,27 @@ pub async fn get_reports_bundle(
     provider: Option<String>,
 ) -> ReportsBundle {
     let scope = provider.unwrap_or_else(|| analyzer_provider().as_str().to_string());
+    let cache_days = u32::try_from(days.unwrap_or(30)).unwrap_or(30);
     let (claude_roots, codex_roots) = analyzer_roots();
     offload(move || {
-        let sessions = crate::db::get_session_history_scoped(
-            Some(&scope),
-            Some(days.unwrap_or(30)),
-            project.as_deref(),
-            Some(5000),
-        );
-        let daily_costs = window_daily_costs_scoped(&scope, days.unwrap_or(30), project.as_deref());
-        build_reports_bundle_for_scope_from_roots(
-            &scope,
-            days,
-            sessions,
-            daily_costs,
-            claude_roots,
-            codex_roots,
-        )
+        cached_reports_bundle(cache_days, project.clone(), scope.clone(), || {
+            let sessions = crate::db::get_session_history_scoped(
+                Some(&scope),
+                Some(days.unwrap_or(30)),
+                project.as_deref(),
+                Some(5000),
+            );
+            let daily_costs =
+                window_daily_costs_scoped(&scope, days.unwrap_or(30), project.as_deref());
+            build_reports_bundle_for_scope_from_roots(
+                &scope,
+                days,
+                sessions,
+                daily_costs,
+                claude_roots,
+                codex_roots,
+            )
+        })
     })
     .await
 }
@@ -4694,17 +4832,21 @@ fn build_reports_bundle_for_scope_from_roots(
 #[cfg(test)]
 mod tests {
     use super::{
+        REPORTS_BUNDLE_CACHE, aggregate_cost_totals, build_reports_bundle_for_scope_from_roots,
+        cached_reports_bundle,
+    };
+    use super::{
         active_access_route, active_presence_presentation, api_probe_route,
         build_claude_context_breakdown, build_claude_session_infos, build_codex_discord_preview,
         build_codex_discord_preview_with_access, build_codex_session_infos,
         claude_route_from_usage, codex_fallback_surface, codex_plan_key_from_tier,
         codex_session_surface, codex_total_input_tokens, cost_availability, daily_cost_series,
-        dismiss_notification, get_notifications, get_unread_notification_count,
-        mark_all_notifications_read, mark_notification_read, merge_access_routes,
-        plan_key_from_override, route_for_provider, route_limits_for_claude_presence,
-        route_limits_for_presence, semantic_snapshot_fingerprint,
+        dismiss_notification, extract_discord_user, get_notifications,
+        get_unread_notification_count, mark_all_notifications_read, mark_notification_read,
+        merge_access_routes, plan_key_from_override, route_for_provider,
+        route_limits_for_claude_presence, route_limits_for_presence, scan_discord_leveldb_dirs,
+        semantic_snapshot_fingerprint,
     };
-    use super::{aggregate_cost_totals, build_reports_bundle_for_scope_from_roots};
     use crate::access::{
         AccessAvailability, AccessFreshness, AccessProof, AccessProvenance, AccessRouteSnapshot,
         AccessSnapshot, AccessSourceKind, AccessWindow, AuthMethod, access_route_from_usage,
@@ -4735,8 +4877,12 @@ mod tests {
     use codex_presence_core::{
         QuotaScope, QuotaWindow, RateLimitScope, UsageSignal, UsageSnapshot, UsageSource,
     };
+    use std::cell::Cell;
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::time::{Duration, SystemTime};
+
+    static REPORTS_BUNDLE_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn quota_usage(
         provider: &str,
@@ -4755,6 +4901,191 @@ mod tests {
             observed_at: Some(chrono::Utc::now()),
             provenance_source: "deterministic fixture".to_string(),
         }
+    }
+
+    fn discord_user_record(
+        user_id: &str,
+        username: &str,
+        global_name: Option<&str>,
+        avatar_hash: &str,
+        padding: usize,
+    ) -> Vec<u8> {
+        let global_name = global_name
+            .map(|name| format!(r#", "global_name":"{name}""#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"id":"{user_id}","username":"{username}"{}{},"discriminator":"0","avatar":"{avatar_hash}"}}{}"#,
+            " ".repeat(padding),
+            global_name,
+            " ".repeat(120)
+        )
+        .into_bytes()
+    }
+
+    fn discord_user_fixture(global_name: Option<&str>, padding: usize) -> Vec<u8> {
+        discord_user_record(
+            "123456789012345678",
+            "pulse-user",
+            global_name,
+            "avatar-hash",
+            padding,
+        )
+    }
+
+    fn discord_test_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pulse-discord-user-{tag}-{}-{:?}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create discord test dir");
+        dir
+    }
+
+    #[test]
+    fn discord_user_extracts_global_name_from_bounded_record_region() {
+        let data = discord_user_fixture(Some("Pulse Display"), 700);
+
+        let user = extract_discord_user(&data).expect("discord user");
+
+        assert_eq!(user.global_name.as_deref(), Some("Pulse Display"));
+    }
+
+    #[test]
+    fn discord_user_treats_empty_or_missing_global_name_as_absent() {
+        let empty = extract_discord_user(&discord_user_fixture(Some(""), 0)).expect("discord user");
+        let missing = extract_discord_user(&discord_user_fixture(None, 0)).expect("discord user");
+
+        assert_eq!(empty.global_name, None);
+        assert_eq!(missing.global_name, None);
+    }
+
+    #[test]
+    fn discord_user_scan_skips_unreadable_entry_and_uses_later_file() {
+        let dir = discord_test_dir("unreadable");
+        std::fs::create_dir(dir.join("newest.ldb")).expect("create unreadable directory entry");
+        std::fs::write(dir.join("older.log"), discord_user_fixture(None, 0))
+            .expect("write valid discord record");
+
+        let user = scan_discord_leveldb_dirs(std::slice::from_ref(&dir)).expect("discord user");
+
+        assert_eq!(user.username, "pulse-user");
+        std::fs::remove_dir_all(dir).expect("remove discord test dir");
+    }
+
+    #[test]
+    fn discord_user_scan_falls_back_to_second_candidate_directory() {
+        let first = discord_test_dir("first-empty");
+        let second = discord_test_dir("second-valid");
+        std::fs::write(first.join("000001.log"), b"not a discord user")
+            .expect("write empty candidate");
+        std::fs::write(second.join("000002.ldb"), discord_user_fixture(None, 0))
+            .expect("write valid candidate");
+
+        let user = scan_discord_leveldb_dirs(&[first.clone(), second.clone()])
+            .expect("discord user from second candidate");
+
+        assert_eq!(user.user_id, "123456789012345678");
+        std::fs::remove_dir_all(first).expect("remove first discord test dir");
+        std::fs::remove_dir_all(second).expect("remove second discord test dir");
+    }
+
+    #[test]
+    fn discord_user_scan_uses_newest_file_across_candidate_directories() {
+        let first = discord_test_dir("first-older");
+        let second = discord_test_dir("second-newer");
+        let older_path = first.join("000001.ldb");
+        let newer_path = second.join("000002.ldb");
+        std::fs::write(
+            &older_path,
+            discord_user_record("111111111111111111", "old-user", None, "old-avatar", 0),
+        )
+        .expect("write older discord record");
+        std::fs::write(
+            &newer_path,
+            discord_user_record("222222222222222222", "current-user", None, "new-avatar", 0),
+        )
+        .expect("write newer discord record");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&older_path)
+            .expect("open older discord record")
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+            .expect("set older modification time");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&newer_path)
+            .expect("open newer discord record")
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100))
+            .expect("set newer modification time");
+
+        let user = scan_discord_leveldb_dirs(&[first.clone(), second.clone()])
+            .expect("discord user from globally newest file");
+
+        assert_eq!(user.user_id, "222222222222222222");
+        assert_eq!(user.username, "current-user");
+        std::fs::remove_dir_all(first).expect("remove first discord test dir");
+        std::fs::remove_dir_all(second).expect("remove second discord test dir");
+    }
+
+    #[test]
+    fn discord_user_extract_prefers_richer_later_record() {
+        let mut data = discord_user_record("111111111111111111", "bare-user", None, "", 0);
+        data.extend_from_slice(&discord_user_record(
+            "222222222222222222",
+            "current-user",
+            Some("Current Display"),
+            "current-avatar",
+            0,
+        ));
+
+        let user = extract_discord_user(&data).expect("best discord user");
+
+        assert_eq!(user.user_id, "222222222222222222");
+        assert_eq!(user.global_name.as_deref(), Some("Current Display"));
+        assert_eq!(user.avatar_hash, "current-avatar");
+    }
+
+    #[test]
+    fn discord_user_extract_resolves_single_clean_record() {
+        let user = extract_discord_user(&discord_user_fixture(Some("Pulse Display"), 0))
+            .expect("single discord user");
+
+        assert_eq!(user.user_id, "123456789012345678");
+        assert_eq!(user.username, "pulse-user");
+    }
+
+    #[test]
+    fn discord_user_never_mixes_fields_from_a_following_profile() {
+        // Trailing filler mirrors real LevelDB bulk: the extractor's outer loop
+        // only keeps scanning while a record-sized lookahead remains.
+        let mut data = br#"{"id":"123456789012345678"}"#.to_vec();
+        data.extend_from_slice(
+            br#"{"id":"987654321098765432","username":"next-account","avatar":"hashB"}"#,
+        );
+        data.extend_from_slice(b" ".repeat(120).as_slice());
+
+        let user = extract_discord_user(&data).expect("second profile resolves");
+
+        assert_eq!(user.user_id, "987654321098765432");
+        assert_eq!(user.username, "next-account");
+        assert_eq!(user.avatar_hash, "hashB");
+    }
+
+    #[test]
+    fn discord_user_global_name_decodes_escapes_and_survives_braces_in_values() {
+        let mut data =
+            br#"{"id":"123456789012345678","username":"brace-user","note":"evil } tail","global_name":"Pulse \"Dev\""}"#
+                .to_vec();
+        data.extend_from_slice(b" ".repeat(120).as_slice());
+
+        let user = extract_discord_user(&data).expect("discord user");
+
+        assert_eq!(user.global_name.as_deref(), Some("Pulse \"Dev\""));
+        assert_eq!(user.username, "brace-user");
     }
 
     fn proofed_route(
@@ -6178,6 +6509,76 @@ mod tests {
             assert_eq!(current.priced_sessions, 2);
             assert_eq!(current.cost_basis, crate::db::CostBasis::Exact);
         }
+    }
+
+    #[test]
+    fn cached_reports_bundle_reuses_fresh_bundle_for_same_key() {
+        let _test_guard = REPORTS_BUNDLE_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *REPORTS_BUNDLE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let builds = Cell::new(0);
+        let project = Some("cache-test-same-key-7717".to_string());
+        let provider = "all-cache-test-7717".to_string();
+
+        let first = cached_reports_bundle(7717, project.clone(), provider.clone(), || {
+            builds.set(builds.get() + 1);
+            build_reports_bundle_for_scope_from_roots(
+                &provider,
+                Some(7717),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        });
+        let second = cached_reports_bundle(7717, project, provider, || {
+            builds.set(builds.get() + 1);
+            unreachable!("fresh matching cache entry should skip the builder")
+        });
+
+        assert_eq!(builds.get(), 1);
+        assert_eq!(
+            serde_json::to_value(first).expect("serialize first bundle"),
+            serde_json::to_value(second).expect("serialize cached bundle")
+        );
+    }
+
+    #[test]
+    fn cached_reports_bundle_rebuilds_for_different_key() {
+        let _test_guard = REPORTS_BUNDLE_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *REPORTS_BUNDLE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let builds = Cell::new(0);
+
+        for (days, project) in [
+            (7717, Some("cache-test-key-a-7717".to_string())),
+            (7718, Some("cache-test-key-b-7718".to_string())),
+        ] {
+            cached_reports_bundle(
+                days,
+                project,
+                "all-cache-test-key-change".to_string(),
+                || {
+                    builds.set(builds.get() + 1);
+                    build_reports_bundle_for_scope_from_roots(
+                        "all-cache-test-key-change",
+                        Some(i64::from(days)),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                },
+            );
+        }
+
+        assert_eq!(builds.get(), 2);
     }
 
     #[test]

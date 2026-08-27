@@ -176,9 +176,10 @@ describe("Costs.svelte", () => {
     getBudgetStatus.mockResolvedValue(budget);
     setBudget.mockReset();
     setBudget.mockResolvedValue(undefined);
-    const { sessions, selectedAnalyticsProviderScope } = await import("@/lib/stores");
+    const { sessions, selectedAnalyticsProviderScope, planInfo } = await import("@/lib/stores");
     sessions.set([]);
     selectedAnalyticsProviderScope.set("all");
+    planInfo.set(null);
   });
 
   it("leads with the value ledger and keeps the budget cockpit for known spend", async () => {
@@ -197,10 +198,10 @@ describe("Costs.svelte", () => {
 
     const labels = [...container.querySelectorAll(".is-label")].map((e) => e.textContent?.trim());
     expect(labels).toEqual([
-      "Value / session",
-      "Value / 1M tokens",
+      "Cost per session",
+      "Cost per 1M tokens",
       "Cache savings",
-      "API-equivalent value (30d)",
+      "30-day total",
     ]);
   });
 
@@ -254,9 +255,9 @@ describe("Costs.svelte", () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container, getByRole } = render(Costs);
 
-    await waitFor(() => expect(container.querySelectorAll(".dt-row")).toHaveLength(50));
+    await waitFor(() => expect(container.querySelectorAll(".detail-table tbody tr")).toHaveLength(50));
     await fireEvent.click(getByRole("button", { name: "Show 25 more" }));
-    await waitFor(() => expect(container.querySelectorAll(".dt-row")).toHaveLength(75));
+    await waitFor(() => expect(container.querySelectorAll(".detail-table tbody tr")).toHaveLength(75));
   });
 
   it("plots spend, projection and cap on the cockpit gauge", async () => {
@@ -359,9 +360,9 @@ describe("Costs.svelte", () => {
 
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container } = render(Costs);
-    await waitFor(() => expect(container.querySelectorAll(".dt-row").length).toBeGreaterThan(0));
+    await waitFor(() => expect(container.querySelectorAll(".detail-table tbody tr").length).toBeGreaterThan(0));
 
-    const pulseRows = [...container.querySelectorAll(".dt-row")]
+    const pulseRows = [...container.querySelectorAll(".detail-table tbody tr")]
       .filter((row) => row.textContent?.includes("pulse"));
     expect(pulseRows).toHaveLength(1);
   });
@@ -392,7 +393,7 @@ describe("Costs.svelte", () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container } = render(Costs);
     await waitFor(() => {
-      const pulseRows = [...container.querySelectorAll(".dt-row")]
+      const pulseRows = [...container.querySelectorAll(".detail-table tbody tr")]
         .filter((row) => row.textContent?.includes("pulse"));
       expect(pulseRows).toHaveLength(3);
     });
@@ -409,7 +410,7 @@ describe("Costs.svelte", () => {
     expect(queryByText("Provider-billed this month")).toBeNull();
   });
 
-  it("explains a real zero month beside a non-zero rolling 30-day ledger", async () => {
+  it("keeps the current-month zero state concise", async () => {
     getCostForecast.mockResolvedValueOnce({
       ...forecast,
       billed_spend_usd: 0,
@@ -418,13 +419,13 @@ describe("Costs.svelte", () => {
       days_elapsed: 3,
     });
     const Costs = (await import("@/views/Costs.svelte")).default;
-    const { findByText } = render(Costs);
+    const { findByText, queryByText } = render(Costs);
 
     expect(await findByText("No spend recorded this month yet.")).toBeTruthy();
-    expect(await findByText(/previous 30 days include/i)).toBeTruthy();
+    expect(queryByText(/previous 30 days include/i)).toBeNull();
   });
 
-  it("labels partial cost coverage instead of presenting an incomplete ledger as exact", async () => {
+  it("keeps partial coverage inside the ledger footer", async () => {
     getCostTotals.mockResolvedValue({
       ...totals,
       cost_basis: "partial",
@@ -433,10 +434,60 @@ describe("Costs.svelte", () => {
       sessions: 2,
     } as CostTotals);
     const Costs = (await import("@/views/Costs.svelte")).default;
-    const { findByText } = render(Costs);
+    const { container, findByText } = render(Costs);
 
     expect(await findByText("Partial cost coverage")).toBeTruthy();
-    expect(await findByText(/1 of 2 sessions have a known monetary value/i)).toBeTruthy();
+    const ledger = container.querySelector(".value-ledger") as HTMLElement;
+    expect(ledger.textContent).toContain(
+      "Known cost for 1 of 2 sessions. This is a lower bound.",
+    );
+    expect(ledger.textContent).toContain("API-equivalent · session-calculated");
+    expect(container.querySelector(".coverage-strip")).toBeNull();
+  });
+
+  it("passes the parsed plan price to the subscription cockpit", async () => {
+    const { planInfo } = await import("@/lib/stores");
+    planInfo.set({
+      provider: "codex",
+      plan_key: "pro_20x",
+      plan_name: "Pro 20x ($200/mo)",
+      detected: true,
+    });
+    getCostForecast.mockResolvedValueOnce({
+      ...forecast,
+      billed_spend_usd: null,
+      projected_billed_spend_usd: null,
+      daily_billed_spend_usd: null,
+      billed_sessions: 0,
+      api_equivalent_usd: 84.25,
+      projected_api_equivalent_usd: 112.5,
+      api_equivalent_sessions: 2,
+      cost_basis: "estimated",
+      cost_sources: ["codex_api_equivalent"],
+    });
+
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { findByText } = render(Costs);
+
+    expect(await findByText("$200.00")).toBeTruthy();
+    expect(await findByText("Pro 20x subscription")).toBeTruthy();
+  });
+
+  it("renders the full model label without ellipsis", async () => {
+    const fullModelName = "GPT-5.6 Sol · Medium Reasoning";
+    getCostTotals.mockResolvedValue({
+      ...totals,
+      by_model: [{ label: fullModelName, cost: totals.total_cost, sessions: 2 }],
+    });
+
+    const Costs = (await import("@/views/Costs.svelte")).default;
+    const { container, findByText } = render(Costs);
+
+    expect(await findByText(fullModelName)).toBeTruthy();
+    const label = container.querySelector(".mc-name") as HTMLElement;
+    expect(label.title).toBe(fullModelName);
+    expect(getComputedStyle(label).textOverflow).not.toBe("ellipsis");
+    expect(getComputedStyle(label).whiteSpace).not.toBe("nowrap");
   });
 
   it("turns unavailable billing into a provenance-aware value ledger", async () => {
@@ -495,14 +546,14 @@ describe("Costs.svelte", () => {
     const Costs = (await import("@/views/Costs.svelte")).default;
     const { container, findByText, findAllByText, getAllByText, queryByText } = render(Costs);
 
-    expect(await findByText("Known monetary value by provenance")).toBeTruthy();
+    expect(await findByText("Spend and coverage")).toBeTruthy();
     expect((await findAllByText("Cost not reported by provider")).length).toBeGreaterThan(0);
     await waitFor(() => {
       const values = [...container.querySelectorAll(".ledger-value")]
         .map((element) => element.textContent?.trim());
       expect(values).toContain("360.0K");
       expect(values).toContain("2");
-      expect(values).toContain("0 / 2");
+      expect(values).toContain("0/2");
     });
     expect(getAllByText("Not reported").length).toBeGreaterThan(0);
     expect(container.querySelector(".cockpit")).toBeNull();

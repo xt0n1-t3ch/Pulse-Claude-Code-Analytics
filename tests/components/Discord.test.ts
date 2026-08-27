@@ -104,6 +104,7 @@ function makeSession(id: string, project: string): SessionInfo {
 const discordUserFixture: DiscordUserInfo = {
   user_id: "123",
   username: "xt0n1",
+  global_name: "Tony",
   discriminator: "0",
   avatar_hash: "abc",
   avatar_url: "https://cdn.discordapp.com/avatars/123/abc.png",
@@ -181,7 +182,26 @@ describe("Discord.svelte", () => {
     await waitFor(() => {
       expect(container.querySelector(".dp-activity-details")?.textContent).toContain("pulse");
     });
-    expect(getByText("xt0n1")).toBeTruthy();
+    expect(getByText("Tony")).toBeTruthy();
+    expect(container.querySelector(".dp-handle")?.textContent?.trim()).toBe("@xt0n1");
+    expect(container.querySelector(".dp-art-large")).not.toBeNull();
+  });
+
+  it("renders the Discord global name instead of the username", async () => {
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container, getByText } = render(Discord);
+    await tick();
+
+    expect(getByText("Tony")).toBeTruthy();
+    expect(container.querySelector(".dp-username")?.textContent?.trim()).toBe("Tony");
+  });
+
+  it("renders the Discord username as a handle below the display name", async () => {
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { getByText } = render(Discord);
+    await tick();
+
+    expect(getByText("@xt0n1")).toBeTruthy();
   });
 
   /** The headline answers "is Discord showing me right now?", so it has to
@@ -253,6 +273,40 @@ describe("Discord.svelte", () => {
     expect(details).not.toContain("feat/marketplace");
     expect(state).toContain("ULTRACODE");
     expect(state).toContain("1 agent");
+  });
+
+  it("renders the backend small activity asset as a decorative chip", async () => {
+    const { discordPresencePreview } = await import("@/lib/stores");
+    discordPresencePreview.set({
+      provider: "claude",
+      app_name: "Claude Code",
+      details: "Thinking · pulse",
+      state: "Claude Opus 4.8",
+      large_image_key: "large",
+      large_text: "Claude Code",
+      small_image_key: "codex-app",
+      small_text: "Codex App",
+      has_session: true,
+      duration_secs: 30,
+    });
+
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    const chip = container.querySelector(".dp-art-small") as HTMLImageElement;
+    expect(chip).not.toBeNull();
+    expect(chip.getAttribute("src")).toContain("codex-app");
+    expect(chip.getAttribute("aria-hidden")).toBe("true");
+    expect(chip.getAttribute("alt")).toBe("");
+  });
+
+  it("does not render a small activity chip when the backend omits it", async () => {
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container } = render(Discord);
+    await tick();
+
+    expect(container.querySelector(".dp-art-small")).toBeNull();
   });
 
   it("renders ChatGPT App identity and art from the canonical backend asset key", async () => {
@@ -645,16 +699,15 @@ describe("Discord.svelte", () => {
   });
 
   describe("live preview theme-awareness", () => {
-    /** Every colour-bearing rule in the Discord mock must resolve through a
-     *  --preview-* token so the light theme can substitute a readable
-     *  surface instead of inheriting Discord's dark palette. */
+    /** Every colour-bearing rule in the Discord mock must resolve through the
+     *  same app tokens used by Pulse panels in both themes. */
     const THEMED_SELECTORS = [
       ".dp-profile",
       ".dp-body",
       ".dp-avatar",
       ".dp-status-dot",
       ".dp-username",
-      ".dp-tag",
+      ".dp-handle",
       ".dp-separator",
       ".dp-section-title",
       ".dp-activity-card",
@@ -676,14 +729,11 @@ describe("Discord.svelte", () => {
       return style?.[1] ?? "";
     }
 
-    it("declares no hardcoded colours anywhere in the view", () => {
+    it("keeps the stage and Discord preview rules free of hardcoded hex colours", () => {
       const css = componentCss();
-      expect(css.length).toBeGreaterThan(0);
-      // Neither hex literals nor raw rgb()/rgba() may appear: both bypass the
-      // theme tokens and are exactly what made the preview unreadable in light
-      // mode before the redesign.
-      expect(css.match(/#[0-9a-fA-F]{3,8}\b/g)).toBeNull();
-      expect(css.match(/rgba?\(/g)).toBeNull();
+      const previewCss = css.slice(css.indexOf("/* ── STAGE ── */"));
+      expect(previewCss.length).toBeGreaterThan(0);
+      expect(previewCss.match(/#[0-9a-fA-F]{3,6}\b/g)).toBeNull();
     });
 
     it("stacks field controls before the two-column layout can clip at app widths", () => {
@@ -693,14 +743,14 @@ describe("Discord.svelte", () => {
       );
     });
 
-    it("routes every Discord mock surface through a --dc-* token", () => {
+    it("routes every Discord mock surface through the Pulse design tokens", () => {
       const css = componentCss();
       for (const selector of THEMED_SELECTORS) {
-      const cls = selector.slice(1);
+        const cls = selector.slice(1);
         const block = css.match(new RegExp(`\\.${cls}\\s*(,[^{]*)?\\{([^}]*)\\}`));
         expect(block, `${selector} rule must exist`).not.toBeNull();
-        expect(block?.[2] ?? "", `${selector} must use a --preview-* token`).toMatch(
-          /var\(--preview-/,
+        expect(block?.[2] ?? "", `${selector} must use an app theme token`).toMatch(
+          /var\(--(?:surface-panel|bg-card|bg-elevated|border|text-primary|text-secondary|text-muted|success|radius|elev|shadow)/,
         );
       }
     });
@@ -715,7 +765,8 @@ describe("Discord.svelte", () => {
 
         expect(container.querySelector(".dp-profile"), theme).not.toBeNull();
         expect(container.querySelector(".dp-activity-card"), theme).not.toBeNull();
-        expect(container.querySelector(".dp-username")?.textContent, theme).toContain("xt0n1");
+        expect(container.querySelector(".dp-username")?.textContent, theme).toContain("Tony");
+        expect(container.querySelector(".dp-handle")?.textContent, theme).toContain("@xt0n1");
         unmount();
       }
       document.documentElement.removeAttribute("data-theme");

@@ -139,7 +139,7 @@
       : hasPreviewRoutes
         ? "Design preview"
         : hasSourceAttention
-          ? "Attention required"
+          ? "Needs attention"
           : "All sources live",
   );
 </script>
@@ -167,6 +167,9 @@
           class:selected={$selectedAccessSourceId === route.source.id}
           data-access-source={route.source.id}
           data-kind={route.source.kind}
+          aria-label={route.source.kind === "claude_subscription" && status.state === "waiting"
+            ? `${accessSourceName(route.source)} — sign in required`
+            : undefined}
           aria-pressed={$selectedAccessSourceId === route.source.id}
           disabled={switchingSourceId !== null}
           onclick={() => selectSource(route)}
@@ -184,7 +187,7 @@
               <small>{label.access}</small>
             {/if}
           </span>
-          <span class="source-dot" data-state={status.state} title={status.label} aria-label={status.label}></span>
+          <span class="source-dot" data-state={status.state} aria-label={route.source.kind === "claude_subscription" && status.state === "waiting" ? "Sign in state" : status.label}></span>
         </button>
       {/each}
 

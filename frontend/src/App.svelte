@@ -6,7 +6,6 @@
   import UpdateBanner from "./components/UpdateBanner.svelte";
   import Dashboard from "./views/Dashboard.svelte";
   import Sessions from "./views/Sessions.svelte";
-  import Context from "./views/Context.svelte";
   import Costs from "./views/Costs.svelte";
   import Reports from "./views/Reports.svelte";
   import Discord from "./views/Discord.svelte";
@@ -23,11 +22,10 @@
   import { fly } from "svelte/transition";
   import { setTheme } from "@tauri-apps/api/app";
 
-  type ViewId = "dashboard" | "sessions" | "context" | "costs" | "reports" | "discord" | "settings";
+  type ViewId = "dashboard" | "sessions" | "costs" | "reports" | "discord" | "settings";
   const views: Record<ViewId, Component<any>> = {
     dashboard: Dashboard,
     sessions: Sessions,
-    context: Context,
     costs: Costs,
     reports: Reports,
     discord: Discord,
@@ -59,7 +57,8 @@
   onMount(() => {
     applyTheme(theme);
     startSnapshotSync();
-    loadDiscordUser();
+    void loadDiscordUser();
+    const discordUserRefreshTimer = setInterval(() => void loadDiscordUser(), 60_000);
     let firstProviderRevision = true;
     const unsubscribeProviderRevision = providerRevision.subscribe(() => {
       if (firstProviderRevision) {
@@ -70,6 +69,7 @@
       void poll();
     });
     return () => {
+      clearInterval(discordUserRefreshTimer);
       unsubscribeProviderRevision();
       stopSnapshotSync();
     };

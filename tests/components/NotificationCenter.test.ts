@@ -126,7 +126,7 @@ describe("NotificationCenter", () => {
     const { getByRole } = render(NotificationCenter);
     await waitFor(() => expect(getByRole("button", { name: /1 unread/ })).toBeTruthy());
     await fireEvent.click(getByRole("button", { name: /1 unread/ }));
-    await fireEvent.click(getByRole("button", { name: "Mark all read" }));
+    await fireEvent.click(getByRole("button", { name: "Mark read" }));
 
     expect(api.markAllNotificationsRead).toHaveBeenCalledOnce();
     expect(api.getUnreadNotificationCount).toHaveBeenCalled();

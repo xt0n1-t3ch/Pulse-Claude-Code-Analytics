@@ -1,30 +1,45 @@
+# Pulse
+
+Pulse is a local-first Claude Code and OpenAI Codex usage tracker and cost dashboard with Discord Rich Presence.
+
 <div align="center">
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/pulse-logo-dual-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/pulse-logo-dual-light.png">
-  <img src="assets/pulse-logo-dual-dark.png" alt="Pulse — Claude Code and Codex Analytics" width="560" height="124">
+  <img src="assets/pulse-logo-dual-dark.png" alt="Pulse, Claude Code and Codex analytics" width="560" height="124">
 </picture>
 
 ### See where your Claude Code and Codex usage actually goes.
 
-The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard** and **Discord Rich Presence** for **Claude Pro / Max / Teams** and **ChatGPT Plus / Pro / Business**.<br>Measure provider-aware cost, cache, context, and limits; catch runaway sessions; and send one-click fix prompts back to the active coding agent. Native desktop. 100 % local. Zero telemetry.
+The open-source analytics dashboard for **Claude Pro / Max / Teams** and **ChatGPT Plus / Pro / Business**.<br>Measure provider-aware cost, cache, context, and limits; catch runaway sessions; and send one-click fix prompts back to the active coding agent. Native desktop. 100 % local. Zero telemetry.
 
-[![CI](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/ci.yml/badge.svg)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/ci.yml)
-[![Release](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/release.yml/badge.svg)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/workflows/release.yml)
-[![Latest](https://img.shields.io/github/v/release/xt0n1-t3ch/Pulse-Claude-Code-Analytics?color=0a0a0a&label=latest&logo=github)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/xt0n1-t3ch/Pulse-Claude-Code-Analytics/total?color=0a0a0a&logo=github)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases)
-[![License](https://img.shields.io/badge/license-Apache%202.0-0a0a0a.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/xt0n1-t3ch/Pulse-Claude-Code-Analytics?style=flat&color=0a0a0a&logo=github)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/stargazers)
-[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-0a0a0a?logo=githubsponsors)](https://github.com/sponsors/xt0n1-t3ch)
+[![v1.7.9](https://img.shields.io/badge/v1.7.9-blue)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.7.9)
+![Platforms: Windows, macOS, Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0a0a0a)
+![Built with Tauri 2, Rust, and Svelte 5](https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20Rust%20%C2%B7%20Svelte%205-0a0a0a)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-0a0a0a.svg)](LICENSE)
 
 <a href="#install"><b>Download</b></a>&nbsp; · &nbsp;<a href="#whats-new"><b>What's New</b></a>&nbsp; · &nbsp;<a href="#about"><b>About</b></a>&nbsp; · &nbsp;<a href="#screenshots"><b>Screenshots</b></a>&nbsp; · &nbsp;<a href="#features"><b>Features</b></a>&nbsp; · &nbsp;<a href="docs/"><b>Docs</b></a>&nbsp; · &nbsp;<a href="https://github.com/sponsors/xt0n1-t3ch"><b>Sponsor</b></a>
 
 </div>
 
----
+## Table of contents
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.2</h2>
+- [What's new](#whats-new)
+- [About Pulse](#about)
+- [Why Pulse](#why-pulse)
+- [Screenshots](#screenshots)
+- [Install](#install)
+- [Features](#features)
+- [Usage](#usage)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+- [Windows and WSL session roots](#windows--wsl-session-roots)
+
+
+<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.9</h2>
 
 - **Incremental by construction** — unchanged transcripts read no historical body bytes; appends read only their bounded tail anchor and delta, while active-session checkpoints recover safely after restart.
 - **Money with provenance** — provider-billed spend and documented API-equivalent value remain separate through SQLite, dashboards, reports, budgets, and exports; unknown values stay unavailable.
@@ -74,7 +89,7 @@ The open-source **Claude Code + OpenAI Codex (ChatGPT App) analytics dashboard**
 
 </details>
 
-**[Download v1.7.2](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
+**[Download v1.7.9](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
 
 <h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
 
@@ -96,6 +111,14 @@ You may pay for Claude Code every month, ChatGPT every month, or both: **Claude 
 Codex Discord Rich Presence has its own source-of-truth repo: **[xt0n1-t3ch/Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)**. Pulse consumes its typed core through a checked Git dependency pinned to upstream `v1.10.2` at commit `a508507e0849fd5c9e09c7d1c55eebe2d199cfc0`. The standalone Rich Presence project keeps its own audience while Pulse owns the Tauri integration and analytics presentation.
 
 Written in **Rust** + **Tauri 2** + **Svelte 5**. ≈ 12 MB on Windows, ≈ 18 MB on macOS. Cold-starts in under 200 ms. One-click installers for Windows (NSIS + MSI), macOS (DMG — Apple Silicon + Intel), and Linux (deb, rpm, AppImage). Apache-2.0 licensed (attribution required — see [`NOTICE`](NOTICE)). The data never leaves your machine.
+
+<h2 id="why-pulse">Why Pulse</h2>
+
+- **Local-first analytics.** Pulse reads local session data into SQLite and sends no telemetry.
+- **Dual-provider tracking.** One desktop app keeps Claude Code and OpenAI Codex analytics separate while supporting both subscription workflows.
+- **Real Discord identity.** Discord Rich Presence uses local Discord IPC to publish the active project, branch, model, reasoning effort, and session timer.
+- **Cache health grading.** A trend-weighted A to F grade shows whether prompt-cache efficiency is improving or declining.
+- **Budgets and forecasts.** Cost views compare provider-aware session value with configurable budgets and forecasts.
 
 <h2 id="screenshots"><img src="assets/icons/image.svg" alt="" width="28" align="center"> &nbsp;Screenshots</h2>
 

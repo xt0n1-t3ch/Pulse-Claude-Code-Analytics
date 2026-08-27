@@ -30,7 +30,6 @@ describe("Signal Ledger design system", () => {
     const views = (name: string) =>
       readFileSync(resolve(process.cwd(), `src/views/${name}.svelte`), "utf8");
     const sessions = views("Sessions");
-    const context = views("Context");
     const costs = views("Costs");
     const reports = views("Reports");
     const discord = views("Discord");
@@ -40,14 +39,9 @@ describe("Signal Ledger design system", () => {
     expect(sessions).toContain('<div class="stats-row metric-strip">');
     expect(sessions).not.toContain('<div class="empty-icon">✳</div>');
     expect(sessions).not.toContain("var(--panel-sheen)");
-    expect(context).toContain('<section class="context-state state-panel"');
-    expect(context).toContain("Reading the active context window");
-    expect(context).not.toContain("getSessionsContextUsage");
-    expect(context).not.toContain("Per-session utilization");
-    expect(context).not.toContain('class="view-kicker"');
     expect(costs).not.toContain('class="view-kicker"');
     expect(reports).not.toContain('class="view-kicker"');
-    expect(reports).toContain("selected analysis window");
+    expect(reports).toContain("{windowLabel} window");
     expect(discord).not.toContain('class="view-kicker"');
     expect(discord).toContain('<h2 class="view-title">Broadcast</h2>');
     expect(settings).not.toContain('class="view-kicker"');
@@ -67,7 +61,6 @@ describe("Signal Ledger design system", () => {
     expect(labels).toEqual([
       "Dashboard",
       "Sessions",
-      "Context",
       "Costs",
       "Reports",
       "Discord",

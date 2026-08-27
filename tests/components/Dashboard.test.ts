@@ -307,7 +307,7 @@ describe("Dashboard.svelte", () => {
     expect(container.querySelector(".provider-workspace")).toBeNull();
     expect(container.querySelector(".focus-panel.surface-panel")).toBeNull();
     expect(container.querySelector(".insight-card.card")).toBeNull();
-    expect(container.querySelector(".metric-strip")).toBeNull();
+    expect(container.querySelector("[data-session-focus] .metric-strip")).not.toBeNull();
     expect(container.querySelector("[data-source-inspector]")).toBeNull();
     expect(container.textContent).not.toContain("Work now");
     expect(container.textContent).not.toContain("Source diagnostics");
@@ -379,7 +379,7 @@ describe("Dashboard.svelte", () => {
     expect(container.querySelector("[data-dashboard-layout='direction-two']")).not.toBeNull();
     expect(container.querySelector("[data-session-focus]")).not.toBeNull();
     expect(container.querySelector("[data-telemetry-ledger]")).not.toBeNull();
-    expect(container.querySelector(".metric-strip")).toBeNull();
+    expect(container.querySelector("[data-session-focus] .metric-strip")).not.toBeNull();
     expect(container.querySelector("[data-telemetry-ledger]")?.textContent).not.toContain("Plan limits");
     expect(container.querySelector("[data-session-focus]")?.textContent).toContain("Planner regression");
     expect(container.querySelector(".focus-chart-head")?.textContent).toContain("240.0K tokens this session");
@@ -479,6 +479,59 @@ describe("Dashboard.svelte", () => {
     expect(container.textContent).toContain(formatResetDateTime("2026-05-28T18:00:00Z"));
   });
 
+  it("keeps an unavailable cost note below the value in its own metric card", async () => {
+    sessions.set([{
+      ...liveSession("unpriced", "Unpriced work", 80_000, 100_000, "Thinking"),
+      cost_available: false,
+      cost_basis: "unavailable",
+    }]);
+
+    const { container } = render(Dashboard);
+    await tick();
+
+    const costLabel = [...container.querySelectorAll(".stat-label")]
+      .find((node) => node.textContent?.trim() === "Current monetary value");
+    const costCard = costLabel?.closest(".stat-card");
+    const value = costCard?.querySelector(".stat-value");
+    const note = costCard?.querySelector<HTMLElement>(".focus-note");
+
+    expect(costCard).not.toBeNull();
+    expect(note?.textContent).toBe("Exact total not reported");
+    expect(note?.title).toBe("Exact total not reported");
+    expect(note?.closest(".stat-card")).toBe(costCard);
+    expect(value?.compareDocumentPosition(note as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(getComputedStyle(note as HTMLElement).display).toBe("block");
+  });
+
+  it("keeps at-a-glance metadata to one line and moves coverage to a tooltip", async () => {
+    getCostForecast.mockResolvedValueOnce({
+      ...forecast,
+      billed_spend_usd: null,
+      daily_billed_spend_usd: null,
+      projected_billed_spend_usd: null,
+      api_equivalent_usd: 10_444,
+      daily_api_equivalent_usd: 387,
+      projected_api_equivalent_usd: 11_992,
+      days_elapsed: 27,
+      api_equivalent_sessions: 2,
+      billed_sessions: 0,
+      cost_basis: "estimated",
+      cost_sources: ["anthropic_api_equivalent"],
+    });
+
+    const { container } = render(Dashboard);
+    await waitFor(() => expect(container.querySelector(".forecast-meta")).not.toBeNull());
+
+    const card = container.querySelector(".forecast-info")?.closest<HTMLElement>(".insight-card");
+    const meta = card?.querySelectorAll(".forecast-meta") ?? [];
+    expect(meta).toHaveLength(1);
+    expect(meta[0]?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "$10,444 API-equivalent · projected $11,992",
+    );
+    expect(card?.title).toBe("Coverage: 27/31 days");
+    expect(card?.querySelector(".insight-kicker")).toBeNull();
+  });
+
   it("does not leak global Codex cost or tokens into an empty Claude selection", async () => {
     getAnalyticsSummary.mockResolvedValueOnce(emptySummary);
     getSessionHistory.mockResolvedValueOnce([]);
@@ -526,6 +579,14 @@ describe("Dashboard.svelte", () => {
       expect(getAnalyticsSummary).toHaveBeenCalledWith("claude");
     });
 
+    // The initial analytics window may render skeletons first; settle on the
+    // loaded empty-selection content before asserting its absence guarantees.
+    await waitFor(() => {
+      const settled = container.querySelector("[data-session-focus]")?.textContent ?? "";
+      expect(settled).toContain("No active session");
+      expect(settled).toContain("Exact total not reported");
+    });
+
     const focus = container.querySelector("[data-session-focus]")?.textContent ?? "";
     expect(focus).toContain("No active session");
     expect(focus).toContain("Exact total not reported");
@@ -570,7 +631,7 @@ describe("Dashboard.svelte", () => {
     const { container, getByText } = render(Dashboard);
     await tick();
 
-    expect(getByText("Weekly")).toBeTruthy();
+    expect(getByText("Weekly limit")).toBeTruthy();
     expect(getByText("96% remaining")).toBeTruthy();
     expect(container.textContent).not.toContain("5h");
     expect(container.textContent).not.toContain("Spark");

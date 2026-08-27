@@ -197,6 +197,17 @@
     ),
   );
   let previewAssetKey = $derived(previewArt.assetKey);
+  let previewSmallArt = $derived.by(() => {
+    const key = scopedPresencePreview?.small_image_key;
+    if (!key) return null;
+    if (key === "codex-app" || key === "codex-logo") {
+      return rpArtFor("codex", key, scopedPresencePreview?.small_text);
+    }
+    if (key === "large") {
+      return rpArtFor("claude", key, scopedPresencePreview?.small_text);
+    }
+    return null;
+  });
   let previewFast = $derived(previewSession?.fast ?? false);
 
   let detailsLine = $derived.by(() => {
@@ -628,8 +639,11 @@
             <div class="dp-status-dot" class:offline={!discordEnabled}></div>
           </div>
           <div class="dp-username">
-            {$discordUser?.username ?? "Discord user unavailable"} <span class="dp-tag">ツ</span>
+            {$discordUser?.global_name ?? $discordUser?.username ?? "Discord user unavailable"}
           </div>
+          {#if $discordUser?.username}
+            <div class="dp-handle">@{$discordUser.username}</div>
+          {/if}
           <div class="dp-separator"></div>
           <div class="dp-section-title">Current Activity</div>
           <div class="dp-activity-card">
@@ -637,8 +651,23 @@
             <div class="dp-activity-body">
               <div class="dp-activity-art" title={previewArt.largeText}>
                 <img class="dp-art-large" src={previewArt.large} alt={previewArt.largeText} draggable="false" />
-                {#if previewArt.small}
-                  <img class="dp-art-small" src={previewArt.small} alt="" draggable="false" />
+                {#if scopedPresencePreview?.small_image_key}
+                  {#if previewSmallArt}
+                    <img
+                      class="dp-art-small"
+                      src={previewSmallArt.large}
+                      title={scopedPresencePreview.small_text ?? ""}
+                      alt=""
+                      aria-hidden="true"
+                      draggable="false"
+                    />
+                  {:else}
+                    <span
+                      class="dp-art-small dp-art-small-fallback"
+                      title={scopedPresencePreview.small_text ?? ""}
+                      aria-hidden="true"
+                    ><PulseMark size={22} /></span>
+                  {/if}
                 {/if}
               </div>
               <div class="dp-activity-info">
@@ -1044,16 +1073,16 @@
     box-shadow: 0 0 0 3px var(--success-dim), 0 0 10px var(--success-glow);
   }
 
-  /* ── Discord mock card — premium, Discord-faithful, editorial rhythm ── */
+  /* ── Discord structure using Pulse panel surfaces ── */
   .dp-profile {
     position: relative;
-    background: var(--preview-bg);
-    border: 1px solid var(--preview-border);
-    border-radius: 14px;
+    background: var(--surface-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
     overflow: hidden;
-    box-shadow: var(--preview-shadow);
+    box-shadow: var(--elev-1);
   }
-  .dp-body { padding: 0 0 18px; color: var(--preview-text); }
+  .dp-body { padding: 0 0 18px; color: var(--text-primary); }
 
   .dp-banner {
     height: 68px;
@@ -1072,13 +1101,13 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, transparent 55%, var(--preview-scrim) 100%);
+    background: linear-gradient(180deg, transparent 55%, color-mix(in srgb, var(--surface-panel) 35%, transparent) 100%);
     pointer-events: none;
   }
   .dp-banner-default {
     background:
-      radial-gradient(120% 140% at 15% 0%, color-mix(in srgb, var(--provider-accent) 22%, transparent) 0%, transparent 62%),
-      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 14%, var(--preview-bg)) 0%, var(--preview-bg) 70%);
+      radial-gradient(120% 140% at 15% 0%, color-mix(in srgb, var(--provider-accent) 30%, transparent) 0%, transparent 62%),
+      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 18%, var(--bg-elevated)) 0%, var(--bg-elevated) 72%);
   }
 
   .dp-avatar-ring {
@@ -1091,8 +1120,8 @@
     width: 80px;
     height: 80px;
     border-radius: 50%;
-    background: var(--preview-surface);
-    border: 6px solid var(--preview-bg);
+    background: var(--bg-elevated);
+    border: 6px solid var(--surface-panel);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1108,25 +1137,30 @@
     height: 20px;
     border-radius: 50%;
     background: var(--success);
-    border: 5px solid var(--preview-bg);
+    border: 5px solid var(--surface-panel);
     transition: background 0.2s var(--ease);
   }
-  .dp-status-dot.offline { background: var(--preview-faint); }
+  .dp-status-dot.offline { background: var(--text-muted); }
 
   .dp-username {
     padding: 10px 18px 0;
     font-size: 20px;
     font-weight: 700;
-    letter-spacing: -0.015em;
-    color: var(--preview-text);
+    letter-spacing: var(--letter-tight);
+    color: var(--text-primary);
     line-height: 1.2;
   }
-  .dp-tag { font-size: 14px; color: var(--preview-muted); font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+  .dp-handle {
+    padding: 3px 18px 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+  }
 
   .dp-separator {
     margin: 14px 18px 12px;
     height: 1px;
-    background: var(--preview-border);
+    background: var(--border);
   }
 
   .dp-section-title {
@@ -1134,23 +1168,24 @@
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--preview-muted);
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
   }
 
   .dp-activity-card {
     margin: 0 14px;
-    background: var(--preview-surface);
-    border: 1px solid var(--preview-border);
-    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
     padding: 14px;
+    box-shadow: var(--elev-1);
   }
   .dp-activity-header {
     font-size: 10.5px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--preview-muted);
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
     margin-bottom: 10px;
   }
   .dp-activity-body { display: flex; gap: 14px; align-items: flex-start; }
@@ -1163,9 +1198,9 @@
   .dp-art-large {
     width: 60px;
     height: 60px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     object-fit: cover;
-    background: var(--preview-bg);
+    background: var(--bg-elevated);
     box-shadow: var(--shadow-sm);
     -webkit-user-drag: none;
     user-select: none;
@@ -1174,16 +1209,17 @@
     position: absolute;
     right: -5px;
     bottom: -5px;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     object-fit: cover;
-    background: var(--preview-surface);
-    border: 2.5px solid var(--preview-surface);
+    background: var(--bg-elevated);
+    border: 2.5px solid var(--bg-elevated);
     box-shadow: var(--shadow-sm);
     -webkit-user-drag: none;
     user-select: none;
   }
+  .dp-art-small-fallback { display: flex; align-items: center; justify-content: center; overflow: hidden; }
   .dp-activity-info {
     display: flex;
     flex-direction: column;
@@ -1195,14 +1231,14 @@
   .dp-activity-name {
     font-size: 15px;
     font-weight: 700;
-    letter-spacing: -0.005em;
-    color: var(--preview-text);
+    letter-spacing: var(--letter-tight);
+    color: var(--text-primary);
     line-height: 1.2;
   }
   .dp-activity-details,
   .dp-activity-state {
     font-size: 12.5px;
-    color: var(--preview-muted);
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1210,7 +1246,7 @@
   }
   .dp-activity-elapsed {
     font-size: 11.5px;
-    color: var(--preview-faint);
+    color: var(--text-muted);
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
   }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
+  import { addToast } from "../lib/stores";
   import { checkAppUpdate, openAppReleasePage, type AppUpdateAsset, type AppUpdateInfo } from "../lib/api";
 
   const SKIP_KEY = "pulse-update-skipped-version";
@@ -109,16 +110,23 @@
   async function fetchUpdate(): Promise<AppUpdateInfo | null> {
     const fake = fakeVersionParam();
     if (fake) return synthFakeUpdate(fake);
-    try {
-      return await checkAppUpdate();
-    } catch {
-      return null;
-    }
+    return checkAppUpdate();
   }
 
   async function runCheck(force: boolean): Promise<void> {
-    const next = await fetchUpdate();
-    if (!next || !next.update_available || !next.latest_version) return;
+    let next: AppUpdateInfo | null = null;
+    try {
+      next = await fetchUpdate();
+    } catch {
+      // Only the explicit manual check pays for a failure message; the
+      // startup probe stays silent.
+      if (force) addToast("Couldn't reach the update service.", "warning", 5000);
+      return;
+    }
+    if (!next || !next.update_available || !next.latest_version) {
+      if (force) addToast("You're already up to date.", "info", 4000);
+      return;
+    }
     if (!force && next.latest_version === skippedVersion()) return;
     info = next;
     notesOpen = false;
@@ -235,7 +243,7 @@
     in:fly={{ y: 16, duration: 320 }}
   >
     <header class="up-head">
-      <span class="up-title">New Update Available</span>
+      <span class="up-title">Update available</span>
       <span class="up-badge">{severity === "major" ? "Major" : severity === "minor" ? "Feature" : "Patch"} update</span>
       {#if releaseAge}
         <span class="up-age">{releaseAge}</span>
@@ -269,7 +277,7 @@
         aria-expanded={notesOpen}
         onclick={() => (notesOpen = !notesOpen)}
       >
-        {notesOpen ? "Hide full notes" : "Full release notes"}
+        {notesOpen ? "Hide notes" : "Show notes"}
       </button>
       {#if notesOpen}
         <pre class="up-notes">{info.release_notes}</pre>
@@ -311,7 +319,7 @@
       <p class="up-error" role="alert">
         {phase === "relaunch-failed"
           ? "Update installed, but Pulse could not restart. Retry the restart."
-          : "In-app install failed. You can open the release page instead."}
+          : "Update failed. Open the release page or try again."}
       </p>
     {/if}
 
