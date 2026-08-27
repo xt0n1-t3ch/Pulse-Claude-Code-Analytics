@@ -116,6 +116,217 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 - The Settings footer derives a friendly platform label (Windows/macOS/Linux)
   via userAgentData with a raw-value fallback instead of printing the
   deprecated `navigator.platform` string.
+=======
+## [1.7.8] - 2026-08-25
+
+Pulse 1.7.8 publishes the complete patch after the immutable release gate caught
+an architecture label missing from the Windows SBOM step before any v1.7.7
+artifacts became public.
+
+### Fixed
+
+- Windows x64 and ARM64 SBOM filenames now receive their matrix platform label
+  in the step that creates them, so the release assembler can verify and
+  publish the complete cross-platform asset set.
+
+## [1.7.7] - 2026-08-25
+
+Pulse 1.7.7 was an unpublished release candidate that renewed the
+time-bounded RustSec review contract that correctly stopped the first release
+attempt before any artifacts were published.
+
+### Security
+
+- Re-reviewed the 19 accepted Tauri/GTK3 and build-time RustSec warnings against
+  the current advisory database and extended their fail-closed review window to
+  September 25, 2026. No new vulnerability exception was added.
+
+## [1.7.6] - 2026-08-25
+
+Pulse 1.7.6 is a patch release that makes update availability truthful on each
+supported platform, completes native x64 and ARM64 release coverage, and
+refines the operational workspace without changing public data contracts.
+
+### Fixed
+
+- The repository status row now links to Pulse's real local quality gate instead
+  of a removed CI workflow, and the dashboard source strip uses the full
+  operational width with a higher-contrast Codex signal color.
+- Cross-platform releases now build and verify native Windows, macOS, and Linux
+  artifacts for both x64 and ARM64, including architecture-specific updater
+  targets, Windows SBOMs, checksums, and installer selection.
+- Pulse now offers **Update** only after Tauri confirms that the current
+  platform has a signed updater manifest. Missing or invalid updater metadata
+  shows **Open release** immediately instead of failing after approval, and the
+  verified update handle is reused for download and installation.
+- Pulse's local Codex adapter recognizes `codex_work_desktop` sessions as the
+  desktop app, matching the canonical Rich Presence classifier.
+
+### Changed
+
+- Refreshed Svelte and the frontend interaction test harness to compatible
+  patch releases.
+- Promoted the immutable Codex Presence Core pin to canonical v1.10.3 while
+  retaining Pulse-owned desktop classification at the adapter boundary.
+
+## [1.7.5] - 2026-08-25
+
+Pulse 1.7.5 isolates analytics scope from Discord publishing, keeps Codex
+quota windows faithful to fresh provider data, makes reset dismissals durable,
+and ships a tighter, faster desktop workspace without changing public command
+or database contracts.
+
+### Fixed
+
+- The frameless Windows title bar uses Tauri's native drag command again,
+  preserves double-click maximize, and excludes navigation, notifications,
+  theme, and window controls from the draggable surface.
+- Analytics source changes no longer switch the provider published to Discord.
+  The Discord view keeps its own Claude/Codex broadcaster selector while Home,
+  Sessions, Context, Costs, and Reports retain their independent provider scope.
+- Codex quota presentation now projects the provider's effective account scope.
+  A newly reported weekly-only response removes an older or model-scoped 5-hour
+  window from Pulse surfaces instead of presenting an invented `100% remaining`
+  value; reported zero usage remains distinct from an absent window.
+- Model-scoped quota windows now keep duration-specific identities, so a 5-hour
+  and weekly window cannot alternately recreate the same reset notification on
+  every poll. Dismissal remains durable across refreshes and restarts, and a
+  one-time migration hides pre-fix collision rows without deleting the audit
+  trail or suppressing later genuine reset events.
+- A malformed Discord configuration now degrades only Discord settings and
+  preview data. Core analytics remain live, same-provider last-good Discord
+  data stays visible with an explicit warning, provider changes revoke that
+  cache, and poisoned shared state fails the whole snapshot instead of
+  publishing fabricated empty telemetry.
+- Snapshot freshness uses the backend capture timestamp, including restored
+  startup snapshots, rather than the time the frontend happened to receive it.
+  Direct Discord preview reads now report configuration errors instead of
+  silently composing a presence from defaults.
+- Reports now normalizes and bounds stored prompt excerpts, keeps them out of
+  the rendered DOM by default, and requires an explicit per-session reveal.
+
+### Changed
+
+- Refreshed the Svelte compiler and checker, user-interaction test harness, and
+  Rust error-derive lockfile to their compatible patch releases.
+- Refined the desktop analytics shell while preserving its ultra-dark canvas, clearer
+  text hierarchy, a compact provider strip, a less crowded Discord field
+  editor, and a bounded Reports loading state across desktop and narrow widths.
+- Reflowed account limits into a content-driven horizontal ledger above the
+  live workspace and widened the centered source selector, removing the empty
+  full-height rail and unused chrome space without changing provider ownership.
+- Split non-dashboard views into route-loaded production chunks. The measured
+  entry JavaScript fell from 506.28 kB to 148.06 kB (167.01 kB to 51.67 kB
+  gzip) while Home remains eagerly available.
+- Added rendered axe-core coverage to the existing dark/light Playwright
+  matrix, including the 390-pixel narrow shell across every primary view and
+  geometry checks for centered source occupancy and content-driven allowances.
+>>>>>>> origin/main
+
+## [1.7.8] - 2026-08-25
+
+Pulse 1.7.8 publishes the complete patch after the immutable release gate caught
+an architecture label missing from the Windows SBOM step before any v1.7.7
+artifacts became public.
+
+### Fixed
+
+- Windows x64 and ARM64 SBOM filenames now receive their matrix platform label
+  in the step that creates them, so the release assembler can verify and
+  publish the complete cross-platform asset set.
+
+## [1.7.7] - 2026-08-25
+
+Pulse 1.7.7 was an unpublished release candidate that renewed the
+time-bounded RustSec review contract that correctly stopped the first release
+attempt before any artifacts were published.
+
+### Security
+
+- Re-reviewed the 19 accepted Tauri/GTK3 and build-time RustSec warnings against
+  the current advisory database and extended their fail-closed review window to
+  September 25, 2026. No new vulnerability exception was added.
+
+## [1.7.6] - 2026-08-25
+
+Pulse 1.7.6 is a patch release that makes update availability truthful on each
+supported platform, completes native x64 and ARM64 release coverage, and
+refines the operational workspace without changing public data contracts.
+
+### Fixed
+
+- The repository status row now links to Pulse's real local quality gate instead
+  of a removed CI workflow, and the dashboard source strip uses the full
+  operational width with a higher-contrast Codex signal color.
+- Cross-platform releases now build and verify native Windows, macOS, and Linux
+  artifacts for both x64 and ARM64, including architecture-specific updater
+  targets, Windows SBOMs, checksums, and installer selection.
+- Pulse now offers **Update** only after Tauri confirms that the current
+  platform has a signed updater manifest. Missing or invalid updater metadata
+  shows **Open release** immediately instead of failing after approval, and the
+  verified update handle is reused for download and installation.
+- Pulse's local Codex adapter recognizes `codex_work_desktop` sessions as the
+  desktop app, matching the canonical Rich Presence classifier.
+
+### Changed
+
+- Refreshed Svelte and the frontend interaction test harness to compatible
+  patch releases.
+- Promoted the immutable Codex Presence Core pin to canonical v1.10.3 while
+  retaining Pulse-owned desktop classification at the adapter boundary.
+
+## [1.7.5] - 2026-08-25
+
+Pulse 1.7.5 isolates analytics scope from Discord publishing, keeps Codex
+quota windows faithful to fresh provider data, makes reset dismissals durable,
+and ships a tighter, faster desktop workspace without changing public command
+or database contracts.
+
+### Fixed
+
+- The frameless Windows title bar uses Tauri's native drag command again,
+  preserves double-click maximize, and excludes navigation, notifications,
+  theme, and window controls from the draggable surface.
+- Analytics source changes no longer switch the provider published to Discord.
+  The Discord view keeps its own Claude/Codex broadcaster selector while Home,
+  Sessions, Context, Costs, and Reports retain their independent provider scope.
+- Codex quota presentation now projects the provider's effective account scope.
+  A newly reported weekly-only response removes an older or model-scoped 5-hour
+  window from Pulse surfaces instead of presenting an invented `100% remaining`
+  value; reported zero usage remains distinct from an absent window.
+- Model-scoped quota windows now keep duration-specific identities, so a 5-hour
+  and weekly window cannot alternately recreate the same reset notification on
+  every poll. Dismissal remains durable across refreshes and restarts, and a
+  one-time migration hides pre-fix collision rows without deleting the audit
+  trail or suppressing later genuine reset events.
+- A malformed Discord configuration now degrades only Discord settings and
+  preview data. Core analytics remain live, same-provider last-good Discord
+  data stays visible with an explicit warning, provider changes revoke that
+  cache, and poisoned shared state fails the whole snapshot instead of
+  publishing fabricated empty telemetry.
+- Snapshot freshness uses the backend capture timestamp, including restored
+  startup snapshots, rather than the time the frontend happened to receive it.
+  Direct Discord preview reads now report configuration errors instead of
+  silently composing a presence from defaults.
+- Reports now normalizes and bounds stored prompt excerpts, keeps them out of
+  the rendered DOM by default, and requires an explicit per-session reveal.
+
+### Changed
+
+- Refreshed the Svelte compiler and checker, user-interaction test harness, and
+  Rust error-derive lockfile to their compatible patch releases.
+- Refined the desktop analytics shell while preserving its ultra-dark canvas, clearer
+  text hierarchy, a compact provider strip, a less crowded Discord field
+  editor, and a bounded Reports loading state across desktop and narrow widths.
+- Reflowed account limits into a content-driven horizontal ledger above the
+  live workspace and widened the centered source selector, removing the empty
+  full-height rail and unused chrome space without changing provider ownership.
+- Split non-dashboard views into route-loaded production chunks. The measured
+  entry JavaScript fell from 506.28 kB to 148.06 kB (167.01 kB to 51.67 kB
+  gzip) while Home remains eagerly available.
+- Added rendered axe-core coverage to the existing dark/light Playwright
+  matrix, including the 390-pixel narrow shell across every primary view and
+  geometry checks for centered source occupancy and content-driven allowances.
 
 ## [1.7.2] - 2026-08-12
 

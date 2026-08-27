@@ -35,12 +35,22 @@ pub struct AccountUsageReading {
 
 impl AccountUsageReading {
     pub fn usage_snapshot(&self) -> UsageSnapshot {
+        // `rateLimitsByLimitId` can contain model-scoped windows alongside the
+        // account-wide bucket. Pulse's account route and broadcaster consume
+        // the effective account envelope; retaining every scope here would
+        // flatten a model-only 5h window into a misleading global allowance.
+        // The raw envelopes stay on this reading for diagnostics and plan
+        // resolution, while the chosen envelope keeps every window the
+        // provider actually reported for that account scope.
+        let envelopes = select_session_envelope_global_first(&self.envelopes)
+            .into_iter()
+            .collect();
         let stream = UsageStream::new(
             UsageSource::new(
                 "codex-subscription:default",
                 [UsageSignal::CodexSubscriptionUsage],
             ),
-            self.envelopes.clone(),
+            envelopes,
         );
         snapshot_from_stream_with_provenance(&stream, "Codex account API")
     }
@@ -79,9 +89,16 @@ impl AccountUsageManager {
 
         self.last_attempt = Some(now);
         let reading = query_account_usage(RESPONSE_TIMEOUT)?;
-        self.cached = Some(reading.clone());
-        self.cached_at = Some(now);
+        self.store_reading(reading.clone(), now);
         Ok(reading)
+    }
+
+    /// A provider response is a complete snapshot for its account scope. Do
+    /// not merge windows from its predecessor: a removed window is absent,
+    /// rather than a zero-valued counter that may leak into the next broadcast.
+    fn store_reading(&mut self, reading: AccountUsageReading, observed_at: Instant) {
+        self.cached = Some(reading);
+        self.cached_at = Some(observed_at);
     }
 }
 
@@ -369,6 +386,22 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    fn account_reading_with_global_windows(
+        windows: Vec<codex_presence_core::UsageWindow>,
+    ) -> AccountUsageReading {
+        AccountUsageReading {
+            envelopes: vec![RateLimitEnvelope {
+                limit_id: Some("codex".to_string()),
+                scope: codex_presence_core::RateLimitScope::GlobalAccount,
+                limits: codex_presence_core::RateLimits::new(windows),
+                ..RateLimitEnvelope::default()
+            }],
+            individual_limits: Vec::new(),
+            rate_limit_reset_credits: None,
+            observed_at: Utc.timestamp_opt(2_000, 0).single().unwrap(),
+        }
+    }
+
     #[test]
     fn freshness_filter_drops_yesterdays_jsonl_quota() {
         let now = Utc.timestamp_opt(2_000, 0).single().unwrap();
@@ -463,5 +496,47 @@ mod tests {
             Some(user_local),
             "an unpackaged Pulse process must not select the inaccessible WindowsApps CLI"
         );
+    }
+
+    #[test]
+    fn fresh_account_response_removes_a_window_from_the_cached_snapshot() {
+        let mut manager = AccountUsageManager::default();
+        let cached_at = Instant::now();
+        manager.store_reading(
+            account_reading_with_global_windows(vec![
+                codex_presence_core::UsageWindow {
+                    used_percent: 0.0,
+                    remaining_percent: 100.0,
+                    window_minutes: 300,
+                    resets_at: None,
+                },
+                codex_presence_core::UsageWindow {
+                    used_percent: 4.0,
+                    remaining_percent: 96.0,
+                    window_minutes: 10_080,
+                    resets_at: None,
+                },
+            ]),
+            cached_at,
+        );
+        manager.store_reading(
+            account_reading_with_global_windows(vec![codex_presence_core::UsageWindow {
+                used_percent: 5.0,
+                remaining_percent: 95.0,
+                window_minutes: 10_080,
+                resets_at: None,
+            }]),
+            cached_at + Duration::from_secs(1),
+        );
+
+        let snapshot = manager
+            .cached
+            .as_ref()
+            .expect("fresh response cached")
+            .usage_snapshot();
+        assert_eq!(snapshot.scopes.len(), 1);
+        assert_eq!(snapshot.scopes[0].windows.len(), 1);
+        assert_eq!(snapshot.scopes[0].windows[0].window_minutes, 10_080);
+        assert_eq!(snapshot.scopes[0].windows[0].remaining_percent, 95.0);
     }
 }

@@ -636,26 +636,56 @@ pub fn window_label(window: &AccessWindow) -> String {
 }
 
 fn scope_windows(scope: &QuotaScope) -> Vec<AccessWindow> {
+    let multiple_windows = scope.windows.len() > 1;
+    let scope_label = semantic_scope_label(scope.name.as_deref());
     scope
         .windows
         .iter()
         .enumerate()
         .map(|(index, quota)| AccessWindow {
-            key: window_key(scope, quota, index),
-            label: semantic_scope_label(scope.name.as_deref()),
+            key: window_key(scope, quota, index, multiple_windows),
+            label: scope_label.as_ref().map(|label| {
+                if multiple_windows {
+                    format!("{label} · {}", format_window_label(quota.window_minutes))
+                } else {
+                    label.clone()
+                }
+            }),
             quota: quota.clone(),
         })
         .collect()
 }
 
-fn window_key(scope: &QuotaScope, quota: &QuotaWindow, index: usize) -> String {
-    if let Some(name) = scope.name.as_deref().filter(|name| !name.trim().is_empty()) {
-        let normalized = name.trim().to_ascii_lowercase().replace([' ', '-'], "_");
-        if !is_generic_scope_name(&normalized) {
-            return normalized;
-        }
+fn window_key(
+    scope: &QuotaScope,
+    quota: &QuotaWindow,
+    index: usize,
+    multiple_windows: bool,
+) -> String {
+    if let Some(scope_key) = semantic_scope_key(scope) {
+        return if multiple_windows {
+            format!("{scope_key}_{}", duration_key(quota.window_minutes, index))
+        } else {
+            scope_key
+        };
     }
-    match quota.window_minutes {
+    duration_key(quota.window_minutes, index)
+}
+
+fn semantic_scope_key(scope: &QuotaScope) -> Option<String> {
+    let candidates = if scope.kind == RateLimitScope::ModelScoped {
+        [scope.name.as_deref(), scope.id.as_deref()]
+    } else {
+        [scope.name.as_deref(), None]
+    };
+    candidates.into_iter().flatten().find_map(|value| {
+        let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+        (!normalized.is_empty() && !is_generic_scope_name(&normalized)).then_some(normalized)
+    })
+}
+
+fn duration_key(window_minutes: u64, index: usize) -> String {
+    match window_minutes {
         300 => "five_hour".to_string(),
         10_080 => "weekly".to_string(),
         minutes => format!("window_{minutes}_{index}"),

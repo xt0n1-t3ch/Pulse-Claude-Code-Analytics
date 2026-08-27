@@ -17,8 +17,8 @@ describe("Pulse version contract", () => {
     expect(JSON.parse(read("scripts/release-contract.json")).product.version).toBe(VERSION);
     const upstream = JSON.parse(read("src/codex/UPSTREAM.json"));
     expect(upstream.compatibility.pulse).toBe(VERSION);
-    expect(upstream.canonical_release).toBe("v1.10.2");
-    expect(upstream.canonical_commit).toBe("a508507e0849fd5c9e09c7d1c55eebe2d199cfc0");
+    expect(upstream.canonical_release).toBe("v1.10.3");
+    expect(upstream.canonical_commit).toBe("9d20ffdb1c4ec6fa37edc00952badd041ec5bc02");
     expect(read("CHANGELOG.md")).toContain(`## [${VERSION}] - 2026-08-27`);
   });
 });

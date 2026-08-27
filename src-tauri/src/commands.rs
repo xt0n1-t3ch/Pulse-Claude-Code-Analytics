@@ -51,7 +51,7 @@ use crate::access::{
     subscription_source, window_label,
 };
 use crate::live::PublisherLease;
-use crate::notifications::{NotificationRecord, NotificationStore};
+use crate::notifications::{NotificationRecord, NotificationStore, QuotaResetObservation};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const STALE_THRESHOLD: Duration = Duration::from_secs(120);
@@ -119,14 +119,16 @@ fn observe_access_notifications(
         return;
     }
     for window in &route.windows {
-        match store.observe_quota_reset_transition(
-            provider_name,
-            &window.key,
-            window.quota.used_percent,
-            window.quota.remaining_percent,
-            window.quota.resets_at,
-            now,
-        ) {
+        let label = window_label(window);
+        match store.observe_quota_reset_transition_for_window(QuotaResetObservation {
+            provider: provider_name,
+            window_identity: &window.key,
+            window_label: &label,
+            used_percent: window.quota.used_percent,
+            remaining_percent: window.quota.remaining_percent,
+            reset_at: window.quota.resets_at,
+            observed_at: now,
+        }) {
             Ok(record) => publish_notification(app, record),
             Err(error) => {
                 tracing::warn!(provider = provider_name, window = %window.key, error = %error, "failed to record quota reset notification")
@@ -655,14 +657,19 @@ fn active_access_route(data: &CachedData) -> AccessRouteSnapshot {
 fn route_window_slots(
     route: &AccessRouteSnapshot,
 ) -> (Option<&AccessWindow>, Option<&AccessWindow>) {
-    let primary = route.windows.iter().find(|window| {
-        window.key == "five_hour" || window.key == "primary" || window.quota.window_minutes == 300
-    });
+    let primary = route
+        .windows
+        .iter()
+        .find(|window| window.key == "five_hour" || window.key == "primary");
     let secondary = route.windows.iter().find(|window| {
         matches!(window.key.as_str(), "weekly" | "seven_day" | "secondary")
             || window.quota.window_minutes == 10_080
     });
-    if primary.is_none() && secondary.is_none() && route.windows.len() == 1 {
+    if primary.is_none()
+        && secondary.is_none()
+        && route.windows.len() == 1
+        && route.windows[0].label.is_none()
+    {
         let only = &route.windows[0];
         if only.key.contains("week") || only.key.contains("seven") {
             return (None, Some(only));
@@ -1435,8 +1442,12 @@ pub struct AppSnapshot {
     pub sessions: Vec<SessionInfo>,
     pub access: AccessSnapshot,
     pub rate_limits: Option<RateLimitInfo>,
-    pub discord_preview: DiscordPresencePreview,
-    pub discord_settings: DiscordSettings,
+    /// Config-dependent payloads are absent together when the persisted
+    /// Discord configuration cannot be read. The frontend may retain a
+    /// same-provider last-good value, but the backend never fabricates one.
+    pub discord_preview: Option<DiscordPresencePreview>,
+    pub discord_settings: Option<DiscordSettings>,
+    pub discord_settings_error: Option<String>,
     pub plan: PlanInfo,
 }
 
@@ -1449,7 +1460,19 @@ struct PersistedAppSnapshot {
 }
 
 fn build_app_snapshot(sync_state: &'static str) -> Result<AppSnapshot, String> {
+    // Shared-state failure is a snapshot-wide trust-boundary failure. Check it
+    // before any legacy getter can turn a poisoned mutex into Unknown/empty
+    // defaults and accidentally publish fabricated core telemetry.
+    let cached = shared()
+        .lock()
+        .map_err(|_| "Pulse shared snapshot state is unavailable".to_string())?
+        .clone();
     let access = get_access_snapshot();
+    let (discord_preview, discord_settings, discord_settings_error) =
+        match build_discord_snapshot_payload(&cached) {
+            Ok((preview, settings)) => (Some(preview), Some(settings), None),
+            Err(error) => (None, None, Some(error)),
+        };
     Ok(AppSnapshot {
         revision: 1,
         sync_state,
@@ -1459,10 +1482,52 @@ fn build_app_snapshot(sync_state: &'static str) -> Result<AppSnapshot, String> {
         sessions: get_live_sessions(),
         access,
         rate_limits: get_rate_limits(),
-        discord_preview: get_discord_preview(),
-        discord_settings: get_discord_settings()?,
+        discord_preview,
+        discord_settings,
+        discord_settings_error,
         plan: get_plan_info(),
     })
+}
+
+fn build_discord_snapshot_payload(
+    cached: &CachedData,
+) -> Result<(DiscordPresencePreview, DiscordSettings), String> {
+    let provider = cached.active_provider;
+    match provider {
+        Provider::Claude => {
+            let mut config = PresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            apply_claude_display_prefs(&mut config, &cached.discord_prefs);
+            let sessions = match &cached.sessions {
+                ActiveSessions::Claude(sessions) => sessions.as_slice(),
+                _ => &[],
+            };
+            let preview = build_claude_discord_preview_with_access(
+                sessions,
+                &config,
+                Some(&active_access_route(cached)),
+                cached.claude_usage_data.as_ref(),
+            );
+            let settings = build_discord_settings(provider, cached, Some(&config), None);
+            Ok((preview, settings))
+        }
+        Provider::Codex => {
+            let mut config =
+                CodexPresenceConfig::load_or_init().map_err(|error| error.to_string())?;
+            apply_codex_display_prefs(&mut config, &cached.discord_prefs, CreditsMirror::Apply);
+            let sessions = match &cached.sessions {
+                ActiveSessions::Codex(sessions) => sessions.as_slice(),
+                _ => &[],
+            };
+            let preview = build_codex_discord_preview_with_access(
+                sessions,
+                &config,
+                cached.codex_desktop_surface_running,
+                Some(&active_access_route(cached)),
+            );
+            let settings = build_discord_settings(provider, cached, None, Some(&config));
+            Ok((preview, settings))
+        }
+    }
 }
 
 fn app_snapshot_cache_path() -> PathBuf {
@@ -2418,47 +2483,12 @@ pub fn get_live_sessions() -> Vec<SessionInfo> {
 }
 
 #[tauri::command]
-pub fn get_discord_preview() -> DiscordPresencePreview {
+pub fn get_discord_preview() -> Result<DiscordPresencePreview, String> {
     let data = shared()
         .lock()
-        .ok()
-        .map(|data| data.clone())
-        .unwrap_or_default();
-    build_discord_presence_preview(&data)
-}
-
-fn build_discord_presence_preview(data: &CachedData) -> DiscordPresencePreview {
-    let access = active_access_route(data);
-    match data.active_provider {
-        Provider::Claude => {
-            let mut config = PresenceConfig::load_or_init().unwrap_or_default();
-            apply_claude_display_prefs(&mut config, &data.discord_prefs);
-            let sessions = match &data.sessions {
-                ActiveSessions::Claude(sessions) => sessions.as_slice(),
-                _ => &[],
-            };
-            build_claude_discord_preview_with_access(
-                sessions,
-                &config,
-                Some(&access),
-                data.claude_usage_data.as_ref(),
-            )
-        }
-        Provider::Codex => {
-            let mut config = CodexPresenceConfig::load_or_init().unwrap_or_default();
-            apply_codex_display_prefs(&mut config, &data.discord_prefs, CreditsMirror::Apply);
-            let sessions = match &data.sessions {
-                ActiveSessions::Codex(sessions) => sessions.as_slice(),
-                _ => &[],
-            };
-            build_codex_discord_preview_with_access(
-                sessions,
-                &config,
-                data.codex_desktop_surface_running,
-                Some(&access),
-            )
-        }
-    }
+        .map_err(|_| "Pulse shared snapshot state is unavailable".to_string())?
+        .clone();
+    build_discord_snapshot_payload(&data).map(|(preview, _settings)| preview)
 }
 
 fn apply_claude_display_prefs(config: &mut PresenceConfig, prefs: &DiscordDisplayPrefs) {
@@ -6350,6 +6380,85 @@ mod tests {
     }
 
     #[test]
+    fn codex_model_scoped_five_hour_is_not_promoted_to_global_discord() {
+        let now = chrono::Utc::now();
+        let route = access_route_from_usage(
+            subscription_source("codex", None),
+            UsageSnapshot {
+                source: UsageSource::new(
+                    "codex-subscription:default",
+                    [UsageSignal::CodexSubscriptionUsage],
+                ),
+                scopes: vec![
+                    QuotaScope {
+                        id: Some("codex".to_string()),
+                        name: None,
+                        kind: RateLimitScope::GlobalAccount,
+                        windows: vec![QuotaWindow {
+                            window_minutes: 10_080,
+                            used_percent: 5.0,
+                            remaining_percent: 95.0,
+                            resets_at: Some(now + chrono::Duration::days(7)),
+                        }],
+                    },
+                    QuotaScope {
+                        id: Some("codex_bengalfox".to_string()),
+                        name: Some("GPT-5.3-Codex-Spark".to_string()),
+                        kind: RateLimitScope::ModelScoped,
+                        windows: vec![
+                            QuotaWindow {
+                                window_minutes: 300,
+                                used_percent: 0.0,
+                                remaining_percent: 100.0,
+                                resets_at: Some(now + chrono::Duration::hours(5)),
+                            },
+                            QuotaWindow {
+                                window_minutes: 10_080,
+                                used_percent: 0.0,
+                                remaining_percent: 100.0,
+                                resets_at: Some(now + chrono::Duration::days(7)),
+                            },
+                        ],
+                    },
+                ],
+                credits: None,
+                observed_at: Some(now),
+                provenance_source: "app_server".to_string(),
+            },
+            now,
+            chrono::Duration::seconds(30),
+            now,
+        );
+
+        let limits = route_limits_for_presence(Some(&route)).expect("fresh global quota");
+        assert_eq!(
+            limits.primary().map(|window| window.window_minutes),
+            Some(10_080),
+            "a model-scoped 5h window must not become the global Discord primary"
+        );
+        assert_eq!(
+            limits.primary().map(|window| window.remaining_percent),
+            Some(95.0)
+        );
+        assert!(limits.secondary().is_none());
+
+        let mut config = TestCodexPresenceConfig::default();
+        config.privacy.show_limits = true;
+        let preview = build_codex_discord_preview_with_access(
+            &[sample_codex_snapshot()],
+            &config,
+            false,
+            Some(&route),
+        );
+        assert!(
+            preview.state.contains("7d 95% remaining"),
+            "{}",
+            preview.state
+        );
+        assert!(!preview.state.contains("5h"), "{}", preview.state);
+    }
+
+    #[test]
     fn context_recommendation_maps_each_tier_at_boundaries() {
         use super::{
             CONTEXT_COMPACT_NOW_PCT, CONTEXT_COMPACT_SOON_PCT, CONTEXT_WATCH_PCT,
@@ -6830,5 +6939,23 @@ mod tests {
         assert_eq!(totals.by_model[0].sessions, 2);
         assert_eq!(totals.by_project[0].label, "pulse");
         assert!((totals.by_project[0].cost - 14.0).abs() < 0.000_001);
+    }
+
+    /// Runs only as an isolated process because poisoning the global cache is
+    /// intentionally irreversible for that test binary.
+    #[test]
+    #[ignore = "poisons process-global shared state; run this test alone"]
+    fn poisoned_shared_state_fails_the_entire_snapshot_instead_of_fabricating_defaults() {
+        let (_guard, _claude_home, _codex_home) = isolated_homes("snapshot-poisoned");
+        let shared = super::shared();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = shared.lock().expect("lock shared state before poison");
+            panic!("simulated poller panic while holding shared state");
+        }));
+
+        let Err(error) = super::build_app_snapshot("live") else {
+            panic!("a poisoned core state must fail the whole snapshot");
+        };
+        assert!(error.contains("shared snapshot state is unavailable"));
     }
 }

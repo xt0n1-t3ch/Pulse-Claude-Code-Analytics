@@ -1,5 +1,13 @@
 use chrono::{TimeZone, Utc};
-use pulse::notifications::{NotificationKind, NotificationSpec, NotificationStore};
+use codex_presence_core::{
+    QuotaScope, QuotaWindow, RateLimitScope, UsageSignal, UsageSnapshot, UsageSource,
+};
+use pulse::access::{
+    AccessProof, AccessRouteSnapshot, access_route_from_usage, subscription_source, window_label,
+};
+use pulse::notifications::{
+    NotificationKind, NotificationSpec, NotificationStore, QuotaResetObservation,
+};
 use rusqlite::Connection;
 
 fn store() -> (&'static Connection, NotificationStore<'static>) {
@@ -17,6 +25,74 @@ fn spec(body: &str) -> NotificationSpec {
         body: body.to_string(),
         action: Some("Open Settings".to_string()),
     }
+}
+
+fn codex_model_route(
+    weekly_remaining: f64,
+    next_weekly_reset: chrono::DateTime<Utc>,
+    observed_at: chrono::DateTime<Utc>,
+) -> AccessRouteSnapshot {
+    let mut source = subscription_source("codex", Some("Pro 20x".to_string()));
+    source.proof = AccessProof::QuotaResponse;
+    access_route_from_usage(
+        source,
+        UsageSnapshot {
+            source: UsageSource::new(
+                "codex-subscription:default",
+                [UsageSignal::CodexSubscriptionUsage],
+            ),
+            scopes: vec![QuotaScope {
+                id: Some("codex_bengalfox".to_string()),
+                name: Some("GPT-5.3-Codex-Spark".to_string()),
+                kind: RateLimitScope::ModelScoped,
+                windows: vec![
+                    QuotaWindow {
+                        window_minutes: 300,
+                        used_percent: 30.0,
+                        remaining_percent: 70.0,
+                        resets_at: Some(observed_at + chrono::Duration::hours(5)),
+                    },
+                    QuotaWindow {
+                        window_minutes: 10_080,
+                        used_percent: 100.0 - weekly_remaining,
+                        remaining_percent: weekly_remaining,
+                        resets_at: Some(next_weekly_reset),
+                    },
+                ],
+            }],
+            credits: None,
+            observed_at: Some(observed_at),
+            provenance_source: "Codex account API".to_string(),
+        },
+        observed_at,
+        chrono::Duration::seconds(30),
+        observed_at,
+    )
+}
+
+fn observe_route(
+    store: &NotificationStore<'_>,
+    route: &AccessRouteSnapshot,
+    at: chrono::DateTime<Utc>,
+) -> Vec<pulse::notifications::NotificationRecord> {
+    route
+        .windows
+        .iter()
+        .filter_map(|window| {
+            let label = window_label(window);
+            store
+                .observe_quota_reset_transition_for_window(QuotaResetObservation {
+                    provider: "codex",
+                    window_identity: &window.key,
+                    window_label: &label,
+                    used_percent: window.quota.used_percent,
+                    remaining_percent: window.quota.remaining_percent,
+                    reset_at: window.quota.resets_at,
+                    observed_at: at,
+                })
+                .expect("observe quota window")
+        })
+        .collect()
 }
 
 #[test]
@@ -193,6 +269,77 @@ fn unread_lifecycle_is_durable_and_dismissal_excludes_rows_from_list() {
 }
 
 #[test]
+fn equivalent_model_reset_is_not_reinserted_after_dismiss_refresh_and_restart() {
+    let directory = tempfile::tempdir().expect("notification tempdir");
+    let path = directory.path().join("pulse-analytics.db");
+    let first = Utc.with_ymd_and_hms(2026, 8, 23, 6, 0, 0).unwrap();
+    let next_weekly_reset = first + chrono::Duration::days(7);
+    let baseline = codex_model_route(87.0, next_weekly_reset, first);
+    let reset = codex_model_route(
+        100.0,
+        next_weekly_reset,
+        first + chrono::Duration::seconds(5),
+    );
+
+    {
+        let connection = Connection::open(&path).expect("open notification database");
+        NotificationStore::initialize(&connection).expect("notification schema");
+        let store = NotificationStore::new(&connection);
+        assert!(observe_route(&store, &baseline, first).is_empty());
+        let records = observe_route(&store, &reset, first + chrono::Duration::seconds(5));
+        assert_eq!(records.len(), 1, "one real weekly reset edge");
+        assert!(records[0].body.contains("GPT-5.3-Codex-Spark · 7d"));
+        assert!(store.dismiss(records[0].id).expect("dismiss reset"));
+        assert!(store.list(Some(20)).expect("visible rows").is_empty());
+    }
+
+    {
+        let connection = Connection::open(&path).expect("reopen notification database");
+        NotificationStore::initialize(&connection).expect("rehydrate notification schema");
+        let store = NotificationStore::new(&connection);
+        assert!(
+            observe_route(&store, &reset, first + chrono::Duration::seconds(10)).is_empty(),
+            "the same provider event must stay dismissed after the next poll and restart"
+        );
+        assert!(store.list(Some(20)).expect("visible rows").is_empty());
+        assert_eq!(
+            store.list_all(Some(20)).expect("audit rows").len(),
+            1,
+            "dismissal is durable and reconciliation does not insert a replacement row"
+        );
+
+        let next_cycle_baseline = codex_model_route(
+            75.0,
+            next_weekly_reset + chrono::Duration::days(7),
+            first + chrono::Duration::days(7),
+        );
+        assert!(
+            observe_route(
+                &store,
+                &next_cycle_baseline,
+                first + chrono::Duration::days(7)
+            )
+            .is_empty()
+        );
+        let distinct_reset = codex_model_route(
+            100.0,
+            next_weekly_reset + chrono::Duration::days(7),
+            first + chrono::Duration::days(7) + chrono::Duration::seconds(5),
+        );
+        assert_eq!(
+            observe_route(
+                &store,
+                &distinct_reset,
+                first + chrono::Duration::days(7) + chrono::Duration::seconds(5),
+            )
+            .len(),
+            1,
+            "a later genuine reset edge remains a distinct event"
+        );
+    }
+}
+
+#[test]
 fn quota_reset_only_notifies_on_a_genuine_provider_transition() {
     let (_connection, store) = store();
     let first = Utc.with_ymd_and_hms(2026, 8, 1, 12, 0, 0).unwrap();
@@ -291,10 +438,13 @@ fn legacy_quota_reset_rows_are_preserved_but_dismissed_once() {
             );
             INSERT INTO pulse_notification_migrations (migration, applied_at)
             VALUES ('dismiss_legacy_quota_reset_rows_v1', '2026-08-01T12:01:00Z');
+            INSERT INTO pulse_notification_migrations (migration, applied_at)
+            VALUES ('dismiss_legacy_quota_reset_rows_v2', '2026-08-01T12:01:30Z');
             INSERT INTO pulse_notifications
                 (kind, provider, notification_key, title, body, created_at)
-            VALUES ('quota_reset', 'codex', 'weekly', 'Legacy after v1',
-                    'false reset from an older concurrent producer',
+            VALUES ('quota_reset', 'codex', 'gpt_5.3_codex_spark',
+                    'Collided model reset',
+                    'false reset from duration-collided window keys',
                     '2026-08-01T12:02:00Z');",
         )
         .expect("legacy notification schema");
@@ -312,7 +462,7 @@ fn legacy_quota_reset_rows_are_preserved_but_dismissed_once() {
     assert_eq!(first.1, 2);
     assert!(
         first.2.is_some(),
-        "legacy and post-v1 rows remain but are dismissed"
+        "pre-v3 rows remain for audit but are dismissed"
     );
 
     connection

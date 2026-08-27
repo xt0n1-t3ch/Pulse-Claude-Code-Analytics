@@ -22,8 +22,31 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 | [codex-rich-presence-upstream.md](codex-rich-presence-upstream.md) | Codex Rich Presence source-of-truth repo, sync scripts, CI freshness gate, compatibility overlay |
 | [update-checks.md](update-checks.md) | Backend GitHub Release checks, popup behavior, skip controls, signed-updater note |
 | [notifications.md](notifications.md) | Durable provider-health, quota, and Discord notification lifecycle, deduplication, and Tauri events |
-| [ui-design-system.md](ui-design-system.md) | Monochrome Geist shell, semantic colors, one-fact/one-owner hierarchy, responsive states, autosave and updater affordances |
+| [ui-design-system.md](ui-design-system.md) | Ultra-dark operational shell, semantic colors, one-fact/one-owner hierarchy, sensitive-content disclosure, responsive states, autosave and updater affordances |
 | [troubleshooting.md](troubleshooting.md) | Diagnostics: doctor, RUST_LOG, data sources, common failures + fixes |
+
+## v1.7.8 docs refresh
+
+- Made updater availability platform-truthful: signed preflight owns the
+  **Update** action and unsupported or incomplete channels open the release.
+- Recorded native Windows, macOS, and Linux x64/ARM64 packaging and the refined
+  centered provider workspace.
+
+## v1.7.5 docs refresh
+
+- Documented the dynamic Codex account-quota contract: only windows reported by
+  the effective global response reach shared Pulse surfaces; fresh reads remove
+  missing windows, absence is not `100% remaining`, and plans remain separate
+  from credits.
+- Documented duration-specific identities for multi-window provider scopes and
+  the durable notification migration that dismisses pre-fix collision rows
+  while preserving audit history and future genuine resets.
+- Documented the snapshot trust boundary: Discord config failure is isolated
+  from analytics, poisoned shared state fails closed, same-provider last-good
+  Discord data is visibly degraded, and backend capture time owns freshness.
+- Documented the graphite UI refinement and the Reports privacy boundary:
+  prompt excerpts are backend-bounded and remain absent from the DOM until an
+  explicit reveal.
 
 ## v1.7.2 docs refresh
 
@@ -209,7 +232,10 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 ## Version
 
-- App release: **v1.7.0**
+- Released app: **v1.7.8**
+- Unreleased target: **not selected**
 - Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v5**
-- Last docs refresh: 2026-08-03 (proof-driven reset alerts, canonical Codex reset-credit DTO, honest Claude auth, and single-instance startup)
+- Last docs refresh: 2026-08-25 (provider isolation, dynamic quotas,
+  durable notification identity, responsive UI overhaul, and route-split
+  performance evidence)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.

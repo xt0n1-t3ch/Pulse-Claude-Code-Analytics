@@ -24,6 +24,15 @@
     "annotated_tag": true,
     "immutable": true,
     "windows_sbom": "pulse-windows-x64.spdx.json",
+    "windows_arm64_sbom": "pulse-windows-arm64.spdx.json",
+    "platforms": [
+      "windows-x64",
+      "windows-arm64",
+      "macos-x64",
+      "macos-arm64",
+      "linux-x64",
+      "linux-arm64"
+    ],
     "checksum_manifest": "SHA256SUMS.txt"
   }
 }

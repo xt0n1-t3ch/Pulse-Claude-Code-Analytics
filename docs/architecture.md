@@ -145,6 +145,16 @@ and Discord provider mutation. The `all` source is an explicit cross-provider
 history aggregate; selecting a local-only route never changes the active
 Discord provider.
 
+Codex account quota is a dynamic provider snapshot, not a pair of fixed Pulse
+slots. The authenticated `account/rateLimits/read` response can include a
+global account envelope and named model-scoped envelopes. Pulse retains those
+raw envelopes for diagnostics and plan resolution, but projects the effective
+global envelope into the account route, Discord payload, allowance rail,
+notifications, and derived copy. Each new account response replaces the prior
+snapshot: a missing window is absent/unavailable, never synthetic zero usage or
+`100% remaining`. A reported zero remains a real available window. Spend
+credits and plan labels stay separate provider fields.
+
 Cost aggregates keep usage and money on separate evidence tracks.
 `get_cost_totals` always returns the observed input, output, cache-write,
 cache-read, pure-input, and total token counts for the selected window. Its
@@ -192,17 +202,38 @@ All backend access goes through `invoke()` wrappers in
 [`../frontend/src/lib/api.ts`](../frontend/src/lib/api.ts), which give every
 Tauri command a typed TypeScript signature so the IPC boundary is the only place
 raw command names appear. Reactive state lives in
-[`../frontend/src/lib/stores.ts`](../frontend/src/lib/stores.ts): a `poll()`
-function batches `getHealth`/`getMetrics`/`getLiveSessions`/`getRateLimits`/`getPlanInfo`
-through `Promise.all`, pushes the results into writable stores, and raises toast
-warnings when session, weekly, or Extra Usage thresholds are crossed — the same
-spike the daemon beeps on, surfaced in the UI. Display preferences (the Discord
-field toggles) are `localStorage`-persisted stores that mirror their state back
-to the backend via `setDiscordDisplayPrefs` so the daemon and the GUI agree on
-what Rich Presence shows.
+[`../frontend/src/lib/stores.ts`](../frontend/src/lib/stores.ts). One
+`get_app_snapshot` read hydrates the related stores atomically; sequence guards
+reject late responses, while a transport failure retains the last coherent
+snapshot and marks it disconnected. Provider changes clear every provider-bound
+value before the replacement read, including Discord settings and preview.
+
+Discord configuration is an ancillary boundary inside that snapshot. When its
+file cannot be parsed, the backend returns analytics normally with
+`discord_settings` and `discord_preview` both absent plus a diagnostic. The
+frontend may retain the same provider's last-good pair, but it exposes the
+degradation and cannot carry that pair across a provider change. A poisoned
+shared-state mutex remains a snapshot-wide failure because no trustworthy core
+telemetry can be reconstructed from it. Frontend freshness is based on
+`snapshot_captured_at`, so a restored startup snapshot keeps its real age.
+Display preferences (the Discord field toggles) mirror their state back to the
+backend via `setDiscordDisplayPrefs` so the broadcaster and GUI agree on what
+Rich Presence shows.
 
 The access stores intentionally expose two projections. Displayable analytics
 routes include authenticated providers plus providers with local history;
 authenticated routes remain the only inputs to quota, notification, and
 presence surfaces. This split lets every view reuse one provider scope without
 promoting local files into provider proof.
+
+When a named provider scope reports multiple quota durations, the access owner
+adds the duration to each machine key while retaining a provider-facing label.
+The notification ledger therefore receives one stable identity per real window
+instead of alternating two windows through the same reset state.
+
+Provider selection has two independent owners. Home, Sessions, Context, Costs,
+and Reports write `selectedAccessSourceId`, which scopes analytics without
+mutating the broadcaster. The Discord view reads and writes the persisted
+active `provider` directly; navigation and analytics-source changes never alter
+that Claude/Codex choice. `All providers` therefore exists only as an analytics
+aggregate and is never a Discord publication state.

@@ -92,6 +92,102 @@ fn sparse_weekly_usage_stays_dynamic_and_available() {
 }
 
 #[test]
+fn reported_global_five_hour_and_weekly_windows_both_remain_available() {
+    let now = Utc.timestamp_opt(1_799_999_010, 0).single().unwrap();
+    let route = access_route_from_usage(
+        subscription_source("codex", None),
+        UsageSnapshot {
+            scopes: vec![QuotaScope {
+                id: Some("codex".to_string()),
+                name: None,
+                kind: RateLimitScope::GlobalAccount,
+                windows: vec![
+                    QuotaWindow {
+                        window_minutes: 300,
+                        used_percent: 25.0,
+                        remaining_percent: 75.0,
+                        resets_at: None,
+                    },
+                    QuotaWindow {
+                        window_minutes: 10_080,
+                        used_percent: 5.0,
+                        remaining_percent: 95.0,
+                        resets_at: None,
+                    },
+                ],
+            }],
+            observed_at: Some(now),
+            ..observed_usage()
+        },
+        now,
+        chrono::Duration::seconds(30),
+        now,
+    );
+
+    assert_eq!(route.availability, AccessAvailability::Available);
+    assert_eq!(route.windows.len(), 2);
+    assert_eq!(route.windows[0].key, "five_hour");
+    assert_eq!(route.windows[0].quota.remaining_percent, 75.0);
+    assert_eq!(route.windows[1].key, "weekly");
+    assert_eq!(route.windows[1].quota.remaining_percent, 95.0);
+}
+
+#[test]
+fn missing_quota_windows_are_unavailable_instead_of_zero_percent_usage() {
+    let now = Utc.timestamp_opt(1_799_999_010, 0).single().unwrap();
+    let route = access_route_from_usage(
+        subscription_source("codex", None),
+        UsageSnapshot {
+            scopes: Vec::new(),
+            credits: None,
+            observed_at: Some(now),
+            ..observed_usage()
+        },
+        now,
+        chrono::Duration::seconds(30),
+        now,
+    );
+
+    assert_eq!(route.availability, AccessAvailability::Unavailable);
+    assert!(route.windows.is_empty());
+}
+
+#[test]
+fn reported_zero_usage_is_available_and_distinct_from_a_missing_window() {
+    let now = Utc.timestamp_opt(1_799_999_010, 0).single().unwrap();
+    let route = access_route_from_usage(
+        subscription_source("codex", None),
+        UsageSnapshot {
+            scopes: vec![QuotaScope {
+                id: Some("codex".to_string()),
+                name: None,
+                kind: RateLimitScope::GlobalAccount,
+                windows: vec![QuotaWindow {
+                    window_minutes: 300,
+                    used_percent: 0.0,
+                    remaining_percent: 100.0,
+                    resets_at: None,
+                }],
+            }],
+            observed_at: Some(now),
+            ..observed_usage()
+        },
+        now,
+        chrono::Duration::seconds(30),
+        now,
+    );
+
+    assert_eq!(route.availability, AccessAvailability::Available);
+    assert_eq!(route.windows.len(), 1);
+    assert_eq!(route.windows[0].key, "five_hour");
+    assert_eq!(
+        displayable_window_percent(&route, &route.windows[0]),
+        Some(0.0)
+    );
+    assert_eq!(route.windows[0].quota.remaining_percent, 100.0);
+}
+
+#[test]
 fn codex_route_keeps_reset_credits_separate_from_spend_credits() {
     let summary = RateLimitResetCreditsSummary {
         available_count: 1,
@@ -367,6 +463,66 @@ fn codex_access_route_keeps_global_and_model_scoped_weekly_windows() {
     assert_eq!(route.windows[0].quota.used_percent, 83.0);
     assert_eq!(route.windows[1].quota.used_percent, 0.0);
     assert_eq!(route.source.plan, None);
+}
+
+#[test]
+fn codex_model_scope_windows_have_unique_stable_keys_and_labels() {
+    let now = Utc.timestamp_opt(1_799_999_010, 0).single().unwrap();
+    let mut source = subscription_source("codex", None);
+    source.proof = AccessProof::QuotaResponse;
+    let route = access_route_from_usage(
+        source,
+        UsageSnapshot {
+            source: UsageSource::new(
+                "codex-subscription:default",
+                [UsageSignal::CodexSubscriptionUsage],
+            ),
+            scopes: vec![QuotaScope {
+                id: Some("codex_bengalfox".to_string()),
+                name: Some("GPT-5.3-Codex-Spark".to_string()),
+                kind: RateLimitScope::ModelScoped,
+                windows: vec![
+                    QuotaWindow {
+                        window_minutes: 300,
+                        used_percent: 0.0,
+                        remaining_percent: 100.0,
+                        resets_at: None,
+                    },
+                    QuotaWindow {
+                        window_minutes: 10_080,
+                        used_percent: 13.0,
+                        remaining_percent: 87.0,
+                        resets_at: None,
+                    },
+                ],
+            }],
+            credits: None,
+            observed_at: Some(now),
+            provenance_source: "Codex account API".to_string(),
+        },
+        now,
+        chrono::Duration::seconds(30),
+        now,
+    );
+
+    let identities = route
+        .windows
+        .iter()
+        .map(|window| (window.key.as_str(), window_label(window)))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        identities,
+        vec![
+            (
+                "gpt_5.3_codex_spark_five_hour",
+                "GPT-5.3-Codex-Spark · 5h".to_string(),
+            ),
+            (
+                "gpt_5.3_codex_spark_weekly",
+                "GPT-5.3-Codex-Spark · 7d".to_string(),
+            ),
+        ]
+    );
 }
 
 #[test]

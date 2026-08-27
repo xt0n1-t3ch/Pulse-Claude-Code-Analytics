@@ -8,15 +8,15 @@ parsing or Discord line composition in TypeScript or a second Rust module.
 
 ## Promoted contract
 
-Pulse **v1.7.2** consumes `codex-presence-core` **2.0.0** from the immutable
-upstream **v1.10.2** release at commit
-`a508507e0849fd5c9e09c7d1c55eebe2d199cfc0`.
+Pulse **v1.7.8** consumes `codex-presence-core` **2.0.0** from the immutable
+upstream **v1.10.3** release at commit
+`9d20ffdb1c4ec6fa37edc00952badd041ec5bc02`.
 
 | Surface | Promoted value | Release proof |
 | --- | --- | --- |
-| Core package | `codex-presence-core` 2.0.0 | Published upstream v1.10.2 release |
+| Core package | `codex-presence-core` 2.0.0 | Published upstream v1.10.3 release |
 | Git dependency | Canonical repository plus full `rev` | Cargo manifests and lockfile resolve to the same commit |
-| Canonical manifest | v1.10.2 + exact commit | `src/codex/UPSTREAM.json` matches the Cargo Git pin |
+| Canonical manifest | v1.10.3 + exact commit | `src/codex/UPSTREAM.json` matches the Cargo Git pin |
 | Presence config | Schema 13 | Migration fixtures pass |
 | Pulse database | Schema 5 | Migration and query-plan fixtures pass |
 
