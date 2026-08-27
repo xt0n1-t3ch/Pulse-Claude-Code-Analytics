@@ -10,6 +10,7 @@
     allowancePresentation,
     windowLabel,
     type AccessKind,
+    type AccessQuotaWindow,
   } from "../lib/access";
   import { formatResetDateTime } from "../lib/utils";
 
@@ -53,6 +54,36 @@
       hour: "numeric",
       minute: "2-digit",
     }).format(date);
+  }
+
+  function canonicalWindowLabel(window: AccessQuotaWindow): string {
+    const minutes = window.window_minutes;
+    if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) {
+      return `${windowLabel(window)} limit`;
+    }
+    if (minutes === 300) return "5-hour limit";
+    if (minutes === 10_080) return "Weekly limit";
+    if (minutes === 43_200) return "30-day limit";
+
+    if (minutes % 1_440 === 0) {
+      const days = minutes / 1_440;
+      return `${days} ${days === 1 ? "day" : "days"} limit`;
+    }
+
+    const hours = minutes / 60;
+    return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} ${hours === 1 ? "hour" : "hours"} limit`;
+  }
+
+  function canonicalWindowTitle(window: AccessQuotaWindow): string {
+    if (window.window_minutes === 10_080) return "Weekly usage limit";
+    return canonicalWindowLabel(window);
+  }
+
+  function modelWindowLabel(window: AccessQuotaWindow): string | null {
+    const label = window.label?.trim();
+    const durationLabel = /^(?:weekly|[0-9]+(?:[ -]?(?:hour|day|week|month)s?|[hdw]))(?: limit)?$/i;
+    if (!label || label === canonicalWindowLabel(window) || durationLabel.test(label)) return null;
+    return label;
   }
 
 </script>
@@ -108,9 +139,14 @@
             <div class="window-list">
               {#each route.windows as window, index (`${route.source.id}:${window.key}:${window.window_minutes ?? "native"}:${index}`)}
                 {@const presentation = allowancePresentation(route, window)}
+                {@const primaryLabel = canonicalWindowLabel(window)}
+                {@const modelLabel = route.source.kind === "codex_subscription" ? modelWindowLabel(window) : null}
                 <section class="window-row">
                   <div class="window-copy">
-                    <span>{windowLabel(window)}</span>
+                    <div class="window-name">
+                      <span title={canonicalWindowTitle(window)}>{primaryLabel}</span>
+                      {#if modelLabel}<small>{modelLabel}</small>{/if}
+                    </div>
                     <strong>
                       {presentation == null
                         ? "Unavailable"
@@ -119,12 +155,7 @@
                   </div>
                   <div
                     class="window-meter"
-                    role="progressbar"
-                    aria-label={windowLabel(window)}
-                    aria-valuemin="0"
-                    aria-valuemax="100"
-                    aria-valuenow={presentation?.percent}
-                    aria-valuetext={presentation == null ? "Unavailable" : `${Math.round(presentation.percent)}% ${presentation.direction}`}
+                    aria-label={`${primaryLabel} ${modelLabel ? `${modelLabel} ` : ""}${presentation == null ? "unavailable" : `${Math.round(presentation.percent)}% ${presentation.direction}`}`}
                   >
                     <span style={`width:${presentation?.percent ?? 0}%`}></span>
                   </div>
@@ -201,11 +232,8 @@
 <style>
   .allowance-rail {
     min-width: 0;
-    height: auto;
-    display: grid;
-    grid-template-columns: minmax(205px, 0.26fr) minmax(0, 1fr);
-    align-items: start;
-    padding: 18px 20px;
+    height: 100%;
+    padding: 20px;
     /* Column of the shared Dashboard home-grid card. It contributes no border,
        radius, or shadow of its own; the parent grid owns the surface. */
     background: transparent;
@@ -216,34 +244,18 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
-    margin: 0;
-    padding-right: 24px;
+    margin-bottom: 18px;
   }
 
   .rail-head h2 { font-size: 19px; letter-spacing: -0.03em; }
   .rail-head p { max-width: 260px; margin-top: 5px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
 
-  .allowance-list,
-  .allowance-local,
-  .allowance-empty {
-    min-width: 0;
-    margin: 0;
-    padding-left: 24px;
-    border-top: 0;
-    border-left: 1px solid var(--divider);
-  }
-
-  .allowance-list {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  }
+  .allowance-list { display: grid; }
   .allowance-card {
     min-width: 0;
-    padding: 0 20px;
-    border-top: 0;
+    padding: 15px 0;
+    border-top: 1px solid var(--divider);
   }
-  .allowance-card:first-child { padding-left: 0; }
-  .allowance-card + .allowance-card { border-left: 1px solid var(--divider); }
   .allowance-card:last-child { padding-bottom: 0; }
 
   .allowance-card header {
@@ -261,12 +273,14 @@
   .allowance-card i { width: 6px; height: 6px; background: var(--text-placeholder); border-radius: 50%; }
   .allowance-card i.available { background: var(--success); }
 
-  .window-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 18px; }
-  .window-row { display: grid; gap: 8px; padding: 10px 0 0; border-top: 1px solid var(--divider); }
+  .window-list { display: grid; }
+  .window-row { display: grid; gap: 8px; padding: 11px 0; border-top: 1px solid var(--divider); }
   .window-row:last-child { border-bottom: 0; }
-  .window-copy { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .window-copy { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .window-name { min-width: 0; display: grid; gap: 2px; }
   .window-copy span { color: var(--text-secondary); font-size: 11px; }
-  .window-copy strong { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .window-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .window-copy strong { flex: 0 0 auto; font-size: 12px; font-variant-numeric: tabular-nums; }
   .window-meter { height: 6px; overflow: hidden; background: var(--meter-track); border-radius: var(--radius-full); }
   .window-meter span { display: block; height: 100%; background: var(--info); border-radius: inherit; }
   .window-row small { color: var(--text-muted); font-size: 9px; }
@@ -317,12 +331,11 @@
   .reset-credit small { color: var(--text-muted); font-size: 9px; }
 
   .allowance-empty {
-    min-height: 70px;
+    min-height: 92px;
     display: flex;
     align-items: center;
     gap: 12px;
-    padding-top: 0;
-    padding-bottom: 0;
+    padding: 16px 0 2px;
     color: var(--text-muted);
     border-top: 1px solid var(--divider);
   }
@@ -336,8 +349,8 @@
     grid-template-columns: 34px minmax(0, 1fr);
     gap: 12px;
     align-items: start;
-    padding-top: 0;
-    padding-bottom: 0;
+    padding: 16px 0 2px;
+    border-top: 1px solid var(--divider);
   }
   .allowance-local img { width: 32px; height: 32px; object-fit: contain; border-radius: 8px; }
   .al-copy { min-width: 0; display: grid; gap: 5px; }
@@ -363,19 +376,10 @@
   }
   .al-sub { color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 
-  @media (max-width: 760px) {
-    .allowance-rail { grid-template-columns: 1fr; padding: 18px; }
-    .rail-head { padding: 0 0 14px; }
-    .allowance-list,
-    .allowance-local,
-    .allowance-empty {
-      padding: 14px 0 0;
-      border-left: 0;
-      border-top: 1px solid var(--divider);
-    }
-    .allowance-list { grid-template-columns: 1fr; }
-    .allowance-card { padding: 0; }
-    .allowance-card + .allowance-card { padding-top: 16px; border-left: 0; border-top: 1px solid var(--divider); }
+  @media (max-width: 980px) {
+    .allowance-list { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+    .allowance-card { padding-right: 18px; }
+    .allowance-card + .allowance-card { padding-left: 18px; border-left: 1px solid var(--divider); }
   }
 
   @media (max-width: 620px) {

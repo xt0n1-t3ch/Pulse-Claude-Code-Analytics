@@ -213,6 +213,7 @@ export interface UsageSnapshot {
 export interface DiscordUserInfo {
     user_id: string;
     username: string;
+    global_name: string | null;
     discriminator: string;
     avatar_hash: string;
     avatar_url: string;
@@ -326,9 +327,8 @@ export interface AppSnapshot {
     metrics: MetricsResponse;
     sessions: SessionInfo[];
     rate_limits: RateLimitInfo | null;
-    discord_preview: DiscordPresencePreview | null;
-    discord_settings: DiscordSettings | null;
-    discord_settings_error?: string | null;
+    discord_preview: DiscordPresencePreview;
+    discord_settings: DiscordSettings;
     plan: PlanInfo;
     access: AccessSnapshot;
 }

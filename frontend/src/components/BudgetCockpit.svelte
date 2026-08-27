@@ -13,14 +13,19 @@
    */
   import { fmtCost } from "../lib/utils";
   import type { BudgetStatus, CostForecast } from "../lib/api";
+  import StatusPill from "./StatusPill.svelte";
 
   let {
     forecast = null,
     budget = null,
+    subscriptionPrice = null,
+    subscriptionLabel = "",
     onSetBudget,
   }: {
     forecast: CostForecast | null;
     budget: BudgetStatus | null;
+    subscriptionPrice?: number | null;
+    subscriptionLabel?: string;
     onSetBudget: () => void;
   } = $props();
 
@@ -39,6 +44,13 @@
     forecast !== null
       && forecast.api_equivalent_usd !== null
       && forecast.api_equivalent_sessions > 0,
+  );
+  let subscriptionKnown = $derived(
+    !billedAvailable
+      && subscriptionPrice !== null
+      && Number.isFinite(subscriptionPrice)
+      && subscriptionPrice >= 0
+      && subscriptionLabel.trim().length > 0,
   );
 
   /**
@@ -82,21 +94,20 @@
 
   /** One plain sentence, so the gauge does not need decoding. */
   let verdict = $derived.by(() => {
-    if (!forecast) {
-      return "Billing data unavailable for this month.";
-    }
-    if (!billedAvailable) {
-      if (apiEquivalentAvailable) {
-        return `Provider billing unavailable. Measured usage is worth ${fmtCost(apiEquivalent)} at published API rates; this does not count against the budget.`;
+    if (!forecast || !billedAvailable) {
+      if (subscriptionKnown && apiEquivalentAvailable) {
+        return `Your ${subscriptionLabel} subscription covers this month — measured usage is worth ${fmtCost(apiEquivalent)} at published API rates.`;
       }
-      return "Provider billing and API-equivalent value are unavailable for this month.";
+      return apiEquivalentAvailable
+        ? "Usage is priced at published API rates; none of it is provider-billed this month."
+        : "Provider-billed spend is unavailable for this month.";
     }
     if (spent <= 0) {
       return "No spend recorded this month yet.";
     }
     if (!hasCap) {
       const prefix = forecast.cost_basis === "partial" ? "Known provider-billed lower bound: " : "";
-      return `${prefix}provider billing averages ${fmtCost(forecast.daily_billed_spend_usd ?? 0)}/day — on course for ${fmtCost(projected)} by month end.`;
+      return `${prefix}provider-billed spend averages ${fmtCost(forecast.daily_billed_spend_usd ?? 0)}/day — on course for ${fmtCost(projected)} by month end.`;
     }
     if (status === "over") {
       return `Already ${fmtCost(spent - cap)} over the ${fmtCost(cap)} cap with ${forecast.days_in_month - forecast.days_elapsed} days left.`;
@@ -114,14 +125,21 @@
 <section class="cockpit" class:warn={status === "warn"} class:over={status === "over"}>
   <header class="ck-head">
     <div class="ck-primary">
-      <span class="ck-label">Provider-billed this month</span>
-      <span class="ck-figure">{billedAvailable ? fmtCost(spent) : "Unavailable"}</span>
+      <span class="ck-label">This month</span>
+      <span class="ck-figure">{billedAvailable ? fmtCost(spent) : subscriptionKnown ? fmtCost(subscriptionPrice ?? 0) : "—"}</span>
+      {#if subscriptionKnown}
+        <span class="ck-subscription-pill" data-state="available">{subscriptionLabel} subscription</span>
+      {:else if !billedAvailable}
+        <StatusPill state="paused" label="Provider billed · unavailable" />
+      {/if}
     </div>
 
     <div class="ck-marks">
       <div class="ck-mark">
-        <span class="ck-mark-label">Projected</span>
-        <span class="ck-mark-value">{billedAvailable ? fmtCost(projected) : "—"}</span>
+        <span class="ck-mark-label">{subscriptionKnown ? "API-equivalent projection" : "Projected"}</span>
+        <span class="ck-mark-value">
+          {billedAvailable ? fmtCost(projected) : subscriptionKnown && apiProjected > 0 ? fmtCost(apiProjected) : "—"}
+        </span>
       </div>
       <div class="ck-mark">
         <span class="ck-mark-label">Monthly budget</span>
@@ -159,7 +177,7 @@
 
   <p class="ck-verdict">{verdict}</p>
 
-  {#if apiEquivalentAvailable}
+  {#if apiEquivalentAvailable && !subscriptionKnown}
     <p class="ck-equivalent">
       <strong>{fmtCost(apiEquivalent)}</strong> API-equivalent value month to date
       {#if apiProjected > 0}· projected {fmtCost(apiProjected)}{/if}
@@ -191,7 +209,7 @@
     flex-wrap: wrap;
   }
 
-  .ck-primary { display: flex; flex-direction: column; gap: 6px; }
+  .ck-primary { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
   .ck-label {
     font-size: var(--fs-xs);
     font-weight: 700;
@@ -207,6 +225,19 @@
     letter-spacing: var(--letter-tighter);
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
+  }
+  .ck-subscription-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 10px;
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    font-size: var(--fs-xs);
+    font-weight: 650;
+    letter-spacing: var(--letter-tight);
   }
 
   .ck-marks { display: flex; gap: 32px; padding-bottom: 4px; }

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, fireEvent } from "@testing-library/svelte";
+import { get } from "svelte/store";
 import type { AppUpdateInfo } from "@/lib/api";
+import { toasts } from "@/lib/stores";
 
 const SKIP_KEY = "pulse-update-skipped-version";
 
@@ -56,7 +58,6 @@ describe("UpdateBanner.svelte", () => {
     openAppReleasePage.mockReset();
     openAppReleasePage.mockResolvedValue(undefined);
     updaterCheck.mockReset();
-    updaterCheck.mockResolvedValue({ downloadAndInstall: vi.fn(async () => undefined) });
     relaunch.mockReset().mockResolvedValue(undefined);
     localStorage.clear();
     setSearch("");
@@ -84,6 +85,34 @@ describe("UpdateBanner.svelte", () => {
 
     await waitFor(() => expect(checkAppUpdate).toHaveBeenCalledTimes(1));
     expect(container.querySelector(".update-pop")).toBeNull();
+  });
+
+  it("reports a failed forced check while keeping the startup probe silent", async () => {
+    checkAppUpdate.mockRejectedValue(new Error("offline"));
+    const UpdateBanner = await loadBanner();
+    const { container } = render(UpdateBanner);
+
+    await waitFor(() => expect(checkAppUpdate).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(container.querySelector(".update-pop")).toBeNull();
+    expect(get(toasts).map((t) => t.message)).not.toContain("Couldn't reach the update service.");
+
+    window.dispatchEvent(new CustomEvent("pulse:check-updates"));
+    await waitFor(() =>
+      expect(get(toasts).map((t) => t.message)).toContain("Couldn't reach the update service."),
+    );
+  });
+
+  it("tells the user they are current when a forced check finds nothing", async () => {
+    checkAppUpdate.mockResolvedValue(makeUpdate({ update_available: false, latest_version: null }));
+    const UpdateBanner = await loadBanner();
+    render(UpdateBanner);
+    await waitFor(() => expect(checkAppUpdate).toHaveBeenCalledTimes(1));
+
+    window.dispatchEvent(new CustomEvent("pulse:check-updates"));
+    await waitFor(() =>
+      expect(get(toasts).map((t) => t.message)).toContain("You're already up to date."),
+    );
   });
 
   it("Later dismisses the popup without persisting a skip", async () => {
@@ -169,7 +198,7 @@ describe("UpdateBanner.svelte", () => {
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
 
-    expect(await findByText("New Update Available")).toBeTruthy();
+    expect(await findByText("Update available")).toBeTruthy();
     await fireEvent.click(await findByText("Update"));
 
     await waitFor(() => expect(downloadAndInstall).toHaveBeenCalledTimes(1));
@@ -216,7 +245,7 @@ describe("UpdateBanner.svelte", () => {
     const { findByText } = render(UpdateBanner);
 
     await findByText("Feature update");
-    await fireEvent.click(await findByText("Open release"));
+    await fireEvent.click(await findByText("Update"));
 
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
@@ -224,27 +253,11 @@ describe("UpdateBanner.svelte", () => {
     );
   });
 
-  it("never offers Update when the platform updater manifest is unavailable", async () => {
-    checkAppUpdate.mockResolvedValue(makeUpdate());
-    updaterCheck.mockRejectedValue(new Error("valid release JSON unavailable"));
-
-    const UpdateBanner = await loadBanner();
-    const { findByText, queryByText } = render(UpdateBanner);
-
-    expect(await findByText("Open release")).toBeTruthy();
-    expect(queryByText("Update")).toBeNull();
-    expect(queryByText("Update failed")).toBeNull();
-  });
-
   /** A failed install must stay honest: surface the error and offer the
    *  manual route rather than silently claiming success. */
   it("surfaces a failed install and offers the release page as a fallback", async () => {
     checkAppUpdate.mockResolvedValue(makeUpdate());
-    updaterCheck.mockResolvedValue({
-      downloadAndInstall: vi.fn(async () => {
-        throw new Error("signature mismatch");
-      }),
-    });
+    updaterCheck.mockRejectedValue(new Error("signature mismatch"));
 
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
@@ -252,14 +265,13 @@ describe("UpdateBanner.svelte", () => {
     await findByText("Feature update");
     await fireEvent.click(await findByText("Update"));
 
-    expect(await findByText(/In-app install failed/)).toBeTruthy();
+    expect(await findByText(/Update failed/)).toBeTruthy();
     expect(await findByText("Open release")).toBeTruthy();
     expect(await findByText("Retry update")).toBeTruthy();
   });
 
   it("synthesizes a fake update from ?fakeUpdate without calling the backend", async () => {
     setSearch("?fakeUpdate=9.9.9");
-    updaterCheck.mockResolvedValue(null);
     const UpdateBanner = await loadBanner();
     const { findByText } = render(UpdateBanner);
 
@@ -269,7 +281,7 @@ describe("UpdateBanner.svelte", () => {
     expect(await findByText("9.9.9")).toBeTruthy();
     expect(checkAppUpdate).not.toHaveBeenCalled();
 
-    await fireEvent.click(await findByText("Open release"));
+    await fireEvent.click(await findByText("Update"));
     await waitFor(() => expect(openAppReleasePage).toHaveBeenCalledTimes(1));
     expect(openAppReleasePage).toHaveBeenCalledWith(
       "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v9.9.9",

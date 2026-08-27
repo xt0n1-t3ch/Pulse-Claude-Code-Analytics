@@ -135,7 +135,7 @@ describe("Home provider surfaces", () => {
 
     const { container } = render(AllowanceRail);
     expect(container.textContent).toContain("Claude Max 20x");
-    expect(container.textContent).toContain("5h");
+    expect(container.textContent).toContain("5-hour limit");
     expect(container.textContent).toContain("24% used");
     expect(container.textContent).toContain("Weekly");
     expect(container.textContent).toContain("Fable");

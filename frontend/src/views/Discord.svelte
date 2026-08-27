@@ -3,7 +3,8 @@
   import {
     sessions,
     activeSessions,
-    accessSnapshot,
+    selectedAccessRoutes,
+    selectedAnalyticsProviderScope,
     discordUser,
     health,
     discordPreview,
@@ -24,8 +25,9 @@
   } from "../lib/api";
   import type { SessionInfo } from "../lib/api";
   import {
+    accessKindLabel,
     allowancePresentation,
-    authenticatedAccessRoutes,
+    providerMatchesAnalyticsScope,
   } from "../lib/access";
   import { fmtCost, fmtTokens, fmtDuration } from "../lib/utils";
   import { rpArtFor } from "../lib/rpArt";
@@ -150,13 +152,12 @@
       settingsPending = false;
     }
   }
-  let previewProvider = $derived($provider);
-  let broadcastAccessRoutes = $derived(
-    authenticatedAccessRoutes($accessSnapshot?.routes ?? []).filter((route) =>
-      route.source.kind === (
-        previewProvider === "codex" ? "codex_subscription" : "claude_subscription"
-      ),
-    ),
+
+
+  let previewProvider = $derived(
+    $selectedAnalyticsProviderScope === "all"
+      ? $provider
+      : $selectedAnalyticsProviderScope,
   );
   let previewSession = $derived(
     previewProvider
@@ -166,12 +167,17 @@
   );
   let scopedPresencePreview = $derived(
     $discordPresencePreview
-    && $discordPresencePreview.provider === previewProvider
+    && providerMatchesAnalyticsScope(
+      $discordPresencePreview.provider,
+      $selectedAnalyticsProviderScope,
+    )
       ? $discordPresencePreview
       : null,
   );
   let activeSessionCount = $derived(
-    $activeSessions.filter((session) => session.provider === previewProvider).length,
+    $activeSessions.filter((session) =>
+      providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
+    ).length,
   );
   let previewProfile = $derived.by(() => {
     const candidate = scopedPresencePreview?.provider ?? previewSession?.provider ?? previewProvider;
@@ -191,6 +197,17 @@
     ),
   );
   let previewAssetKey = $derived(previewArt.assetKey);
+  let previewSmallArt = $derived.by(() => {
+    const key = scopedPresencePreview?.small_image_key;
+    if (!key) return null;
+    if (key === "codex-app" || key === "codex-logo") {
+      return rpArtFor("codex", key, scopedPresencePreview?.small_text);
+    }
+    if (key === "large") {
+      return rpArtFor("claude", key, scopedPresencePreview?.small_text);
+    }
+    return null;
+  });
   let previewFast = $derived(previewSession?.fast ?? false);
 
   let detailsLine = $derived.by(() => {
@@ -252,13 +269,16 @@
   }
 
   function sessionLimitPart(): string | null {
-    return broadcastAccessRoutes
+    return $selectedAccessRoutes
       .flatMap((route) => {
         return route.windows.flatMap((window) => {
           const presentation = allowancePresentation(route, window);
           if (!presentation) return [];
+          const sourcePrefix = $selectedAnalyticsProviderScope === "all"
+            ? `${accessKindLabel(route.source.kind).product} `
+            : "";
           return [
-            `${window.label || windowLabel(window.window_minutes ?? 0)} `
+            `${sourcePrefix}${window.label || windowLabel(window.window_minutes ?? 0)} `
             + `${presentation.percent.toFixed(0)}% ${presentation.direction}`,
           ];
         });
@@ -277,7 +297,7 @@
   }
 
   function creditsPart(): string | null {
-    const presentations = broadcastAccessRoutes
+    const presentations = $selectedAccessRoutes
       .filter((route) =>
         route.availability === "available"
         && route.freshness === "fresh"
@@ -286,11 +306,14 @@
       .flatMap((route) => {
         const credits = route.credits;
         if (!credits) return [];
-        if (credits.unlimited) return ["Credits Unlimited"];
+        const prefix = $selectedAnalyticsProviderScope === "all"
+          ? `${accessKindLabel(route.source.kind).product} `
+          : "";
+        if (credits.unlimited) return [`${prefix}Credits Unlimited`];
         if (credits.balance == null) return [];
         const numeric = Number(credits.balance);
         const display = Number.isFinite(numeric) ? numeric.toLocaleString() : credits.balance;
-        return [`Credits ${display}`];
+        return [`${prefix}Credits ${display}`];
       });
     return presentations.join(" • ") || null;
   }
@@ -428,7 +451,7 @@
 <div class="discord-view app-view" style="--provider-accent: {previewProfile.accent}">
   <div class="view-header">
     <div class="view-title-group">
-      <h1 class="view-title">Broadcast</h1>
+      <h2 class="view-title">Broadcast</h2>
       <span class="view-sub">
         {activeCount}/{availableFieldCount} fields · {previewProfile.productName}
       </span>
@@ -487,7 +510,7 @@
         <div class="cc-section identity-section">
           <div class="cc-section-head">
             <div class="cc-section-text">
-              <h2 class="cc-section-title">Desktop identity</h2>
+              <h3 class="cc-section-title">Desktop identity</h3>
               <p class="cc-section-desc">Choose the Discord app name and large artwork for Codex Desktop.</p>
             </div>
             <div class="preset-seg identity-seg" role="group" aria-label="Codex desktop design">
@@ -516,7 +539,7 @@
       <div class="cc-section">
         <div class="cc-section-head">
           <div class="cc-section-text">
-            <h2 class="cc-section-title">Preset</h2>
+            <h3 class="cc-section-title">Preset</h3>
             <p class="cc-section-desc">Pick a density, or hand-tune the fields below.</p>
           </div>
           <div class="preset-seg" role="tablist" aria-label="Field preset">
@@ -539,7 +562,7 @@
       <div class="cc-section cc-section-fields">
         <div class="cc-section-head cc-fields-head">
           <div class="cc-section-text">
-            <h2 class="cc-section-title">Fields</h2>
+            <h3 class="cc-section-title">Fields</h3>
             <p class="cc-section-desc">Toggle visibility and reorder fields. The backend generates the exact preview.</p>
           </div>
           <span class="field-count">
@@ -616,8 +639,11 @@
             <div class="dp-status-dot" class:offline={!discordEnabled}></div>
           </div>
           <div class="dp-username">
-            {$discordUser?.username ?? "Discord user unavailable"} <span class="dp-tag">ツ</span>
+            {$discordUser?.global_name ?? $discordUser?.username ?? "Discord user unavailable"}
           </div>
+          {#if $discordUser?.username}
+            <div class="dp-handle">@{$discordUser.username}</div>
+          {/if}
           <div class="dp-separator"></div>
           <div class="dp-section-title">Current Activity</div>
           <div class="dp-activity-card">
@@ -625,8 +651,23 @@
             <div class="dp-activity-body">
               <div class="dp-activity-art" title={previewArt.largeText}>
                 <img class="dp-art-large" src={previewArt.large} alt={previewArt.largeText} draggable="false" />
-                {#if previewArt.small}
-                  <img class="dp-art-small" src={previewArt.small} alt="" draggable="false" />
+                {#if scopedPresencePreview?.small_image_key}
+                  {#if previewSmallArt}
+                    <img
+                      class="dp-art-small"
+                      src={previewSmallArt.large}
+                      title={scopedPresencePreview.small_text ?? ""}
+                      alt=""
+                      aria-hidden="true"
+                      draggable="false"
+                    />
+                  {:else}
+                    <span
+                      class="dp-art-small dp-art-small-fallback"
+                      title={scopedPresencePreview.small_text ?? ""}
+                      aria-hidden="true"
+                    ><PulseMark size={22} /></span>
+                  {/if}
                 {/if}
               </div>
               <div class="dp-activity-info">
@@ -768,8 +809,8 @@
   /* ── LAYOUT ── */
   .discord-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
-    gap: 16px;
+    grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
+    gap: 18px;
     align-items: start;
     min-width: 0;
   }
@@ -782,23 +823,25 @@
   /* ── CONTROL CARD (flat, Dashboard-aligned) ── */
   .control-card {
     min-width: 0;
-    background: var(--surface-panel);
+    background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    transition: border-color 0.18s var(--ease);
   }
+  .control-card:hover { border-color: var(--border-hover); }
 
   .cc-toggle-row {
-    padding: 15px 18px;
+    padding: 20px 22px;
     border-bottom: 1px solid var(--border);
   }
 
   .big-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
     cursor: pointer;
     width: 100%;
   }
@@ -856,10 +899,10 @@
 
   .cc-section-head {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: space-between;
     gap: 16px;
-    padding: 12px 18px;
+    padding: 16px 22px 14px;
   }
   .cc-section-text { min-width: 0; }
   .cc-section-title {
@@ -876,7 +919,7 @@
     margin: 0;
   }
 
-  .cc-section-fields .cc-section-head { padding-bottom: 9px; }
+  .cc-section-fields .cc-section-head { padding-bottom: 10px; }
 
   .field-count {
     display: inline-flex;
@@ -885,7 +928,7 @@
     font-family: var(--font-mono);
     letter-spacing: var(--letter-tight);
   }
-  .fc-num { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+  .fc-num { font-size: 22px; font-weight: 700; color: var(--text-primary); }
   .fc-den { font-size: 13px; color: var(--text-muted); margin-left: 1px; }
 
   /* ── preset segmented control ── */
@@ -922,15 +965,13 @@
   .field-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1px;
-    margin: 0 14px 14px;
-    overflow: hidden;
-    background: var(--divider);
-    border: 1px solid var(--divider);
-    border-radius: var(--radius-md);
+    gap: 0;
+    border-top: 1px solid var(--border);
   }
   @media (max-width: 1180px) {
     .field-grid { grid-template-columns: 1fr; }
+    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; }
+    .field-cell:first-child { border-top: none !important; }
   }
   @media (max-width: 620px) {
     .field-grid { grid-template-columns: 1fr; }
@@ -939,18 +980,24 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
-    padding: 10px 12px;
-    border: 0;
-    min-height: 56px;
-    background: var(--surface-panel);
+    gap: 14px;
+    padding: 14px 22px;
+    border-top: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+    min-height: 64px;
     transition: background 0.15s var(--ease);
   }
-  .field-cell:hover { background: var(--surface-raised); }
+  .field-cell:hover { background: var(--bg-card-hover); }
   /* Provider cannot broadcast this field, so it reads as unavailable rather than
      as an switch that would silently revert. */
   .field-cell.unavailable { opacity: 0.45; }
   .field-cell.unavailable:hover { background: transparent; }
+  .field-cell:nth-child(-n+2) { border-top: none; }
+  .field-cell:nth-child(2n+1) { border-left: none; }
+  @media (max-width: 620px) {
+    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; }
+    .field-cell:first-child { border-top: none !important; }
+  }
   .field-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .field-label {
     font-size: var(--fs-base);
@@ -969,8 +1016,8 @@
     margin-left: auto;
   }
   .field-order button {
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
@@ -986,7 +1033,7 @@
     flex-direction: column;
     gap: 10px;
     position: sticky;
-    top: 8px;
+    top: 0;
   }
   .stage-label {
     display: flex;
@@ -1026,16 +1073,16 @@
     box-shadow: 0 0 0 3px var(--success-dim), 0 0 10px var(--success-glow);
   }
 
-  /* ── Discord mock card — premium, Discord-faithful, editorial rhythm ── */
+  /* ── Discord structure using Pulse panel surfaces ── */
   .dp-profile {
     position: relative;
-    background: var(--preview-bg);
-    border: 1px solid var(--preview-border);
-    border-radius: 14px;
+    background: var(--surface-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
     overflow: hidden;
-    box-shadow: var(--preview-shadow);
+    box-shadow: var(--elev-1);
   }
-  .dp-body { padding: 0 0 18px; color: var(--preview-text); }
+  .dp-body { padding: 0 0 18px; color: var(--text-primary); }
 
   .dp-banner {
     height: 68px;
@@ -1054,13 +1101,13 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, transparent 55%, var(--preview-scrim) 100%);
+    background: linear-gradient(180deg, transparent 55%, color-mix(in srgb, var(--surface-panel) 35%, transparent) 100%);
     pointer-events: none;
   }
   .dp-banner-default {
     background:
-      radial-gradient(120% 140% at 15% 0%, color-mix(in srgb, var(--provider-accent) 22%, transparent) 0%, transparent 62%),
-      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 14%, var(--preview-bg)) 0%, var(--preview-bg) 70%);
+      radial-gradient(120% 140% at 15% 0%, color-mix(in srgb, var(--provider-accent) 30%, transparent) 0%, transparent 62%),
+      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 18%, var(--bg-elevated)) 0%, var(--bg-elevated) 72%);
   }
 
   .dp-avatar-ring {
@@ -1073,8 +1120,8 @@
     width: 80px;
     height: 80px;
     border-radius: 50%;
-    background: var(--preview-surface);
-    border: 6px solid var(--preview-bg);
+    background: var(--bg-elevated);
+    border: 6px solid var(--surface-panel);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1090,25 +1137,30 @@
     height: 20px;
     border-radius: 50%;
     background: var(--success);
-    border: 5px solid var(--preview-bg);
+    border: 5px solid var(--surface-panel);
     transition: background 0.2s var(--ease);
   }
-  .dp-status-dot.offline { background: var(--preview-faint); }
+  .dp-status-dot.offline { background: var(--text-muted); }
 
   .dp-username {
     padding: 10px 18px 0;
     font-size: 20px;
     font-weight: 700;
-    letter-spacing: -0.015em;
-    color: var(--preview-text);
+    letter-spacing: var(--letter-tight);
+    color: var(--text-primary);
     line-height: 1.2;
   }
-  .dp-tag { font-size: 14px; color: var(--preview-muted); font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+  .dp-handle {
+    padding: 3px 18px 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+  }
 
   .dp-separator {
     margin: 14px 18px 12px;
     height: 1px;
-    background: var(--preview-border);
+    background: var(--border);
   }
 
   .dp-section-title {
@@ -1116,23 +1168,24 @@
     font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--preview-muted);
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
   }
 
   .dp-activity-card {
     margin: 0 14px;
-    background: var(--preview-surface);
-    border: 1px solid var(--preview-border);
-    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
     padding: 14px;
+    box-shadow: var(--elev-1);
   }
   .dp-activity-header {
     font-size: 10.5px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--preview-muted);
+    letter-spacing: var(--letter-wider);
+    color: var(--text-muted);
     margin-bottom: 10px;
   }
   .dp-activity-body { display: flex; gap: 14px; align-items: flex-start; }
@@ -1145,9 +1198,9 @@
   .dp-art-large {
     width: 60px;
     height: 60px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     object-fit: cover;
-    background: var(--preview-bg);
+    background: var(--bg-elevated);
     box-shadow: var(--shadow-sm);
     -webkit-user-drag: none;
     user-select: none;
@@ -1156,16 +1209,17 @@
     position: absolute;
     right: -5px;
     bottom: -5px;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     object-fit: cover;
-    background: var(--preview-surface);
-    border: 2.5px solid var(--preview-surface);
+    background: var(--bg-elevated);
+    border: 2.5px solid var(--bg-elevated);
     box-shadow: var(--shadow-sm);
     -webkit-user-drag: none;
     user-select: none;
   }
+  .dp-art-small-fallback { display: flex; align-items: center; justify-content: center; overflow: hidden; }
   .dp-activity-info {
     display: flex;
     flex-direction: column;
@@ -1177,14 +1231,14 @@
   .dp-activity-name {
     font-size: 15px;
     font-weight: 700;
-    letter-spacing: -0.005em;
-    color: var(--preview-text);
+    letter-spacing: var(--letter-tight);
+    color: var(--text-primary);
     line-height: 1.2;
   }
   .dp-activity-details,
   .dp-activity-state {
     font-size: 12.5px;
-    color: var(--preview-muted);
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1192,7 +1246,7 @@
   }
   .dp-activity-elapsed {
     font-size: 11.5px;
-    color: var(--preview-muted);
+    color: var(--text-muted);
     margin-top: 4px;
     font-variant-numeric: tabular-nums;
   }
@@ -1203,7 +1257,8 @@
     .cc-section-head { align-items: flex-start; flex-direction: column; padding: 14px; }
     .cc-toggle-row { padding-inline: 14px; }
     .field-grid { grid-template-columns: 1fr; }
-    .field-cell { padding: 11px 12px; }
+    .field-cell { border-left: none !important; border-top: 1px solid var(--border) !important; padding: 12px 14px; }
+    .field-cell:first-child { border-top: none !important; }
     .field-order button { width: 36px; height: 36px; }
     .dp-activity-card { margin-inline: 10px; }
   }

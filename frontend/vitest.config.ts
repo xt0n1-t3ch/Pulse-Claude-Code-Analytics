@@ -9,7 +9,6 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "src"),
       "@tauri-apps/api/event": path.resolve(__dirname, "node_modules/@tauri-apps/api/event.js"),
-      "@tauri-apps/api/window": path.resolve(__dirname, "node_modules/@tauri-apps/api/window.js"),
       "@testing-library/svelte": path.resolve(__dirname, "node_modules/@testing-library/svelte"),
       // The suites live outside frontend/, so bare Tauri plugin specifiers do
       // not resolve from their location. Pin them to this package's deps so

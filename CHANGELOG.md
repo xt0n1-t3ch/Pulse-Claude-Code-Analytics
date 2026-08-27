@@ -4,6 +4,225 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [1.7.9] - 2026-08-27
+
+### Removed
+
+- The Context view: it duplicated the Sessions surface whenever no session
+  was live. Live-session context composition stays available through the
+  session detail views.
+
+### Changed
+
+- Codex usage windows now use the canonical ChatGPT analytics naming: the
+  primary label derives from the window duration ("5-hour limit", "Weekly
+  limit"), model-scoped windows carry the model name as a muted secondary
+  line, and raw tokens like "1w" are gone from primary labels.
+- The Discord Live Preview card is re-skinned onto the app's theme tokens —
+  light and dark both render it as a native Pulse panel (zero hardcoded hex
+  in the preview styles, enforced by a source-level test), with the real
+  local avatar, username, and banner when present.
+- Costs de-nests to three top-level cards (ledger, charts, session details):
+  the coverage footer folds into the ledger, chart sections separate by
+  dividers instead of nested boxes, the ledger heading reads "Spend and
+  coverage", and metric sub-lines stack without clipping.
+- Dashboard focus stats keep their note lines under the value (no overlap
+  into the neighboring figure), at-a-glance meta collapses to one line with
+  coverage in a tooltip, and the Sessions search plus all-time facts share a
+  single bordered toolbar.
+- Repository discoverability: added root `llms.txt` (llmstxt.org format) and
+  an SEO pass on the README (keyword-bearing opening, factual badge row,
+  Why Pulse section, table of contents, single H1).
+
+### Changed
+
+- Reports bundles are cached in-process for 60 seconds per (window, project,
+  provider) key, so revisiting the Reports view renders the stored analysis
+  instantly instead of re-running every analyzer; first paint shows skeleton
+  placeholders per card while the first bundle computes, and the header stays
+  interactive throughout.
+- Context no longer sits empty between sessions: with provider history it
+  renders a "Latest session" panel with the recorded project, model, relative
+  time, context window fill, and composition bar (falling back to the plain
+  empty state when there is no history or the lookup fails).
+- Costs reads as one ledger: a single "Last 30 days" window kicker, honest
+  em-dash degradation when provider billing is unavailable (with one short
+  explanation instead of a shouted word), compact provenance tags on every
+  figure, sentence-case pane titles ("By token type / By model / By project"),
+  and a semantic sessions table with right-aligned tabular numbers.
+- The budget cockpit tells the real subscription story: when provider-billed
+  readbacks are structurally absent, the hero figure shows the actual plan
+  price parsed from the active plan ("Pro 20x subscription") with measured
+  API-equivalent usage beside it, instead of an empty em-dash wall.
+- By-model rows keep their full names on a wrapping two-line label (no
+  mid-name ellipsis), and session-detail rows separate project from branch
+  onto two lines with a dot-only status column carrying its meaning in
+  tooltip and screen-reader text.
+- The Context idle panel reads as a hero: the project name is the heading
+  (no duplicated "Latest session" label), a full-width threshold-colored
+  meter with big token figures, meta row for model/branch/time, and the
+  recorded category composition — with an honest one-liner when no
+  breakdown was recorded.
+- Sessions replaces its raw native selects with the shared custom controls,
+  keeps sort/range values verbatim, renders history as a real table with
+  scoped headers and cost chips (exact / estimate / unavailable), and tightens
+  the all-time footer into one fact line.
+- Reports binds its subtitle to the active analysis window, gives exports
+  pending states ("Copy report" / "Download HTML"), fixes the heading outline,
+  and rewrites generic section subtitles to state their data window.
+- Shell copy pass: "Needs attention", deduplicated accessible names on the
+  Claude source card, shorter notification copy, calmer update-banner wording.
+
+### Added
+
+- The Discord live preview uses the signed-in local client's real identity:
+  the account's global display name is parsed from the LevelDB profile record,
+  the handle renders as an `@username` subtitle, and avatar, banner, and names
+  refresh every 60 seconds instead of being captured once at startup.
+- Dashboard sections state their data window (all time / month to date /
+  30 days), the initial analytics load renders skeleton placeholders instead of
+  reading as empty history, and the active-session tray plus focus panel form a
+  complete tab/tabpanel pair.
+- Settings reports a load failure for the window-close preference as a warning
+  toast that keeps the default, and disables the export button with an
+  "Exporting…" label while an export runs.
+- Context exposes a clear empty state ("Nothing live yet") with a direct path
+  to the Sessions view.
+- The Discord live preview mirrors the real Rich Presence payload's small
+  activity asset as a decorative circular chip on the artwork when the backend
+  provides one.
+
+### Fixed
+
+- The Discord identity scanner now ranks candidate files from ALL installed
+  variants (Stable/Canary/PTB/Flatpak/Snap) by modification time globally and,
+  inside the newest file, prefers the richest, latest-written profile record
+  (custom avatar > global name > banner) so the preview reflects the CURRENT
+  local account instead of a stale one.
+- A failed manual "check for updates" now says so ("Couldn't reach the update
+  service.") instead of silently doing nothing, and a forced check that finds
+  nothing confirms "You're already up to date."; the automatic startup probe
+  stays silent either way.
+- Discord identity extraction no longer aborts the whole scan when one LevelDB
+  file is unreadable, falls back through Stable → Canary → PTB candidate
+  directories until a valid record is found, parses the id-bearing object with
+  string-aware boundaries and escape decoding so a neighboring account profile
+  or quoted display names cannot corrupt the result, and caches the outcome
+  (including "not found") for 60 seconds so view refreshes avoid rescanning.
+- The Settings control rail now places all four controls in a dedicated grid
+  column (previously four controls shared three tracks), and Appearance and
+  Window close use the shared segmented control with correct group semantics
+  instead of hand-rolled radiogroup markup.
+- The Settings footer derives a friendly platform label (Windows/macOS/Linux)
+  via userAgentData with a raw-value fallback instead of printing the
+  deprecated `navigator.platform` string.
+=======
+## [1.7.8] - 2026-08-25
+
+Pulse 1.7.8 publishes the complete patch after the immutable release gate caught
+an architecture label missing from the Windows SBOM step before any v1.7.7
+artifacts became public.
+
+### Fixed
+
+- Windows x64 and ARM64 SBOM filenames now receive their matrix platform label
+  in the step that creates them, so the release assembler can verify and
+  publish the complete cross-platform asset set.
+
+## [1.7.7] - 2026-08-25
+
+Pulse 1.7.7 was an unpublished release candidate that renewed the
+time-bounded RustSec review contract that correctly stopped the first release
+attempt before any artifacts were published.
+
+### Security
+
+- Re-reviewed the 19 accepted Tauri/GTK3 and build-time RustSec warnings against
+  the current advisory database and extended their fail-closed review window to
+  September 25, 2026. No new vulnerability exception was added.
+
+## [1.7.6] - 2026-08-25
+
+Pulse 1.7.6 is a patch release that makes update availability truthful on each
+supported platform, completes native x64 and ARM64 release coverage, and
+refines the operational workspace without changing public data contracts.
+
+### Fixed
+
+- The repository status row now links to Pulse's real local quality gate instead
+  of a removed CI workflow, and the dashboard source strip uses the full
+  operational width with a higher-contrast Codex signal color.
+- Cross-platform releases now build and verify native Windows, macOS, and Linux
+  artifacts for both x64 and ARM64, including architecture-specific updater
+  targets, Windows SBOMs, checksums, and installer selection.
+- Pulse now offers **Update** only after Tauri confirms that the current
+  platform has a signed updater manifest. Missing or invalid updater metadata
+  shows **Open release** immediately instead of failing after approval, and the
+  verified update handle is reused for download and installation.
+- Pulse's local Codex adapter recognizes `codex_work_desktop` sessions as the
+  desktop app, matching the canonical Rich Presence classifier.
+
+### Changed
+
+- Refreshed Svelte and the frontend interaction test harness to compatible
+  patch releases.
+- Promoted the immutable Codex Presence Core pin to canonical v1.10.3 while
+  retaining Pulse-owned desktop classification at the adapter boundary.
+
+## [1.7.5] - 2026-08-25
+
+Pulse 1.7.5 isolates analytics scope from Discord publishing, keeps Codex
+quota windows faithful to fresh provider data, makes reset dismissals durable,
+and ships a tighter, faster desktop workspace without changing public command
+or database contracts.
+
+### Fixed
+
+- The frameless Windows title bar uses Tauri's native drag command again,
+  preserves double-click maximize, and excludes navigation, notifications,
+  theme, and window controls from the draggable surface.
+- Analytics source changes no longer switch the provider published to Discord.
+  The Discord view keeps its own Claude/Codex broadcaster selector while Home,
+  Sessions, Context, Costs, and Reports retain their independent provider scope.
+- Codex quota presentation now projects the provider's effective account scope.
+  A newly reported weekly-only response removes an older or model-scoped 5-hour
+  window from Pulse surfaces instead of presenting an invented `100% remaining`
+  value; reported zero usage remains distinct from an absent window.
+- Model-scoped quota windows now keep duration-specific identities, so a 5-hour
+  and weekly window cannot alternately recreate the same reset notification on
+  every poll. Dismissal remains durable across refreshes and restarts, and a
+  one-time migration hides pre-fix collision rows without deleting the audit
+  trail or suppressing later genuine reset events.
+- A malformed Discord configuration now degrades only Discord settings and
+  preview data. Core analytics remain live, same-provider last-good Discord
+  data stays visible with an explicit warning, provider changes revoke that
+  cache, and poisoned shared state fails the whole snapshot instead of
+  publishing fabricated empty telemetry.
+- Snapshot freshness uses the backend capture timestamp, including restored
+  startup snapshots, rather than the time the frontend happened to receive it.
+  Direct Discord preview reads now report configuration errors instead of
+  silently composing a presence from defaults.
+- Reports now normalizes and bounds stored prompt excerpts, keeps them out of
+  the rendered DOM by default, and requires an explicit per-session reveal.
+
+### Changed
+
+- Refreshed the Svelte compiler and checker, user-interaction test harness, and
+  Rust error-derive lockfile to their compatible patch releases.
+- Refined the desktop analytics shell while preserving its ultra-dark canvas, clearer
+  text hierarchy, a compact provider strip, a less crowded Discord field
+  editor, and a bounded Reports loading state across desktop and narrow widths.
+- Reflowed account limits into a content-driven horizontal ledger above the
+  live workspace and widened the centered source selector, removing the empty
+  full-height rail and unused chrome space without changing provider ownership.
+- Split non-dashboard views into route-loaded production chunks. The measured
+  entry JavaScript fell from 506.28 kB to 148.06 kB (167.01 kB to 51.67 kB
+  gzip) while Home remains eagerly available.
+- Added rendered axe-core coverage to the existing dark/light Playwright
+  matrix, including the 390-pixel narrow shell across every primary view and
+  geometry checks for centered source occupancy and content-driven allowances.
+>>>>>>> origin/main
+
 ## [1.7.8] - 2026-08-25
 
 Pulse 1.7.8 publishes the complete patch after the immutable release gate caught

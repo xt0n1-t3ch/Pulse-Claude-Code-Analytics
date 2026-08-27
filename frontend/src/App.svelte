@@ -4,6 +4,12 @@
   import AccessSourceBar from "./components/AccessSourceBar.svelte";
   import Toast from "./components/Toast.svelte";
   import UpdateBanner from "./components/UpdateBanner.svelte";
+  import Dashboard from "./views/Dashboard.svelte";
+  import Sessions from "./views/Sessions.svelte";
+  import Costs from "./views/Costs.svelte";
+  import Reports from "./views/Reports.svelte";
+  import Discord from "./views/Discord.svelte";
+  import Settings from "./views/Settings.svelte";
   import {
     currentView,
     invalidateLiveSnapshotForProviderChange,
@@ -15,46 +21,20 @@
   import { providerRevision } from "./lib/provider";
   import { fly } from "svelte/transition";
   import { setTheme } from "@tauri-apps/api/app";
-  import {
-    initialView,
-    loadView,
-    normalizeViewId,
-    type ViewId,
-  } from "./lib/view-router";
 
-  let activeViewId = $derived(normalizeViewId($currentView));
-  let ActiveView = $state<Component<any> | null>(initialView);
-  let viewLoading = $state(false);
-  let viewLoadError = $state<string | null>(null);
-  let viewRequest = 0;
-
-  function resolveView(viewId: ViewId): void {
-    const request = ++viewRequest;
-    viewLoadError = null;
-    if (viewId === "dashboard") {
-      ActiveView = initialView;
-      viewLoading = false;
-      return;
-    }
-    ActiveView = null;
-    viewLoading = true;
-    void loadView(viewId)
-      .then((component) => {
-        if (request !== viewRequest || viewId !== activeViewId) return;
-        ActiveView = component;
-      })
-      .catch((error: unknown) => {
-        if (request !== viewRequest || viewId !== activeViewId) return;
-        viewLoadError = error instanceof Error
-          ? `This view could not be loaded. ${error.message}`
-          : "This view could not be loaded.";
-      })
-      .finally(() => {
-        if (request === viewRequest && viewId === activeViewId) viewLoading = false;
-      });
-  }
-
-  $effect(() => resolveView(activeViewId));
+  type ViewId = "dashboard" | "sessions" | "costs" | "reports" | "discord" | "settings";
+  const views: Record<ViewId, Component<any>> = {
+    dashboard: Dashboard,
+    sessions: Sessions,
+    costs: Costs,
+    reports: Reports,
+    discord: Discord,
+    settings: Settings,
+  } as const;
+  let activeViewId = $derived(
+    ($currentView in views ? $currentView : "dashboard") as ViewId,
+  );
+  let ActiveView = $derived(views[activeViewId]);
 
   const initialTheme: "dark" | "light" =
     localStorage.getItem("pulse-theme") === "light" ? "light" : "dark";
@@ -77,7 +57,8 @@
   onMount(() => {
     applyTheme(theme);
     startSnapshotSync();
-    loadDiscordUser();
+    void loadDiscordUser();
+    const discordUserRefreshTimer = setInterval(() => void loadDiscordUser(), 60_000);
     let firstProviderRevision = true;
     const unsubscribeProviderRevision = providerRevision.subscribe(() => {
       if (firstProviderRevision) {
@@ -88,6 +69,7 @@
       void poll();
     });
     return () => {
+      clearInterval(discordUserRefreshTimer);
       unsubscribeProviderRevision();
       stopSnapshotSync();
     };
@@ -97,25 +79,13 @@
 <div class="main-wrapper">
   <TopBar onToggleTheme={toggleTheme} />
   <AccessSourceBar />
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <main class="main-content" tabindex="0" aria-label="Pulse workspace">
+  <main class="main-content">
     {#key activeViewId}
       <div class="view-host" in:fly={{ y: 4, duration: 80 }}>
-        {#if ActiveView && activeViewId === "settings"}
+        {#if activeViewId === "settings"}
           <ActiveView onToggleTheme={toggleTheme} currentTheme={theme} />
-        {:else if ActiveView}
+        {:else}
           <ActiveView />
-        {:else if viewLoadError}
-          <div class="view-load-state error state-panel" role="alert">
-            <strong>View unavailable</strong>
-            <span>{viewLoadError}</span>
-            <button type="button" onclick={() => resolveView(activeViewId)}>Retry</button>
-          </div>
-        {:else if viewLoading}
-          <div class="view-load-state state-panel" role="status" aria-live="polite">
-            <strong>Loading workspace</strong>
-            <span>Preparing the selected view.</span>
-          </div>
         {/if}
       </div>
     {/key}
@@ -152,28 +122,5 @@
     width: 100%;
     min-width: 0;
     min-height: 100%;
-  }
-
-  .view-load-state {
-    min-height: 180px;
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 6px;
-    color: var(--text-muted);
-    text-align: center;
-  }
-
-  .view-load-state strong { color: var(--text-primary); }
-  .view-load-state span { max-width: 52ch; font-size: var(--fs-sm); }
-  .view-load-state.error strong { color: var(--danger); }
-  .view-load-state button {
-    margin-top: 6px;
-    padding: 6px 12px;
-    color: var(--text-primary);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
   }
 </style>

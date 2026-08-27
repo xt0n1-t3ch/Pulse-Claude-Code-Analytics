@@ -1,5 +1,4 @@
 import { chromium } from "../../frontend/node_modules/playwright/index.mjs";
-import AxeBuilder from "../../frontend/node_modules/@axe-core/playwright/dist/index.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -9,34 +8,17 @@ const fullMatrix = [
   { width: 1280, height: 860 },
   { width: 900, height: 600 },
   { width: 720, height: 560 },
-  { width: 390, height: 844 },
 ];
 const matrix = process.env.PULSE_VISUAL_QUICK === "1" ? [fullMatrix[0]] : fullMatrix;
 const themes = process.env.PULSE_VISUAL_QUICK === "1" ? ["dark"] : ["dark", "light"];
 const idleVerificationMs = Number(process.env.PULSE_IDLE_VERIFY_MS ?? 1200);
-const views = ["Home", "Sessions", "Context", "Costs", "Reports", "Discord", "Settings"];
-const multiWindowFixture = JSON.parse(
+const views = ["Home", "Sessions", "Costs", "Reports", "Discord", "Settings"];
+const accessFixture = JSON.parse(
   await fs.readFile(
     new URL("../fixtures/providers/hybrid/fixture.json", import.meta.url),
     "utf8",
   ),
 );
-const accessFixture = structuredClone(multiWindowFixture);
-const codexAccessRoute = accessFixture.expected_dto.routes.find(
-  (route) => route.source.provider === "codex",
-);
-codexAccessRoute.observed_at = "2026-08-25T18:00:00Z";
-codexAccessRoute.fetched_at = "2026-08-25T18:00:00Z";
-codexAccessRoute.expires_at = "2026-08-25T18:00:30Z";
-codexAccessRoute.windows = [{
-  key: "weekly",
-  label: "Weekly usage limit",
-  window_minutes: 10080,
-  used_percent: 7,
-  remaining_percent: 93,
-  resets_at: "2026-08-31T00:41:00Z",
-}];
-codexAccessRoute.credits = { balance: "0", has_credits: false, unlimited: false };
 
 await fs.mkdir(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -69,18 +51,19 @@ for (const theme of themes) {
           signals: ["codex_subscription_usage"],
         },
         scopes: [
-          { id: "codex", name: null, kind: "global_account", windows: [{ window_minutes: 10080, used_percent: 7, remaining_percent: 93, resets_at: "2026-08-31T00:41:00Z" }] },
+          { id: "codex", name: null, kind: "global_account", windows: [{ window_minutes: 10080, used_percent: 4, remaining_percent: 96, resets_at: "2026-07-22T23:16:00Z" }] },
+          { id: "codex_bengalfox", name: "GPT-5.3-Codex-Spark", kind: "model", windows: [{ window_minutes: 10080, used_percent: 0, remaining_percent: 100, resets_at: null }] },
         ],
-        credits: { balance: "0", has_credits: false, unlimited: false },
-        observed_at: "2026-08-25T18:00:00Z", provenance_source: "Codex account API",
+        credits: { balance: "2500", has_credits: true, unlimited: false },
+        observed_at: "2026-07-16T02:00:00Z", provenance_source: "Codex account API",
       };
       const prefs = { show_project: true, show_branch: false, show_model: true, show_activity: true, show_tokens: true, show_cost: true, show_limits: true, show_credits: true, show_context: true, show_systems: true };
       const discordSettings = { provider: "codex", enabled: true, status: "Connected", publisher: "pulse", display_prefs: prefs, desktop_design: "chatgpt_app", supports_desktop_design: true, supports_field_order: true, field_order: ["project", "branch", "model", "activity", "tokens", "cost", "quotas", "credits", "context", "systems"] };
-      const discordPreview = { provider: "codex", app_name: "ChatGPT App", details: "Implementing premium native UI · cc-discord-presence", state: "GPT-5.6 Sol · Extra High · ⚡ Fast · 7d 93% · Credits 0", large_image_key: "chatgpt-app", large_text: "ChatGPT App", small_image_key: null, small_text: null, has_session: true, duration_secs: 6420 };
+      const discordPreview = { provider: "codex", app_name: "ChatGPT App", details: "Implementing premium native UI · cc-discord-presence", state: "GPT-5.6 Sol · Extra High · ⚡ Fast · 7d 96% · Credits 2,500", large_image_key: "chatgpt-app", large_text: "ChatGPT App", small_image_key: null, small_text: null, has_session: true, duration_secs: 6420 };
       const health = { version: "1.7.0", uptime_seconds: 6420, discord_status: "Connected", discord_enabled: true };
       const metrics = { total_cost: 195.79, cost_available: true, cost_basis: "exact", input_tokens: 8500000, pure_input_tokens: 8500000, output_tokens: 809200, cache_write_tokens: 0, cache_read_tokens: 258400000, total_tokens: 267600000, session_count: 1, input_cost: 42.33, output_cost: 24.27, cache_write_cost: 0, cache_read_cost: 129.19, cache_hit_ratio: 97, models: [{ model: session.model, sessions: 1, cost: 195.79, tokens: 267600000 }] };
       const plan = { provider: "codex", plan_key: "pro_20x", plan_name: "Pro 20x ($200/month)", detected: true };
-      const rateLimits = { provider: "codex", usage, five_hour_pct: 0, five_hour_resets: "N/A", five_hour_label: "", five_hour_window_minutes: null, seven_day_pct: 7, seven_day_resets: "2026-08-31T00:41:00Z", seven_day_label: "7d Window", seven_day_window_minutes: 10080, sonnet_pct: null, sonnet_resets: null, extra_enabled: false, extra_limit: null, extra_used: null, extra_pct: null, source: usage.provenance_source };
+      const rateLimits = { provider: "codex", usage, five_hour_pct: 0, five_hour_resets: "N/A", five_hour_label: "", five_hour_window_minutes: null, seven_day_pct: 4, seven_day_resets: "2026-07-22T23:16:00Z", seven_day_label: "7d Window", seven_day_window_minutes: 10080, sonnet_pct: null, sonnet_resets: null, extra_enabled: false, extra_limit: null, extra_used: null, extra_pct: null, source: usage.provenance_source };
       const snapshot = {
         revision: 1,
         health,
@@ -126,24 +109,16 @@ for (const theme of themes) {
         prompt_complexity: { available: true, sessions_analyzed: 1, prompts_analyzed: 24, avg_complexity_score: 82, avg_specificity_score: 91, high_complexity_sessions: 1, low_specificity_sessions: 0, diagnosis: "Prompts are specific.", top_sessions: [] },
         session_health: { available: true, sessions_analyzed: 1, health_score: 92, grade: "A", avg_duration_minutes: 107, p90_duration_minutes: 107, long_session_pct: 0, avg_messages_per_session: 62, peak_overlap_pct: 0, compact_gap_pct: 0, diagnosis: "Session shape is healthy." },
       };
-      const costTotals = { days: 30, sessions: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"], total_cost: 195.79, input_cost: 42.33, output_cost: 24.27, cache_write_cost: 0, cache_read_cost: 129.19, total_tokens: 267600000, input_tokens: 267000000, output_tokens: 600000, cache_write_tokens: 0, cache_read_tokens: 258400000, pure_input_tokens: 8500000, by_model: [{ label: session.model, cost: 195.79, sessions: 1 }], by_project: [{ label: session.project, cost: 195.79, sessions: 1 }] };
-      const dailyUsage = [{ date: "2026-07-16", project: session.project, model: session.model, total_cost: 195.79, total_tokens: 267600000, session_count: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"], input_tokens: session.input_tokens, output_tokens: session.output_tokens, cache_write_tokens: 0, cache_read_tokens: session.cache_read_tokens }];
-      const budgetStatus = { monthly_budget: 0, alert_threshold_pct: 80, spent_this_month: 195.79, pct_used: 0, projected_monthly: 379.34, over_budget: false, sessions: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"] };
-      const costForecast = { spent_this_month: 195.79, days_elapsed: 16, days_in_month: 31, projected_monthly: 379.34, daily_average: 12.24, sessions: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"] };
-      const analyticsSummary = { total_sessions: 1, priced_sessions: 1, total_cost: 195.79, cost_basis: "exact", cost_sources: ["provider_billed"], total_tokens: 267600000, total_cache_read: 258400000, total_cache_write: 0, avg_duration_secs: 6420, avg_tokens_per_session: 267600000, avg_cost_per_session: 195.79, top_project: session.project, top_model: session.model, days_tracked: 30 };
-      const hourlyActivity = [{ hour: 2, session_count: 1, priced_sessions: 1, total_cost: 195.79, cost_basis: "exact", cost_sources: ["provider_billed"] }];
       const values = {
         get_active_provider: { active_provider: "codex" }, get_app_snapshot: snapshot, get_health: health, get_metrics: metrics,
         get_live_sessions: [session], get_rate_limits: rateLimits, get_plan_info: plan, get_discord_settings: discordSettings,
         get_discord_preview: discordPreview, get_discord_user: null,
-        get_analytics_summary: analyticsSummary,
-        get_dashboard_bundle: { summary: analyticsSummary, sessions: history, forecast: costForecast, hourly_activity: hourlyActivity },
+        get_analytics_summary: { total_sessions: 1, priced_sessions: 1, total_cost: 195.79, cost_basis: "exact", cost_sources: ["provider_billed"], total_tokens: 267600000, total_cache_read: 258400000, total_cache_write: 0, avg_duration_secs: 6420, avg_tokens_per_session: 267600000, avg_cost_per_session: 195.79, top_project: session.project, top_model: session.model, days_tracked: 30 },
         get_session_history: history, get_session_history_filtered: history, get_top_sessions: history,
-        get_costs_bundle: { history, forecast: costForecast, budget: budgetStatus, totals: costTotals, daily_usage: dailyUsage },
-        get_cost_totals: costTotals,
-        get_cost_forecast: costForecast,
-        get_hourly_activity: hourlyActivity,
-        get_daily_stats: dailyUsage,
+        get_cost_totals: { days: 30, sessions: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"], total_cost: 195.79, input_cost: 42.33, output_cost: 24.27, cache_write_cost: 0, cache_read_cost: 129.19, total_tokens: 267600000, input_tokens: 267000000, output_tokens: 600000, cache_write_tokens: 0, cache_read_tokens: 258400000, pure_input_tokens: 8500000, by_model: [{ label: session.model, cost: 195.79, sessions: 1 }], by_project: [{ label: session.project, cost: 195.79, sessions: 1 }] },
+        get_cost_forecast: { spent_this_month: 195.79, days_elapsed: 16, days_in_month: 31, projected_monthly: 379.34, daily_average: 12.24, sessions: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"] },
+        get_hourly_activity: [{ hour: 2, session_count: 1, priced_sessions: 1, total_cost: 195.79, cost_basis: "exact", cost_sources: ["provider_billed"] }],
+        get_daily_stats: [{ date: "2026-07-16", project: session.project, model: session.model, total_cost: 195.79, total_tokens: 267600000, session_count: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"], input_tokens: session.input_tokens, output_tokens: session.output_tokens, cache_write_tokens: 0, cache_read_tokens: session.cache_read_tokens }],
         get_project_stats: [{ project: session.project, session_count: 1, priced_sessions: 1, total_cost: 195.79, cost_basis: "exact", cost_sources: ["provider_billed"], total_tokens: 267600000, avg_session_cost: 195.79, avg_duration_secs: 6420, cache_read_tokens: 258400000, cache_write_tokens: 0, top_model: session.model }],
         get_model_distribution_v2: [{ model: session.model, session_count: 1, priced_sessions: 1, total_cost: 195.79, cost_basis: "exact", cost_sources: ["provider_billed"] }],
         get_reports_bundle: reports, get_recommendations: [], get_inflection_points: [], get_model_routing: null,
@@ -161,7 +136,7 @@ for (const theme of themes) {
           utilization_pct: 27,
           recommendation: "Context is healthy with substantial headroom.",
         }],
-        get_budget_status: budgetStatus,
+        get_budget_status: { monthly_budget: 0, alert_threshold_pct: 80, spent_this_month: 195.79, pct_used: 0, projected_monthly: 379.34, over_budget: false, sessions: 1, priced_sessions: 1, cost_basis: "exact", cost_sources: ["provider_billed"] },
         get_db_size: 2097152, get_provider_copy: { provider: "codex", provider_label: "Codex", instruction_file: "AGENTS.md", home_dir: "~/.codex", sessions_store: "JSONL", fix_label: "Fix with Codex", global_state_source: "config.toml" },
         check_app_update: null,
       };
@@ -210,9 +185,9 @@ for (const theme of themes) {
       }
       await page.waitForTimeout(200);
       const scopeCommand = {
+        Home: "get_analytics_summary",
         Sessions: "get_session_history",
-        Context: "get_context_breakdowns",
-        Costs: "get_costs_bundle",
+        Costs: "get_cost_totals",
         Reports: "get_reports_bundle",
       }[view];
       if (scopeCommand) {
@@ -228,10 +203,6 @@ for (const theme of themes) {
       if (selectedSource !== "true") {
         throw new Error(`${view} lost selected source identity.`);
       }
-      const renderedText = await page.locator("body").innerText();
-      if (renderedText.includes("Codex-Spark") || renderedText.includes("5h 100%")) {
-        throw new Error(`${view} resurrected a quota window absent from the fresh provider snapshot.`);
-      }
       const overflow = await page.evaluate(() => ({
         document: document.documentElement.scrollWidth - window.innerWidth,
         body: document.body.scrollWidth - window.innerWidth,
@@ -242,67 +213,13 @@ for (const theme of themes) {
           .slice(0, 8)
           .map((element) => ({ tag: element.tagName, class: element.className, scroll: element.scrollWidth, client: element.clientWidth })),
       }));
-      const homeGeometry = view === "Home" && viewport.width >= 1000
-        ? await page.evaluate(() => {
-            const bar = document.querySelector(".access-bar")?.getBoundingClientRect();
-            const sources = document.querySelector(".source-list")?.getBoundingClientRect();
-            const allowances = document.querySelector(".allowance-rail")?.getBoundingClientRect();
-            const workspace = document.querySelector(".work-now")?.getBoundingClientRect();
-            if (!bar || !sources || !allowances || !workspace) return null;
-            return {
-              source_center_delta: Math.abs((sources.left + sources.width / 2) - (bar.left + bar.width / 2)),
-              source_occupancy: sources.width / bar.width,
-              allowance_stacked: Math.abs(allowances.left - workspace.left) <= 1
-                && Math.abs(allowances.width - workspace.width) <= 1
-                && workspace.top >= allowances.bottom - 1,
-              allowance_height: allowances.height,
-            };
-          })
-        : null;
-      const axe = await new AxeBuilder({ page }).analyze();
-      const wcagViolations = axe.violations.filter((violation) =>
-        !violation.tags.includes("best-practice"),
-      );
-      const bestPracticeWarnings = axe.violations.filter((violation) =>
-        violation.tags.includes("best-practice"),
-      );
       const file = `${theme}-${viewport.width}x${viewport.height}-${view.toLowerCase().replaceAll(" ", "-")}.png`;
       await page.screenshot({ path: path.join(outputDir, file), fullPage: false });
-      results.push({
-        theme,
-        viewport: `${viewport.width}x${viewport.height}`,
-        view,
-        overflow,
-        home_geometry: homeGeometry,
-        accessibility: {
-          violations: wcagViolations.map((violation) => ({
-            id: violation.id,
-            impact: violation.impact,
-            targets: violation.nodes.flatMap((node) => node.target),
-          })),
-          best_practice_warnings: bestPracticeWarnings.map((violation) => ({
-            id: violation.id,
-            targets: violation.nodes.flatMap((node) => node.target),
-          })),
-        },
-        errors: [...errors],
-        idle: { duration_ms: idleVerificationMs, before: idleBefore, after: idleAfter },
-      });
+      results.push({ theme, viewport: `${viewport.width}x${viewport.height}`, view, overflow, errors: [...errors], idle: { duration_ms: idleVerificationMs, before: idleBefore, after: idleAfter } });
       if (overflow.document > 0 || overflow.body > 0 || (overflow.main ?? 0) > 0) {
         throw new Error(`Global overflow in ${theme} ${viewport.width}x${viewport.height} ${view}: ${JSON.stringify(overflow)}`);
       }
-      if (homeGeometry && (
-        homeGeometry.source_center_delta > 1
-        || homeGeometry.source_occupancy < 0.90
-        || !homeGeometry.allowance_stacked
-        || homeGeometry.allowance_height > 300
-      )) {
-        throw new Error(`Home layout wastes operational space: ${JSON.stringify(homeGeometry)}`);
-      }
       if (overflow.theme !== theme) throw new Error(`Theme mismatch: ${JSON.stringify(overflow)}`);
-      if (wcagViolations.length) {
-        throw new Error(`Accessibility violations in ${theme} ${viewport.width}x${viewport.height} ${view}: ${JSON.stringify(results.at(-1).accessibility.violations)}`);
-      }
     }
     if (errors.length) throw new Error(`Browser errors in ${theme} ${viewport.width}x${viewport.height}: ${errors.join(" | ")}`);
     await context.close();

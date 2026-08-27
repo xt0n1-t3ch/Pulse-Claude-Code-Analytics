@@ -1,6 +1,6 @@
 [package]
 name = "pulse"
-version = "1.7.8"
+version = "1.7.9"
 edition = "2024"
 description = "Pulse — Codex & Claude analytics"
 default-run = "pulse"
@@ -11,7 +11,7 @@ authors = ["xt0n1-t3ch"]
 
 [dependencies]
 cc-discord-presence = { path = ".." }
-codex-presence-core = { git = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence", rev = "9d20ffdb1c4ec6fa37edc00952badd041ec5bc02", version = "2.0.0" }
+codex-presence-core = { git = "https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence", rev = "a508507e0849fd5c9e09c7d1c55eebe2d199cfc0", version = "2.0.0" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"

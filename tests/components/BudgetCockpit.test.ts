@@ -196,9 +196,67 @@ describe("BudgetCockpit.svelte", () => {
       },
     });
 
-    expect(container.querySelector(".ck-figure")?.textContent?.trim()).toBe("Unavailable");
-    expect(getByText("Provider billing and API-equivalent value are unavailable for this month.")).toBeTruthy();
+    expect(container.querySelector(".ck-figure")?.textContent?.trim()).toBe("—");
+    expect(getByText("Provider billed · unavailable")).toBeTruthy();
+    expect(getByText("Provider-billed spend is unavailable for this month.")).toBeTruthy();
     expect(container.querySelector(".ck-track")).toBeNull();
+  });
+
+  it("shows the real subscription price when provider billing is unavailable", () => {
+    const { container, getByText } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({
+          billed_spend_usd: null,
+          projected_billed_spend_usd: null,
+          daily_billed_spend_usd: null,
+          billed_sessions: 0,
+          api_equivalent_usd: 84.25,
+          projected_api_equivalent_usd: 112.5,
+          api_equivalent_sessions: 4,
+          cost_basis: "estimated",
+          cost_sources: ["api_equivalent"],
+        }),
+        budget: null,
+        subscriptionPrice: 200,
+        subscriptionLabel: "Pro 20x",
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".ck-figure")?.textContent?.trim()).toBe("$200.00");
+    expect(getByText("Pro 20x subscription").getAttribute("data-state")).toBe("available");
+    expect(getByText("API-equivalent projection")).toBeTruthy();
+    expect(getByText("$112.50")).toBeTruthy();
+    expect(getByText("Your Pro 20x subscription covers this month — measured usage is worth $84.25 at published API rates.")).toBeTruthy();
+    expect(container.querySelector(".ck-equivalent")).toBeNull();
+  });
+
+  it("keeps the honest unavailable state when no subscription price is known", () => {
+    const { container, getByText } = render(BudgetCockpit, {
+      props: {
+        forecast: forecast({
+          billed_spend_usd: null,
+          projected_billed_spend_usd: null,
+          daily_billed_spend_usd: null,
+          api_equivalent_usd: null,
+          projected_api_equivalent_usd: null,
+          daily_api_equivalent_usd: null,
+          cost_basis: "unavailable",
+          cost_sources: [],
+          priced_sessions: 0,
+          billed_sessions: 0,
+          api_equivalent_sessions: 0,
+        }),
+        budget: null,
+        subscriptionPrice: null,
+        subscriptionLabel: "",
+        onSetBudget: noop,
+      },
+    });
+
+    expect(container.querySelector(".ck-figure")?.textContent?.trim()).toBe("—");
+    expect(getByText("Provider billed · unavailable")).toBeTruthy();
+    expect(getByText("Provider-billed spend is unavailable for this month.")).toBeTruthy();
   });
 
   it("shows known lower-bound spend when forecast coverage is partial", () => {
@@ -244,7 +302,7 @@ describe("BudgetCockpit.svelte", () => {
     expect(container.querySelector(".ck-track")).toBeNull();
     expect(container.querySelector(".cockpit.warn")).toBeNull();
     expect(container.querySelector(".cockpit.over")).toBeNull();
-    expect(getByText(/does not count against the budget/)).toBeTruthy();
+    expect(getByText("Usage is priced at published API rates; none of it is provider-billed this month.")).toBeTruthy();
   });
 
   it("uses no hardcoded colours", async () => {

@@ -252,8 +252,6 @@ const getRateLimits = vi.fn(async () => rateLimitInfo);
 const getPlanInfo = vi.fn(async () => planInfoFixture);
 const getAppSnapshot = vi.fn(async () => ({
   revision: 1,
-  sync_state: "live" as const,
-  snapshot_captured_at: "2026-05-28T12:00:02Z",
   health,
   metrics,
   sessions: liveSessions,
@@ -307,29 +305,12 @@ describe("poll() to stores to Dashboard full flow", () => {
     getRateLimits.mockClear();
     getPlanInfo.mockClear();
     getAppSnapshot.mockClear();
-    const {
-      health: h,
-      metrics: m,
-      sessions: s,
-      discordPresencePreview: dp,
-      discordSettings: ds,
-      rateLimits: r,
-      planInfo: p,
-      accessSnapshot: a,
-    } = stores;
+    const { health: h, metrics: m, sessions: s, discordPresencePreview: dp, rateLimits: r, planInfo: p, accessSnapshot: a } = stores;
     stores.stopSnapshotSync();
     h.set(null);
     m.set(null);
     s.set([]);
     dp.set(null);
-    ds.set(null);
-    stores.snapshotDiagnostics.set({
-      lastError: null,
-      lastErrorAt: null,
-      consecutiveFailures: 0,
-      lastSuccessAt: null,
-      discordSettingsError: null,
-    });
     r.set(null);
     p.set(null);
     a.set(null);
@@ -454,85 +435,6 @@ describe("poll() to stores to Dashboard full flow", () => {
     await waitFor(() => expect(getAppSnapshot).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(get(stores.health)?.version).toBe("current-provider"));
     expect(get(stores.backendConnection)).toBe("live");
-  });
-
-  it("clears Discord settings with the provider boundary before accepting a degraded replacement", async () => {
-    await stores.poll();
-    expect(get(stores.discordSettings)?.provider).toBe("claude");
-    expect(get(stores.discordPresencePreview)?.provider).toBe("claude");
-
-    stores.invalidateLiveSnapshotForProviderChange();
-
-    expect(get(stores.discordSettings)).toBeNull();
-    expect(get(stores.discordPresencePreview)).toBeNull();
-
-    const degraded = {
-      ...(await getAppSnapshot()),
-      revision: 4,
-      discord_settings: null,
-      discord_preview: null,
-      discord_settings_error: "Discord config is unreadable",
-    };
-    getAppSnapshot.mockResolvedValueOnce(degraded as never);
-
-    await stores.poll();
-
-    expect(get(stores.backendConnection)).toBe("live");
-    expect(get(stores.discordSettings)).toBeNull();
-    expect(get(stores.discordPresencePreview)).toBeNull();
-  });
-
-  it("retains the same-provider Discord view during config degradation and records backend capture age", async () => {
-    const healthy = await getAppSnapshot();
-    getAppSnapshot
-      .mockResolvedValueOnce(healthy)
-      .mockResolvedValueOnce({
-        ...healthy,
-        revision: 5,
-        snapshot_captured_at: "2026-05-28T12:10:00Z",
-        discord_settings: null,
-        discord_preview: null,
-        discord_settings_error: "Discord config is unreadable",
-      } as never);
-
-    await stores.poll();
-    const lastGoodSettings = get(stores.discordSettings);
-    const lastGoodPreview = get(stores.discordPresencePreview);
-    await stores.poll();
-
-    expect(get(stores.backendConnection)).toBe("live");
-    expect(get(stores.discordSettings)).toEqual(lastGoodSettings);
-    expect(get(stores.discordPresencePreview)).toEqual(lastGoodPreview);
-    expect(get(stores.snapshotDiagnostics)).toEqual({
-      lastError: null,
-      lastErrorAt: null,
-      consecutiveFailures: 0,
-      lastSuccessAt: Date.parse("2026-05-28T12:10:00Z"),
-      discordSettingsError: "Discord config is unreadable",
-    });
-  });
-
-  it("records transport failure separately and clears it on the next captured snapshot", async () => {
-    const healthy = await getAppSnapshot();
-    getAppSnapshot.mockRejectedValueOnce(new Error("bridge offline"));
-
-    await stores.poll();
-
-    expect(get(stores.snapshotDiagnostics).lastError).toBe("bridge offline");
-    expect(get(stores.snapshotDiagnostics).consecutiveFailures).toBe(1);
-    expect(get(stores.snapshotDiagnostics).lastSuccessAt).toBeNull();
-
-    getAppSnapshot.mockResolvedValueOnce({
-      ...healthy,
-      snapshot_captured_at: "2026-05-28T12:15:00Z",
-    });
-    await stores.poll();
-
-    expect(get(stores.snapshotDiagnostics).lastError).toBeNull();
-    expect(get(stores.snapshotDiagnostics).consecutiveFailures).toBe(0);
-    expect(get(stores.snapshotDiagnostics).lastSuccessAt).toBe(
-      Date.parse("2026-05-28T12:15:00Z"),
-    );
   });
 
   it("attaches the snapshot listener before initial hydration", async () => {

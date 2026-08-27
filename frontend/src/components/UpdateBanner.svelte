@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
-  import type { Update } from "@tauri-apps/plugin-updater";
+  import { addToast } from "../lib/stores";
   import { checkAppUpdate, openAppReleasePage, type AppUpdateAsset, type AppUpdateInfo } from "../lib/api";
 
   const SKIP_KEY = "pulse-update-skipped-version";
@@ -14,9 +14,6 @@
   let visible = $state(false);
   let notesOpen = $state(false);
   let opening = $state(false);
-  type UpdaterAvailability = "checking" | "ready" | "manual";
-  let updaterAvailability = $state<UpdaterAvailability>("checking");
-  let installableUpdate = $state.raw<Update | null>(null);
 
   /** In-app install lifecycle. `idle` also covers "not attempted yet". */
   type InstallPhase = "idle" | "downloading" | "installing" | "relaunching" | "failed" | "relaunch-failed";
@@ -113,33 +110,27 @@
   async function fetchUpdate(): Promise<AppUpdateInfo | null> {
     const fake = fakeVersionParam();
     if (fake) return synthFakeUpdate(fake);
-    try {
-      return await checkAppUpdate();
-    } catch {
-      return null;
-    }
+    return checkAppUpdate();
   }
 
   async function runCheck(force: boolean): Promise<void> {
-    const next = await fetchUpdate();
-    if (!next || !next.update_available || !next.latest_version) return;
+    let next: AppUpdateInfo | null = null;
+    try {
+      next = await fetchUpdate();
+    } catch {
+      // Only the explicit manual check pays for a failure message; the
+      // startup probe stays silent.
+      if (force) addToast("Couldn't reach the update service.", "warning", 5000);
+      return;
+    }
+    if (!next || !next.update_available || !next.latest_version) {
+      if (force) addToast("You're already up to date.", "info", 4000);
+      return;
+    }
     if (!force && next.latest_version === skippedVersion()) return;
     info = next;
     notesOpen = false;
-    await preflightUpdater();
     visible = true;
-  }
-
-  async function preflightUpdater(): Promise<void> {
-    updaterAvailability = "checking";
-    installableUpdate = null;
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      installableUpdate = await check();
-      updaterAvailability = installableUpdate ? "ready" : "manual";
-    } catch {
-      updaterAvailability = "manual";
-    }
   }
 
   function later(): void {
@@ -182,8 +173,10 @@
     downloadTotal = 0;
 
     try {
-      const update = installableUpdate;
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
       if (!update) {
+        // Nothing to install through the updater channel; hand off to GitHub.
         phase = "idle";
         await openRelease();
         return;
@@ -250,7 +243,7 @@
     in:fly={{ y: 16, duration: 320 }}
   >
     <header class="up-head">
-      <span class="up-title">New Update Available</span>
+      <span class="up-title">Update available</span>
       <span class="up-badge">{severity === "major" ? "Major" : severity === "minor" ? "Feature" : "Patch"} update</span>
       {#if releaseAge}
         <span class="up-age">{releaseAge}</span>
@@ -284,7 +277,7 @@
         aria-expanded={notesOpen}
         onclick={() => (notesOpen = !notesOpen)}
       >
-        {notesOpen ? "Hide full notes" : "Full release notes"}
+        {notesOpen ? "Hide notes" : "Show notes"}
       </button>
       {#if notesOpen}
         <pre class="up-notes">{info.release_notes}</pre>
@@ -326,7 +319,7 @@
       <p class="up-error" role="alert">
         {phase === "relaunch-failed"
           ? "Update installed, but Pulse could not restart. Retry the restart."
-          : "In-app install failed. You can open the release page instead."}
+          : "Update failed. Open the release page or try again."}
       </p>
     {/if}
 
@@ -343,24 +336,20 @@
       >
         Skip
       </button>
-      {#if (installError && phase !== "relaunch-failed") || updaterAvailability === "manual"}
+      {#if installError && phase !== "relaunch-failed"}
         <button type="button" class="up-btn up-ghost" onclick={openRelease} disabled={opening}>
           {opening ? "Opening…" : "Open release"}
         </button>
       {/if}
-      {#if updaterAvailability === "ready" || phase === "relaunch-failed" || installError}
-        <button
-          type="button"
-          class="up-btn up-primary"
-          onclick={phase === "relaunch-failed" ? retryRelaunch : installUpdate}
-          disabled={busy}
-          aria-label={phase === "relaunch-failed" ? "Restart Pulse after the installed update" : "Download, install, and restart with the update"}
-        >
-          {phase === "relaunch-failed" ? "Retry restart" : installError ? "Retry update" : busy ? "Updating…" : "Update"}
-        </button>
-      {:else if updaterAvailability === "checking"}
-        <button type="button" class="up-btn up-primary" disabled>Checking updater…</button>
-      {/if}
+      <button
+        type="button"
+        class="up-btn up-primary"
+        onclick={phase === "relaunch-failed" ? retryRelaunch : installUpdate}
+        disabled={busy}
+        aria-label={phase === "relaunch-failed" ? "Restart Pulse after the installed update" : "Download, install, and restart with the update"}
+      >
+        {phase === "relaunch-failed" ? "Retry restart" : installError ? "Retry update" : busy ? "Updating…" : "Update"}
+      </button>
     </div>
   </aside>
 {/if}

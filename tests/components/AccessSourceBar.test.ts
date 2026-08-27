@@ -1,5 +1,4 @@
 import { fireEvent, render, waitFor } from "@testing-library/svelte";
-import { tick } from "svelte";
 import { get } from "svelte/store";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -92,43 +91,16 @@ describe("AccessSourceBar", () => {
     expect(getByText("All sources live")).toBeTruthy();
   });
 
-  it("keeps the Discord provider when the only analytics source is auto-selected", async () => {
+  it("switches the active provider when the only source is auto-selected", async () => {
     provider.set("claude");
     accessSnapshot.set({ routes: [route("codex-sub", "codex_subscription")] });
 
     render(AccessSourceBar);
 
     await waitFor(() => {
-      expect(get(selectedAccessSourceId)).toBe("codex-sub");
-      expect(get(selectedAnalyticsProviderScope)).toBe("codex");
-      expect(get(provider)).toBe("claude");
-    });
-  });
-
-  it("changes the broadcaster only from the Discord provider selector", async () => {
-    provider.set("claude");
-    currentView.set("discord");
-    accessSnapshot.set({ routes: [route("codex-sub", "codex_subscription")] });
-
-    const { getByRole, queryByRole } = render(AccessSourceBar);
-    await tick();
-    await Promise.resolve();
-
-    expect(queryByRole("button", { name: /All providers/ })).toBeNull();
-    expect(get(provider)).toBe("claude");
-    expect(get(selectedAccessSourceId)).toBe("all");
-    expect(get(selectedAnalyticsProviderScope)).toBe("all");
-
-    const codex = getByRole("button", { name: /Codex Pro 20x Subscription/ });
-    expect(codex.getAttribute("aria-pressed")).toBe("false");
-    await fireEvent.click(codex);
-
-    await waitFor(() => {
       expect(get(provider)).toBe("codex");
-      expect(codex.getAttribute("aria-pressed")).toBe("true");
+      expect(get(selectedAccessSourceId)).toBe("codex-sub");
     });
-    expect(get(selectedAccessSourceId)).toBe("all");
-    expect(get(selectedAnalyticsProviderScope)).toBe("all");
   });
 
   it("shows an honest empty state when no route has provider proof", () => {
@@ -164,6 +136,21 @@ describe("AccessSourceBar", () => {
     expect(get(selectedAccessSourceId)).toBe("claude-sub");
     expect(get(selectedAnalyticsProviderScope)).toBe("claude");
     expect(get(provider)).toBe("codex");
+  });
+
+  it("gives Claude sign-in history one concise accessible name", () => {
+    const claude = route("claude-sub", "claude_subscription", "none");
+    claude.source.plan = null;
+    claude.availability = "unavailable";
+    claude.freshness = "unknown";
+    claude.local_history = { available: true, sessions: 12 };
+    accessSnapshot.set({ routes: [claude] });
+
+    const { getByRole } = render(AccessSourceBar);
+    const source = getByRole("button", { name: "Claude — sign in required" });
+    expect(source.textContent).toContain("Sign in required");
+    expect(source.querySelector(".source-dot")?.getAttribute("aria-label")).toBe("Sign in state");
+    expect(source.querySelector(".source-dot")?.hasAttribute("title")).toBe(false);
   });
 
   it("turns the empty source state into one compact diagnostics action", () => {
@@ -218,7 +205,7 @@ describe("AccessSourceBar", () => {
     backendConnection.set("live");
 
     const { getByText } = render(AccessSourceBar);
-    expect(getByText("Attention required")).toBeTruthy();
+    expect(getByText("Needs attention")).toBeTruthy();
   });
 
   it("never labels stale provider proof as live", () => {

@@ -23,19 +23,10 @@
 
   let routes = $derived(displayableAccessRoutes($accessSnapshot?.routes ?? []));
   let diagnosticRoutes = $derived($accessSnapshot?.routes ?? []);
-  let isDiscordProviderSelector = $derived($currentView === "discord");
-  let visibleRoutes = $derived(
-    isDiscordProviderSelector
-      ? routes.filter((route) => providerFor(route.source.kind) !== null)
-      : routes,
-  );
-  let selectorCount = $derived(
-    visibleRoutes.length + (!isDiscordProviderSelector && visibleRoutes.length > 1 ? 1 : 0),
-  );
   let switchingSourceId = $state<string | null>(null);
 
   $effect(() => {
-    if (!$accessSnapshot || isDiscordProviderSelector) return;
+    if (!$accessSnapshot) return;
     if ($selectedAccessSourceId === "all" && routes.length === 1) {
       void selectSource(routes[0]);
     }
@@ -84,27 +75,26 @@
 
   async function selectSource(route: AccessRouteSnapshot): Promise<void> {
     const routeId = route.source.id;
-    if (!isDiscordProviderSelector) {
+    if (route.source.proof === "none") {
       selectedAccessSourceId.set(routeId);
       return;
     }
     const nextProvider = providerFor(route.source.kind);
-    if (!nextProvider) return;
+    if (!nextProvider) {
+      selectedAccessSourceId.set(routeId);
+      return;
+    }
     switchingSourceId = routeId;
     try {
       if (nextProvider !== $provider) {
         await setProvider(nextProvider);
       }
+      selectedAccessSourceId.set(routeId);
     } catch {
       addToast("Provider switch failed. Pulse kept the previous source selected.", "danger");
     } finally {
       if (switchingSourceId === routeId) switchingSourceId = null;
     }
-  }
-
-  function isSelected(route: AccessRouteSnapshot): boolean {
-    if (!isDiscordProviderSelector) return $selectedAccessSourceId === route.source.id;
-    return providerFor(route.source.kind) === $provider;
   }
 
   function inspectSourceHealth(): void {
@@ -149,22 +139,14 @@
       : hasPreviewRoutes
         ? "Design preview"
         : hasSourceAttention
-          ? "Attention required"
+          ? "Needs attention"
           : "All sources live",
   );
 </script>
 
-<section
-  class="access-bar"
-  class:empty={visibleRoutes.length === 0}
-  data-source-count={selectorCount}
-  aria-label={isDiscordProviderSelector ? "Discord broadcast provider" : "Usage and analytics sources"}
->
-  <span class="source-rail-mark" aria-hidden="true">
-    <IconStack2 size={16} stroke={1.9} />
-  </span>
+<section class="access-bar" class:empty={routes.length === 0} aria-label="Usage and analytics sources">
   <div class="source-list">
-    {#if visibleRoutes.length === 0}
+    {#if routes.length === 0}
       <button
         class="source-empty"
         type="button"
@@ -177,15 +159,18 @@
         </div>
       </button>
     {:else}
-      {#each visibleRoutes as route (route.source.id)}
+      {#each routes as route (route.source.id)}
         {@const label = accessKindLabel(route.source.kind)}
         {@const status = sourceState(route)}
         <button
           class="source-card"
-          class:selected={isSelected(route)}
+          class:selected={$selectedAccessSourceId === route.source.id}
           data-access-source={route.source.id}
           data-kind={route.source.kind}
-          aria-pressed={isSelected(route)}
+          aria-label={route.source.kind === "claude_subscription" && status.state === "waiting"
+            ? `${accessSourceName(route.source)} — sign in required`
+            : undefined}
+          aria-pressed={$selectedAccessSourceId === route.source.id}
           disabled={switchingSourceId !== null}
           onclick={() => selectSource(route)}
         >
@@ -202,11 +187,11 @@
               <small>{label.access}</small>
             {/if}
           </span>
-          <span class="source-dot" data-state={status.state} title={status.label} aria-label={status.label}></span>
+          <span class="source-dot" data-state={status.state} aria-label={route.source.kind === "claude_subscription" && status.state === "waiting" ? "Sign in state" : status.label}></span>
         </button>
       {/each}
 
-      {#if !isDiscordProviderSelector && visibleRoutes.length > 1}
+      {#if routes.length > 1}
         <button
           class="source-card aggregate"
           class:selected={$selectedAccessSourceId === "all"}
@@ -227,19 +212,12 @@
     {/if}
   </div>
 
-  {#if visibleRoutes.length > 0}
-    <button
-      class="health-summary"
-      onclick={inspectSourceHealth}
-      aria-label="Inspect source health"
-      aria-describedby="source-health-status"
-      title={healthLabel}
-    >
-      <span class="health-icon" data-state={healthState} aria-hidden="true">
+  {#if routes.length > 0}
+    <button class="health-summary" onclick={inspectSourceHealth} aria-label="Inspect source health">
+      <span class="hs-chip" data-state={healthState}>
         <IconActivityHeartbeat size={15} stroke={1.9} aria-hidden="true" />
-        <span class="health-dot"></span>
+        <span class="hs-label">{healthLabel}</span>
       </span>
-      <span id="source-health-status" class="sr-only">{healthLabel}</span>
     </button>
   {/if}
 </section>
@@ -247,48 +225,41 @@
 <style>
   .access-bar {
     flex: 0 0 auto;
-    min-height: 52px;
-    display: grid;
-    grid-template-columns: 42px minmax(0, 1fr) 42px;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 8px;
-    background: var(--bg-primary);
+    min-height: 76px;
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 10px 22px;
+    background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
   }
   .access-bar.empty {
     min-height: 46px;
-    grid-template-columns: 1fr;
     align-items: center;
     padding-block: 6px;
   }
-  .access-bar.empty .source-rail-mark { display: none; }
-  .access-bar.empty .source-list { width: 100%; max-width: none; }
+  .access-bar.empty .source-list { width: 100%; }
 
   .source-list {
-    width: 100%;
     min-width: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+    display: flex;
     align-items: stretch;
-    gap: 6px;
+    gap: 9px;
     overflow-x: auto;
   }
-  .access-bar[data-source-count="1"] .source-list { grid-template-columns: 1fr; }
-  .access-bar[data-source-count="2"] .source-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .access-bar[data-source-count="3"] .source-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
   .source-card {
-    width: auto;
-    min-width: 0;
-    min-height: 42px;
+    width: 244px;
+    min-width: 214px;
+    min-height: 54px;
     display: grid;
-    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-columns: 30px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
-    padding: 6px 9px;
+    gap: 10px;
+    padding: 9px 12px;
     color: var(--text-secondary);
-    background: var(--bg-card);
+    background: color-mix(in srgb, var(--bg-card) 70%, transparent);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     text-align: left;
@@ -298,22 +269,14 @@
   .source-card:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
   .source-card.selected {
     color: var(--text-primary);
-    background: color-mix(in srgb, var(--provider-accent) 13%, var(--bg-card));
     border-color: var(--provider-accent);
-  }
-
-  .source-rail-mark {
-    display: grid;
-    place-items: center;
-    width: 42px;
-    height: 42px;
-    color: var(--provider-accent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--provider-accent) 42%, transparent);
   }
 
   .source-card img,
   .aggregate-mark {
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     border-radius: 6px;
     object-fit: contain;
   }
@@ -343,7 +306,7 @@
   .source-copy small,
   .source-empty span {
     color: var(--text-muted);
-    font-size: 11px;
+    font-size: 10px;
     line-height: 1.25;
   }
   .source-copy small.st-danger { color: var(--danger); font-weight: 600; }
@@ -352,8 +315,8 @@
   /* One small state dot instead of a loud pill on every card. */
   .source-dot {
     justify-self: end;
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: var(--text-placeholder);
     flex-shrink: 0;
@@ -364,6 +327,7 @@
   .source-dot[data-state="expired"] { background: var(--danger); }
   .source-dot[data-state="neutral"] { background: var(--provider-accent); }
 
+  .health-summary,
   .source-empty {
     display: flex;
     align-items: center;
@@ -372,50 +336,28 @@
   }
 
   .health-summary {
-    display: grid;
-    place-items: center;
-    width: 42px;
-    height: 42px;
-    padding: 0;
-    border-radius: var(--radius-md);
-    color: var(--text-muted);
-    background: var(--bg-card);
+    justify-content: flex-end;
+    padding-right: 4px;
+  }
+
+  /* One compact chip: icon + status, tinted by state. No stacked label. */
+  .hs-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    padding: 0 12px 0 10px;
+    border-radius: var(--radius-full);
+    color: var(--text-secondary);
+    background: var(--surface-panel-soft);
     border: 1px solid var(--border);
+    transition: border-color 140ms var(--ease), background 140ms var(--ease), color 140ms var(--ease);
   }
-
-  .health-summary:hover {
-    color: var(--text-primary);
-    background: var(--bg-elevated);
-    border-color: var(--border);
-  }
-
-  .health-icon { position: relative; display: grid; place-items: center; }
-  .health-icon[data-state="live"] { color: var(--success); }
-  .health-icon[data-state="waiting"] { color: var(--warning); }
-  .health-icon[data-state="expired"] { color: var(--danger); }
-  .health-icon[data-state="neutral"] { color: var(--provider-accent); }
-  .health-dot {
-    position: absolute;
-    right: -3px;
-    bottom: -2px;
-    width: 5px;
-    height: 5px;
-    border: 1px solid var(--bg-secondary);
-    border-radius: 50%;
-    background: currentColor;
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
+  .hs-label { font-size: 11px; font-weight: 650; letter-spacing: var(--letter-tight); }
+  .health-summary:hover .hs-chip { border-color: var(--border-hover); background: var(--bg-elevated); }
+  .hs-chip[data-state="live"] { color: var(--success); background: var(--success-dim); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
+  .hs-chip[data-state="waiting"] { color: var(--warning); background: var(--warning-dim); border-color: color-mix(in srgb, var(--warning) 30%, transparent); }
+  .hs-chip[data-state="expired"] { color: var(--danger); background: var(--danger-dim); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
 
   .source-empty div {
     display: grid;
@@ -444,25 +386,16 @@
   }
 
   @media (max-width: 900px) {
-    .access-bar { grid-template-columns: minmax(0, 1fr); padding: 5px 10px; }
-    .source-rail-mark,
+    .access-bar { min-height: 68px; padding: 8px 12px; }
     .health-summary { display: none; }
-    .source-list {
-      display: flex;
-      justify-content: flex-start;
-      overflow-x: auto;
-      scrollbar-width: thin;
-    }
-    .source-card { flex: 0 0 190px; width: 190px; }
+    .source-card { width: 176px; }
   }
 
   @media (max-width: 520px) {
-    .access-bar { min-height: 50px; gap: 6px; padding-inline: 8px; }
-    .source-list { width: 100%; justify-content: flex-start; }
+    .access-bar { min-height: 62px; padding-inline: 8px; }
     .source-list { gap: 7px; }
-    .source-card { width: 160px; min-width: 154px; min-height: 40px; padding: 5px 8px; }
-    .source-card img, .aggregate-mark { width: 22px; height: 22px; }
-    .health-summary { width: 40px; height: 40px; }
+    .source-card { width: 160px; min-width: 154px; min-height: 46px; padding: 7px 9px; }
+    .source-card img, .aggregate-mark { width: 26px; height: 26px; }
     .source-empty { min-width: 0; }
   }
 </style>

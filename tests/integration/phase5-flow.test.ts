@@ -1,45 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor, fireEvent } from "@testing-library/svelte";
-import { tick } from "svelte";
-import type {
-  SessionInfo,
-  ContextBreakdown,
-  SessionContextBreakdown,
-  SessionContextUsage,
-  ReportsBundle,
-} from "@/lib/api";
-
-function breakdownFor(model: string): ContextBreakdown {
-  return {
-    model,
-    context_window: 200_000,
-    used_tokens: 40_000,
-    free_space: 153_400,
-    autocompact_buffer: 6_600,
-    system_prompt: 10_000,
-    system_tools: 6_000,
-    memory_files: [],
-    memory_total: 0,
-    skills: [],
-    skills_total: 0,
-    messages: 24_000,
-    mcp_tools: [],
-    mcp_total: 0,
-  };
-}
-
-const usage: SessionContextUsage[] = [
-  {
-    session_id: "s1",
-    project: "pulse",
-    model: "claude-opus-4-8",
-    model_display: "Claude Opus 4.8",
-    used_tokens: 40_000,
-    window_tokens: 200_000,
-    utilization_pct: 20,
-    recommendation: "Context is healthy — plenty of headroom for this session.",
-  },
-];
+import { render } from "@testing-library/svelte";
+import type { ReportsBundle } from "@/lib/api";
 
 const minimalBundle: ReportsBundle = {
   provider: "claude",
@@ -143,101 +104,20 @@ const minimalBundle: ReportsBundle = {
   inflection_points: [],
 };
 
-const breakdownsFixture: SessionContextBreakdown[] = [
-  { session_id: "s1", project: "pulse", model_id: "claude-opus-4-8", is_idle: false, activity: "Idle", breakdown: breakdownFor("s1") },
-  { session_id: "s2", project: "other", model_id: "claude-opus-4-8", is_idle: false, activity: "Idle", breakdown: breakdownFor("s2") },
-];
-
-const getContextBreakdown = vi.fn(async (sessionId?: string) =>
-  breakdownFor(sessionId ?? "default"),
-);
-const getContextBreakdowns = vi.fn(async () => breakdownsFixture);
-const getSessionsContextUsage = vi.fn(async () => usage);
 const getReportsBundle = vi.fn(async () => minimalBundle);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
     ...actual,
-    getContextBreakdown: (sessionId?: string) => getContextBreakdown(sessionId),
-    getContextBreakdowns: () => getContextBreakdowns(),
-    getSessionsContextUsage: () => getSessionsContextUsage(),
     getReportsBundle: () => getReportsBundle(),
   };
 });
 
-function makeSession(id: string, project: string): SessionInfo {
-  return {
-    session_id: id,
-    session_name: null,
-    project,
-    model: "Claude Opus 4.8",
-    model_id: "claude-opus-4-8",
-    provider: "claude",
-    context_window: "200K",
-    cost: 0,
-    tokens: 0,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_write_tokens: 0,
-    cache_read_tokens: 0,
-    branch: null,
-    activity: "Idle",
-    activity_target: null,
-    effort: "High",
-    effort_explicit: true,
-    is_idle: false,
-    started_at: null,
-    duration_secs: 0,
-    has_thinking: false,
-    workflow_label: null,
-    subagent_count: 0,
-    subagents: [],
-    tokens_per_sec: 0,
-    input_cost: 0,
-    output_cost: 0,
-    cache_write_cost: 0,
-    cache_read_cost: 0,
-    speed: "standard",
-    fast: false,
-    service_tier: null,
-    app_name: null,
-  };
-}
 
 describe("Phase 5 flow", () => {
   beforeEach(() => {
-    getContextBreakdown.mockClear();
-    getContextBreakdowns.mockClear();
-    getSessionsContextUsage.mockClear();
     getReportsBundle.mockClear();
-  });
-
-  it("switches context from the same list observation without a second backend query", async () => {
-    const { sessions } = await import("@/lib/stores");
-    sessions.set([makeSession("s1", "pulse"), makeSession("s2", "other")]);
-
-    const Context = (await import("@/views/Context.svelte")).default;
-    const { container } = render(Context);
-    await tick();
-
-    await waitFor(() => expect(getContextBreakdowns).toHaveBeenCalledTimes(1));
-
-    let otherContext: HTMLElement | undefined;
-    await waitFor(() => {
-      otherContext = [...container.querySelectorAll<HTMLElement>(".active-ctx-card")].find((card) =>
-        card.textContent?.includes("other"),
-      );
-      expect(otherContext).toBeTruthy();
-    });
-    await fireEvent.click(otherContext!);
-
-    await waitFor(() => {
-      expect(container.querySelector(".hero-owner")?.textContent).toContain("other");
-      expect(container.querySelector(".model-chip")?.textContent).toContain("s2");
-    });
-    expect(getContextBreakdown).not.toHaveBeenCalled();
-    expect(getContextBreakdowns).toHaveBeenCalledTimes(1);
   });
 
   it("renders the reports bundle through a single bundle call", async () => {

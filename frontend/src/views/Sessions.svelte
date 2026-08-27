@@ -9,6 +9,8 @@
   import type { HistoricalSession, AnalyticsSummary } from "../lib/api";
   import { fly } from "svelte/transition";
   import ExportModal from "../components/ExportModal.svelte";
+  import Select from "../components/Select.svelte";
+  import SegmentedControl from "../components/SegmentedControl.svelte";
   import type { ExportColumn } from "../lib/export";
 
   let showExport = $state(false);
@@ -38,6 +40,20 @@
 
   let sortBy = $state("cost");
   let projectFilter = $state("");
+  const sortOptions = [
+    { value: "cost", label: "Monetary value" },
+    { value: "tokens", label: "Tokens" },
+    { value: "duration", label: "Duration" },
+    { value: "tps", label: "Throughput" },
+    { value: "project", label: "Project" },
+  ];
+  const historyRangeOptions = [
+    { value: "1", label: "Today" },
+    { value: "7", label: "Last 7 days" },
+    { value: "30", label: "Last 30 days" },
+    { value: "90", label: "Last 90 days" },
+    { value: "365", label: "Last year" },
+  ];
 
   let liveSessions = $derived(
     $sessions.filter(
@@ -114,6 +130,10 @@
   let projects = $derived(
     [...new Set([...liveSessions.map((s) => s.project), ...knownProjects])].sort(),
   );
+  let projectOptions = $derived([
+    { value: "", label: "All projects" },
+    ...projects.map((project) => ({ value: project, label: project })),
+  ]);
 
   let compareList = $derived(history.filter((h) => compareIds.has(h.id)));
   let visibleHistory = $derived(history.slice(0, visibleHistoryLimit));
@@ -225,28 +245,24 @@
 <div class="sessions-view app-view">
   <div class="view-header">
     <div class="title-line">
-      <h1 class="view-title">Sessions</h1>
+      <h2 class="view-title">Sessions</h2>
       <span class="view-sub">{filtered.length} active</span>
     </div>
     <div class="filters">
-      <select
-        aria-label="Filter active sessions by project"
-        value={projectFilter}
-        onchange={(event) => {
-          projectFilter = event.currentTarget.value;
-          void (searchQuery.trim() ? doSearch() : loadHistory());
-        }}
-      >
-        <option value="">All Projects</option>
-        {#each projects as p}<option value={p}>{p}</option>{/each}
-      </select>
-      <select aria-label="Sort active sessions" bind:value={sortBy}>
-        <option value="cost">Sort: Monetary value</option>
-        <option value="tokens">Sort: Tokens</option>
-        <option value="duration">Sort: Duration</option>
-        <option value="tps">Sort: Throughput</option>
-        <option value="project">Sort: Project</option>
-      </select>
+      <div class="filter-control project-control">
+        <span class="control-label">Project</span>
+        <Select
+          bind:value={projectFilter}
+          options={projectOptions}
+          variant="inline"
+          ariaLabel="Filter by project"
+          onchange={() => void (searchQuery.trim() ? doSearch() : loadHistory())}
+        />
+      </div>
+      <div class="filter-control sort-control">
+        <span class="control-label">Sort</span>
+        <SegmentedControl options={sortOptions} value={sortBy} ariaLabel="Sort sessions" size="sm" onchange={(value) => (sortBy = value)} />
+      </div>
     </div>
   </div>
 
@@ -260,8 +276,8 @@
   <div class="session-list">
     {#if filtered.length === 0}
       <div class="empty-state state-panel">
-        <div class="empty-text">No live sessions match these filters</div>
-        <div class="empty-sub">Change the project or sort controls, or use the history ledger below.</div>
+        <div class="empty-text">No sessions live right now</div>
+        <span class="empty-sub">Telemetry fills in while you work. Full history stays below.</span>
       </div>
     {:else}
       {#each filtered as session (session.session_id)}
@@ -274,7 +290,7 @@
 
   <div class="card surface-matte">
     <div class="card-title-row">
-      <h2 class="card-title">Session history</h2>
+      <h3 class="card-title">Session history</h3>
       <div class="title-actions">
         <button class="action-btn" class:active={compareMode} onclick={() => { compareMode = !compareMode; compareIds = new Set(); }}>
           {compareMode ? "Exit Compare" : "Compare"}
@@ -285,19 +301,14 @@
       </div>
     </div>
     <div class="history-controls">
-      <div class="history-filters">
-        <select aria-label="History window" bind:value={historyDays} onchange={() => loadHistory()}>
-          <option value={1}>Today</option>
-          <option value={7}>Last 7 days</option>
-          <option value={30}>Last 30 days</option>
-          <option value={90}>Last 90 days</option>
-          <option value={365}>Last year</option>
-        </select>
-        <div class="search-box">
-          <input type="text" placeholder="Search sessions (BM25)..." bind:value={searchQuery} onkeydown={(e) => e.key === "Enter" && doSearch()} />
-        </div>
-      </div>
-      <div class="history-filters advanced">
+      <div class="history-toolbar">
+        <SegmentedControl
+          options={historyRangeOptions}
+          value={String(historyDays)}
+          ariaLabel="History range"
+          size="sm"
+          onchange={(value) => { historyDays = Number(value); void loadHistory(); }}
+        />
         <label class="flt">
           <span class="flt-lbl">From</span>
           <input type="date" bind:value={fromDate} onchange={() => loadHistory()} />
@@ -306,36 +317,33 @@
           <span class="flt-lbl">To</span>
           <input type="date" bind:value={toDate} onchange={() => loadHistory()} />
         </label>
-        <label class="flt">
-          <span class="flt-lbl">Min $</span>
+        <label class="flt compact">
+          <span class="flt-lbl">Min cost</span>
           <input type="number" min="0" step="0.01" placeholder="0.00" bind:value={minCost} onchange={() => loadHistory()} />
         </label>
-        <label class="flt">
+        <label class="flt model-filter">
           <span class="flt-lbl">Model</span>
           <input type="text" placeholder="opus / sonnet" bind:value={modelFilter} onchange={() => loadHistory()} />
         </label>
         {#if fromDate || toDate || minCost !== null || modelFilter}
-          <button class="btn btn-ghost" onclick={resetFilters}>Reset</button>
+          <button class="btn btn-ghost reset-btn" onclick={resetFilters}>Reset</button>
         {/if}
       </div>
-      {#if summary}
-        <div class="history-summary">
-          <span>All time: <strong>{summary.total_sessions}</strong> sessions</span>
-          <span>
-            {monetaryValueLabel(summary.cost_sources)}:
-            <strong>
-              {summary.cost_basis === "unavailable"
-                ? "Unavailable"
-                : summary.cost_basis === "partial"
-                  ? `${fmtCost(summary.total_cost)} lower bound`
-                  : fmtCost(summary.total_cost)}
-            </strong>
-          </span>
-          <span>Tokens: <strong>{fmtTokens(summary.total_tokens)}</strong></span>
-          <span>Top: <strong>{summary.top_project}</strong></span>
-          <span><strong>{summary.days_tracked}</strong> days tracked</span>
-        </div>
-      {/if}
+      <div class="history-search-toolbar">
+        <label class="search-box">
+          <span class="sr-only">Search session history</span>
+          <input type="text" placeholder="Search sessions" bind:value={searchQuery} onkeydown={(e) => e.key === "Enter" && doSearch()} />
+        </label>
+        {#if summary}
+          <div class="history-summary">
+            <strong>{summary.total_sessions}</strong> sessions ·
+            <strong>{summary.cost_basis === "unavailable" ? "—" : fmtCost(summary.total_cost)}</strong>
+            API-equivalent{summary.cost_basis === "partial" ? " · lower bound" : ""} ·
+            <strong>{fmtTokens(summary.total_tokens)}</strong> tokens · top contributor
+            <strong>{summary.top_project}</strong> · <strong>{summary.days_tracked}</strong> days
+          </div>
+        {/if}
+      </div>
     </div>
 
     {#if historyError}
@@ -353,7 +361,7 @@
 
     {#if compareMode && compareList.length >= 2}
       <div class="compare-panel">
-        <h3 class="compare-title">Comparison · {compareList.length} sessions</h3>
+        <h4 class="compare-title">Comparison · {compareList.length} sessions</h4>
         <div class="compare-grid" style="--compare-cols:{compareList.length}">
           <div class="compare-label"></div>
           {#each compareList as c}<div class="compare-head">{c.project}</div>{/each}
@@ -388,51 +396,59 @@
 
     {#if history.length > 0 || (!historyLoading && !historyError)}
     <div class="history-table" class:refreshing={historyLoading && history.length > 0}>
-      <div class="ht-header">
-        {#if compareMode}<span class="ht-col check"></span>{/if}
-        <span class="ht-col status"></span>
-        <span class="ht-col project">Project</span>
-        <span class="ht-col model">Model</span>
-        <span class="ht-col">Tokens</span>
-        <span class="ht-col">Duration</span>
-        <span class="ht-col cost">Monetary value</span>
-        <span class="ht-col date">Date</span>
-      </div>
+      <table>
+        <caption class="sr-only">Session history ledger</caption>
+        <thead>
+          <tr class="ht-header">
+            {#if compareMode}<th scope="col" class="ht-col check"><span class="sr-only">Compare</span></th>{/if}
+            <th scope="col" class="ht-col status"><span class="sr-only">Status</span></th>
+            <th scope="col" class="ht-col project">Project</th>
+            <th scope="col" class="ht-col model">Model</th>
+            <th scope="col" class="ht-col numeric">Tokens</th>
+            <th scope="col" class="ht-col numeric">Duration</th>
+            <th scope="col" class="ht-col cost numeric">Monetary value</th>
+            <th scope="col" class="ht-col date">Date</th>
+          </tr>
+        </thead>
+        <tbody>
       {#each visibleHistory as h (h.id)}
-        <div class="ht-row-wrap">
-          <div
-            class="ht-row"
-            class:active={h.is_active}
-            class:expanded={expandedId === h.id}
-            role="button"
-            tabindex="0"
-            aria-expanded={expandedId === h.id}
-            onclick={() => toggleExpand(h.id)}
-            onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleExpand(h.id); } }}
-          >
+        <tr
+          class="ht-row"
+          class:active={h.is_active}
+          class:expanded={expandedId === h.id}
+          onclick={() => toggleExpand(h.id)}
+        >
             {#if compareMode}
-              <span class="ht-col check">
-                <input type="checkbox" checked={compareIds.has(h.id)} onclick={(e) => { e.stopPropagation(); toggleCompare(h.id); }} disabled={!compareIds.has(h.id) && compareIds.size >= 3} />
-              </span>
+              <td class="ht-col check">
+                <input aria-label={`Compare ${h.project} session`} type="checkbox" checked={compareIds.has(h.id)} onclick={(e) => { e.stopPropagation(); toggleCompare(h.id); }} disabled={!compareIds.has(h.id) && compareIds.size >= 3} />
+              </td>
             {/if}
-            <span class="ht-col status"><span class="status-dot" class:active={h.is_active}></span></span>
-            <span class="ht-col project">{h.project}{h.branch ? " · " + h.branch : ""}{#if h.session_name}<span class="session-name">{h.session_name}</span>{/if}</span>
-            <span class="ht-col model">{h.model} <small class="ctx-badge">{h.context_window}</small></span>
-            <span class="ht-col">{fmtTokens(h.total_tokens)}</span>
-            <span class="ht-col">{h.duration_secs > 0 ? fmtDuration(h.duration_secs) : "—"}</span>
-            <span class="ht-col cost" class:unavailable={h.known_cost === null}>
-              {h.known_cost === null
-                ? "Unavailable"
-                : h.cost_basis === "partial"
-                  ? `${fmtCost(h.known_cost)} known`
-                  : h.cost_basis === "estimated"
-                    ? `${fmtCost(h.known_cost)} estimated`
-                  : fmtCost(h.known_cost)}
-            </span>
-            <span class="ht-col date">{h.started_at?.slice(0, 10) ?? "—"}</span>
-          </div>
+            <td class="ht-col status"><span class="status-dot" class:active={h.is_active}></span><span class="sr-only">{h.is_active ? "Active" : "Ended"}</span></td>
+            <th scope="row" class="ht-col project">
+              <button type="button" aria-expanded={expandedId === h.id} onclick={(e) => { e.stopPropagation(); toggleExpand(h.id); }}>
+                <span>{h.project}</span>
+                <small>{h.branch || h.session_name || "No branch"}</small>
+              </button>
+            </th>
+            <td class="ht-col model" title={h.model}>{h.model}</td>
+            <td class="ht-col numeric">{fmtTokens(h.total_tokens)}</td>
+            <td class="ht-col numeric">{h.duration_secs > 0 ? fmtDuration(h.duration_secs) : "—"}</td>
+            <td class="ht-col cost numeric" class:unavailable={h.known_cost === null}>
+              {#if h.known_cost === null}
+                —
+              {:else}
+                <span class="cost-value">{fmtCost(h.known_cost)}</span>
+                <span class="cost-tag" class:exact={h.cost_basis === "exact"} class:estimate={h.cost_basis !== "exact"}>
+                  {h.cost_basis === "exact" ? "exact" : h.cost_basis === "partial" ? "lower bound" : "estimate"}
+                </span>
+              {/if}
+            </td>
+            <td class="ht-col date">{h.started_at?.slice(0, 10) ?? "—"}</td>
+          </tr>
           {#if expandedId === h.id}
-            <div class="ht-detail" transition:fly={{ y: -8, duration: 150 }}>
+            <tr class="ht-detail-row">
+              <td colspan={compareMode ? 8 : 7}>
+                <div class="ht-detail" transition:fly={{ y: -8, duration: 150 }}>
               <div class="detail-grid">
                 <div class="detail-section">
                   <span class="detail-label">Token Breakdown</span>
@@ -467,12 +483,15 @@
                   <div class="detail-row"><span>Context</span><span>{h.context_window}</span></div>
                 </div>
               </div>
-            </div>
+                </div>
+              </td>
+            </tr>
           {/if}
-        </div>
       {:else}
-        <div class="ht-empty">No sessions match the selected history filters. All-time totals above remain unchanged.</div>
+        <tr><td class="ht-empty" colspan={compareMode ? 8 : 7}>No sessions match the selected history filters. All-time totals above remain unchanged.</td></tr>
       {/each}
+        </tbody>
+      </table>
     </div>
     {#if history.length > visibleHistory.length}
       <button
@@ -502,7 +521,10 @@
   .title-line { display: flex; align-items: center; gap: 10px; }
   .view-title { font-size: 20px; font-weight: 700; }
   .view-sub { font-size: 11px; color: var(--text-muted); border: 1px solid var(--border); padding: 3px 9px; border-radius: 99px; font-family: var(--font-mono); }
-  .filters { margin-left: auto; display: flex; gap: 8px; }
+  .filters { margin-left: auto; display: flex; align-items: end; gap: 10px; }
+  .filter-control { display: grid; gap: 4px; min-width: 170px; }
+  .project-control { min-width: 210px; }
+  .control-label, .flt-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
   .stats-row { grid-template-columns: repeat(4, 1fr); }
 
   .card { position: relative; background: var(--surface-panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; overflow: hidden; }
@@ -551,43 +573,62 @@
     border-radius: var(--radius-sm);
     cursor: pointer;
   }
-  .history-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .history-filters.advanced { gap: 10px; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); }
-  .flt { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
-  .flt-lbl { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
-  .flt input { padding: 5px 8px; font-size: 11px; width: 110px; }
-  .flt input[type="number"] { width: 80px; }
-  .search-box { flex: 1; position: relative; }
-  .search-box input { width: 100%; padding: 8px 14px 8px 32px; font: inherit; font-size: 12px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-primary); outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
-  .search-box input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .history-toolbar { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); }
+  .flt { display: flex; flex-direction: column; gap: 4px; min-width: 112px; font-size: 11px; }
+  .flt input { width: 100%; min-height: var(--control-height); padding: 6px 9px; font-size: 11px; color: var(--text-primary); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .flt.compact { width: 90px; min-width: 90px; }
+  .flt.model-filter { flex: 1 1 150px; }
+  .reset-btn { min-height: var(--control-height); }
+  .history-search-toolbar {
+    overflow: hidden;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .search-box { position: relative; display: block; min-width: 0; }
+  .search-box input { width: 100%; padding: 9px 14px 9px 32px; font: inherit; font-size: 12px; background: transparent; border: 0; border-radius: 0; color: var(--text-primary); outline: none; transition: box-shadow 0.15s ease; }
+  .search-box input:focus { box-shadow: inset 0 0 0 2px var(--accent); }
   .search-box::before { content: ""; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; border: 1.5px solid var(--text-muted); border-radius: 50%; pointer-events: none; }
   .search-box::after { content: ""; position: absolute; left: 22px; top: 60%; width: 4px; height: 1.5px; background: var(--text-muted); transform: rotate(45deg); pointer-events: none; }
-  .history-summary { display: flex; gap: 16px; font-size: 11px; color: var(--text-muted); padding: 10px 14px; background: var(--bg-primary); border-radius: var(--radius-md); border: 1px solid var(--border); }
-  .history-summary strong { color: var(--text-primary); }
-  .history-summary span { display: flex; align-items: center; gap: 4px; }
+  .history-summary { padding: 8px 14px; overflow: hidden; color: var(--text-muted); border-top: 1px solid var(--divider); font-size: 11px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+  .history-summary strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
-  .history-table { font-size: 12px; max-height: 500px; overflow-y: auto; --ht-cols: 24px 2fr 1.5fr 90px 80px 80px 80px; }
+  .history-table { font-size: 12px; max-height: 500px; overflow: auto; }
+  .history-table table { width: 100%; min-width: 760px; border-collapse: collapse; table-layout: fixed; }
   .history-table.refreshing { opacity: 0.72; pointer-events: none; }
-  .ht-header { display: grid; grid-template-columns: var(--ht-cols); gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 9px; letter-spacing: 0.08em; position: sticky; top: 0; background: var(--bg-card); z-index: 1; }
-  .ht-row-wrap { border-bottom: 1px solid var(--border); }
-  .ht-row { display: grid; grid-template-columns: var(--ht-cols); gap: 8px; padding: 10px 14px; transition: background 0.15s var(--ease); cursor: pointer; }
+  .ht-header { position: sticky; top: 0; z-index: 1; background: var(--bg-card); }
+  .ht-header th { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: 0.08em; }
+  .ht-header .status { width: 30px; }
+  .ht-header .project { width: 25%; }
+  .ht-header .model { width: 22%; }
+  .ht-header .numeric { width: 12%; }
+  .ht-header .date { width: 12%; }
+  .ht-row { transition: background 0.15s var(--ease); cursor: pointer; }
+  .ht-row > * { padding: 11px 12px; border-bottom: 1px solid var(--border); }
   .ht-row:hover { background: var(--bg-card-hover); }
-  .ht-row.active { background: var(--success-dim); border-left: 2px solid var(--success); padding-left: 12px; }
+  .ht-row.active { background: var(--success-dim); }
+  .ht-row.active > :first-child { box-shadow: inset 2px 0 var(--success); }
   .ht-row.expanded { background: var(--bg-elevated); }
-  .ht-col { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ht-col.project { text-align: left; font-weight: 600; color: var(--text-primary); }
-  .ht-col.model { text-align: left; }
-  .ht-col.cost { font-weight: 700; color: var(--accent); }
+  .ht-col { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ht-col.numeric { text-align: right; font-variant-numeric: tabular-nums; }
+  .ht-col.project { text-align: left; color: var(--text-primary); }
+  .ht-col.project button { width: 100%; display: grid; gap: 2px; text-align: left; }
+  .ht-col.project button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+  .ht-col.project small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 10px; font-weight: 500; }
+  .ht-col.model { text-align: left; font-family: var(--font-mono); }
+  .ht-col.cost { color: var(--text-primary); }
   .ht-col.cost.unavailable { color: var(--text-muted); font-weight: 500; }
-  .ht-col.date { color: var(--text-muted); font-size: 11px; }
-  .ht-col.status { text-align: center; }
-  .ht-col.check { text-align: center; display: flex; align-items: center; justify-content: center; }
-  .session-name { display: block; font-size: 10px; font-weight: 400; color: var(--text-muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+  .cost-value { font-weight: 750; }
+  .cost-tag { display: inline-flex; margin-left: 6px; padding: 2px 6px; border: 1px solid; border-radius: var(--radius-full); font-size: 9px; font-weight: 700; line-height: 1.2; text-transform: uppercase; letter-spacing: 0.04em; }
+  .cost-tag.exact { color: var(--success); background: var(--success-dim); border-color: color-mix(in srgb, var(--success) 34%, transparent); }
+  .cost-tag.estimate { color: var(--warning); background: var(--warning-dim); border-color: color-mix(in srgb, var(--warning) 34%, transparent); }
+  .ht-col.date { color: var(--text-muted); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+  .ht-col.status, .ht-col.check { width: 30px; text-align: center; }
   .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
   .status-dot.active { background: var(--success); box-shadow: 0 0 6px var(--success-glow); }
-  .ctx-badge { font-size: 8px; font-weight: 700; color: var(--accent); background: var(--accent-dim); padding: 2px 5px; border-radius: 3px; margin-left: 4px; letter-spacing: 0.02em; }
   .ht-empty { text-align: center; padding: 40px; color: var(--text-muted); font-size: 12px; }
 
+  .ht-detail-row > td { padding: 0; border-bottom: 1px solid var(--border); }
   .ht-detail { padding: 12px 14px 16px; background: var(--bg-elevated); border-top: 1px solid var(--border); }
   .detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   .detail-section { display: flex; flex-direction: column; gap: 4px; }
@@ -599,8 +640,8 @@
   .show-more:hover { color: var(--accent); border-color: var(--accent); }
 
   .card { min-width: 0; }
-  .history-table, .compare-panel { overflow-x: auto; overscroll-behavior-inline: contain; }
-  .ht-header, .ht-row, .ht-detail { min-width: 720px; }
+  .history-table, .compare-panel { overscroll-behavior-inline: contain; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
   @media (max-width: 1050px) {
     .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -610,14 +651,13 @@
   @media (max-width: 800px) {
     .view-header { align-items: stretch; flex-direction: column; gap: 10px; }
     .filters { width: 100%; margin-left: 0; }
-    .filters select { min-width: 0; flex: 1; }
+    .filter-control { flex: 1; min-width: 0; }
   }
 
   @media (max-width: 620px) {
     .stats-row, .detail-grid { grid-template-columns: 1fr; }
-    .history-summary { flex-wrap: wrap; gap: 8px 12px; }
-    .history-filters.advanced { align-items: stretch; }
-    .flt input, .flt input[type="number"] { width: 100%; }
-    .filters { flex-direction: column; }
+    .history-toolbar { align-items: stretch; }
+    .flt, .flt.compact, .flt.model-filter { flex: 1 1 calc(50% - 8px); width: auto; min-width: 120px; }
+    .filters { flex-direction: column; align-items: stretch; }
   }
 </style>

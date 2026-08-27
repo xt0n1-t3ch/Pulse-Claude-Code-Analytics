@@ -49,11 +49,16 @@
   let totalSessions = $state(0);
   let loading = $state(true);
   let hasLoaded = $state(false);
+  const loadedWindowKeys = new Set<string>();
   let loadError = $state<string | null>(null);
   let days = $state(30);
   let severityFilter = $state<"all" | Severity>("all");
-  let revealedPromptIds = $state<Set<string>>(new Set());
+  let copyingReport = $state(false);
+  let downloadingHtml = $state(false);
   let reportRequest = 0;
+  let windowLabel = $derived(
+    days === 7 ? "7-day" : days === 30 ? "30-day" : days === 90 ? "90-day" : "Year",
+  );
 
   function clearReportData(): void {
     cache = null;
@@ -66,26 +71,16 @@
     trace = null;
     dailyCosts = [];
     totalSessions = 0;
-    revealedPromptIds = new Set();
-  }
-
-  function togglePromptPreview(sessionId: string): void {
-    const next = new Set(revealedPromptIds);
-    if (next.has(sessionId)) {
-      next.delete(sessionId);
-    } else {
-      next.add(sessionId);
-    }
-    revealedPromptIds = next;
   }
 
   async function loadReports(): Promise<void> {
     const request = ++reportRequest;
     loading = true;
     loadError = null;
-    clearReportData();
     const requestedDays = days;
     const requestedProvider = $selectedAnalyticsProviderScope;
+    const requestedWindowKey = `${requestedDays}:${requestedProvider}`;
+    if (!hasLoaded) clearReportData();
     try {
       const bundle = await getReportsBundle(requestedDays, undefined, requestedProvider);
       if (
@@ -104,6 +99,7 @@
       trace = bundle.trace_overview;
       dailyCosts = bundle.daily_costs ?? [];
       totalSessions = bundle.total_sessions;
+      loadedWindowKeys.add(requestedWindowKey);
     } catch (err) {
       if (
         request !== reportRequest
@@ -123,8 +119,10 @@
   }
 
   let lastReloadKey = $state("");
+  let activeWindowKey = $derived(`${days}:${$selectedAnalyticsProviderScope}`);
+  let bundleReady = $derived(loadedWindowKeys.has(activeWindowKey));
   $effect(() => {
-    const key = `${days}:${$selectedAnalyticsProviderScope}`;
+    const key = activeWindowKey;
     if (key !== lastReloadKey) {
       lastReloadKey = key;
       loadReports();
@@ -155,16 +153,22 @@
   }
 
   async function handleCopyMarkdown(): Promise<void> {
+    if (copyingReport) return;
+    copyingReport = true;
     try {
       const md = await generateMarkdownReport(days, undefined, $selectedAnalyticsProviderScope);
       await navigator.clipboard.writeText(md);
-      addToast("Markdown report copied to clipboard.", "success", 3000);
+      addToast("Report copied to clipboard.", "success", 3000);
     } catch (err) {
       addToast(`Copy failed: ${String(err)}`, "danger", 4000);
+    } finally {
+      copyingReport = false;
     }
   }
 
   async function handleDownloadHtml(): Promise<void> {
+    if (downloadingHtml) return;
+    downloadingHtml = true;
     try {
       const html = await generateHtmlReport(days, undefined, $selectedAnalyticsProviderScope);
       const stamp = new Date().toISOString().slice(0, 10);
@@ -185,6 +189,8 @@
       addToast("Report downloaded.", "success", 3000);
     } catch (err) {
       addToast(`Download failed: ${String(err)}`, "danger", 4000);
+    } finally {
+      downloadingHtml = false;
     }
   }
 
@@ -255,8 +261,8 @@
 <div class="reports-view app-view">
   <header class="view-header">
     <div class="view-title-group">
-      <h1 class="view-title">Reports</h1>
-      <p class="view-sub">{days === 365 ? "1 year" : `${days} days`} · selected analysis window</p>
+      <h2 class="view-title">Reports</h2>
+      <p class="view-sub">{windowLabel} window</p>
     </div>
     <div class="controls">
       <SegmentedControl
@@ -265,26 +271,56 @@
         onchange={(value) => (days = Number(value))}
         ariaLabel="Analysis window"
       />
-      <button class="btn-secondary" onclick={handleCopyMarkdown} disabled={loading || !!loadError}>
-        <IconCopy size={14} stroke={1.8} aria-hidden="true" />
-        Copy Markdown
-      </button>
-      <button class="btn-primary" onclick={handleDownloadHtml} disabled={loading || !!loadError}>
-        <IconDownload size={14} stroke={1.8} aria-hidden="true" />
-        Download HTML
-      </button>
+      <div class="export-group">
+        <span class="export-kicker">Exports</span>
+        <div class="export-actions">
+          <button class="btn-secondary" onclick={handleCopyMarkdown} disabled={!!loadError || copyingReport}>
+            <IconCopy size={14} stroke={1.8} aria-hidden="true" />
+            {copyingReport ? "Copying..." : "Copy report"}
+          </button>
+          <button class="btn-primary" onclick={handleDownloadHtml} disabled={!!loadError || downloadingHtml}>
+            <IconDownload size={14} stroke={1.8} aria-hidden="true" />
+            {downloadingHtml ? "Downloading..." : "Download HTML"}
+          </button>
+        </div>
+      </div>
     </div>
   </header>
 
-  {#if loading && !hasLoaded}
-    <section class="report-loading" role="status" aria-live="polite">
-      <div class="loading-copy">
-        <strong>Building the {days === 365 ? "1-year" : `${days}-day`} report</strong>
-        <span>Reading saved sessions and calculating operational signals.</span>
+  {#if loading && !bundleReady && !hasLoaded}
+    <section class="reports-loading" aria-label="Loading reports" aria-live="polite" data-reports-loading>
+      <div class="loading-card loading-timeline" aria-hidden="true">
+        <span class="skeleton loading-label"></span>
+        <span class="skeleton loading-copy"></span>
+        <span class="skeleton loading-block timeline-block"></span>
+        <div class="loading-metrics">
+          <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+        </div>
       </div>
-      <div class="loading-lines" aria-hidden="true">
-        <span></span><span></span><span></span>
+      <div class="loading-card loading-hero" aria-hidden="true">
+        <span class="skeleton loading-grade"></span>
+        <div class="loading-content">
+          <span class="skeleton loading-label"></span>
+          <span class="skeleton loading-copy"></span>
+          <div class="loading-metrics">
+            <span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span>
+          </div>
+        </div>
       </div>
+      <div class="loading-grid" aria-hidden="true">
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+      </div>
+      <div class="loading-card" aria-hidden="true">
+        <span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span>
+        <div class="loading-metrics"><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span><span class="skeleton"></span></div>
+      </div>
+      <div class="loading-grid" aria-hidden="true">
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+        <div class="loading-card"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+      </div>
+      <div class="loading-card" aria-hidden="true"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
+      <div class="loading-card" aria-hidden="true"><span class="skeleton loading-label"></span><span class="skeleton loading-copy"></span><span class="skeleton loading-block"></span></div>
     </section>
   {:else if loadError}
     <section class="report-error" role="alert">
@@ -309,8 +345,8 @@
     <section class="timeline-hero">
       <div class="th-head">
         <div class="th-titles">
-          <h2 class="th-title">Monetary value timeline</h2>
-          <p class="th-sub">Daily monetary value across the selected window, with provenance-aware inflections marked on the curve.</p>
+          <h3 class="th-title">Monetary value timeline</h3>
+          <p class="th-sub">Daily priced value and inflection points in the {windowLabel} window.</p>
         </div>
         <div class="cost-coverage" data-basis={timelineCostBasis}>
           <strong>
@@ -372,7 +408,7 @@
             {cache.grade}
           </div>
           <div class="grade-meta">
-            <div class="label">Cache Health</div>
+            <h3 class="label">Cache health grade</h3>
             <div class="ratio">
               {cache.trend_weighted_ratio.toFixed(0)}<span class="pct">%</span>
               <span class="muted"> hit ratio · {cache.grade_label}</span>
@@ -380,6 +416,7 @@
           </div>
         </div>
         <div class="hero-right">
+          <p class="card-sub hero-sub">Trend-weighted cache reuse for {cache.sessions_analyzed} sessions in the {windowLabel} window.</p>
           <p class="diagnosis">{cache.diagnosis}</p>
           <div class="hero-stats">
             <div class="hero-stat">
@@ -406,8 +443,9 @@
     <div class="two-col" class:single={!(capabilities.model_routing && routing)}>
       {#if routing && capabilities.model_routing}
         <section class="card">
-          <h2 class="card-title">Model routing</h2>
-          <p class="card-sub">{routing.diagnosis}</p>
+          <h3 class="card-title">Model routing</h3>
+          <p class="card-sub">Priced session share and rerouting estimates for the {windowLabel} window.</p>
+          <p class="diagnosis section-diagnosis">{routing.diagnosis}</p>
           <p class="routing-coverage">
             {routing.priced_sessions} of {routing.total_sessions} sessions priced · {routing.cost_basis.replace("_", " ")}
           </p>
@@ -451,13 +489,11 @@
       {/if}
 
       <section class="card">
-        <h2 class="card-title">Inflection detail</h2>
-        <p class="card-sub">
-          The days marked on the timeline, with what moved on each one.
-        </p>
+        <h3 class="card-title">Inflection points</h3>
+        <p class="card-sub">Daily shifts at least 2x the prior baseline in the {windowLabel} window.</p>
         {#if inflections.length === 0}
           <div class="empty-inline">
-            No significant monetary-value shifts detected — usage is consistent.
+            No monetary-value shift crossed the inflection threshold.
           </div>
         {:else}
           <ul class="inflection-list">
@@ -489,11 +525,9 @@
       <section class="card trace-card">
         <header class="trace-head">
           <div>
-            <h2 class="card-title">Session topology</h2>
-            <p class="card-sub">
-              Telemetry shape across {trace.total_sessions} session{trace.total_sessions === 1 ? "" : "s"} in the last {days}d
-              · {trace.provider_display} · {trace.instruction_file}
-            </p>
+            <h3 class="card-title">Trace coverage</h3>
+            <p class="card-sub">Trace, tool, MCP, and compaction coverage for the {windowLabel} window.</p>
+            <p class="trace-meta">{trace.total_sessions} session{trace.total_sessions === 1 ? "" : "s"} · {trace.provider_display} · {trace.instruction_file}</p>
           </div>
           <div class="trace-badge">
             <span class="trace-badge-num">{tracedPct.toFixed(0)}%</span>
@@ -533,12 +567,13 @@
       <div class="grid-2" class:single={!(healthOn && toolsOn)}>
         {#if health && health.available}
           <section class="card">
-            <h2 class="card-title">Session health</h2>
+            <h3 class="card-title">Session health</h3>
+            <p class="card-sub">Duration, overlap, and compaction signals across the {windowLabel} window.</p>
             <div class="health-hero">
               <div class="health-grade grade-{health.grade.toLowerCase()}">{health.grade}</div>
               <div class="health-score">{health.health_score}<span class="health-score-sub">/100</span></div>
             </div>
-            <p class="card-sub">{health.diagnosis}</p>
+            <p class="diagnosis section-diagnosis">{health.diagnosis}</p>
             <div class="mini-grid">
               <div class="mini-kv"><span>Avg duration</span><strong>{health.avg_duration_minutes.toFixed(1)} min</strong></div>
               <div class="mini-kv"><span>P90 duration</span><strong>{health.p90_duration_minutes} min</strong></div>
@@ -552,8 +587,9 @@
 
         {#if tools && tools.available}
           <section class="card">
-            <h2 class="card-title">Tool frequency</h2>
-            <p class="card-sub">{tools.diagnosis}</p>
+            <h3 class="card-title">Tool frequency</h3>
+            <p class="card-sub">Tool-call volume and MCP share across the {windowLabel} window.</p>
+            <p class="diagnosis section-diagnosis">{tools.diagnosis}</p>
             <div class="mini-grid">
               <div class="mini-kv"><span>Total calls</span><strong>{tools.total_tool_calls.toLocaleString()}</strong></div>
               <div class="mini-kv"><span>Avg / session</span><strong>{tools.avg_tools_per_session.toFixed(1)}</strong></div>
@@ -580,8 +616,9 @@
 
     {#if prompts && prompts.available}
       <section class="card">
-        <h2 class="card-title">Prompt complexity</h2>
-        <p class="card-sub">{prompts.diagnosis}</p>
+        <h3 class="card-title">Prompt complexity</h3>
+        <p class="card-sub">Complexity and specificity scores for first prompts in the {windowLabel} window.</p>
+        <p class="diagnosis section-diagnosis">{prompts.diagnosis}</p>
         <div class="mini-grid four">
           <div class="mini-kv"><span>Prompts analyzed</span><strong>{prompts.prompts_analyzed.toLocaleString()}</strong></div>
           <div class="mini-kv"><span>Avg complexity</span><strong>{prompts.avg_complexity_score.toFixed(0)}/100</strong></div>
@@ -597,23 +634,7 @@
                   <span class="prompt-label">{s.label}</span>
                   <span class="prompt-scores">C:{s.complexity_score} · S:{s.specificity_score}</span>
                 </div>
-                <div class="prompt-disclosure">
-                  <span class="prompt-privacy">
-                    {revealedPromptIds.has(s.session_id) ? "Prompt excerpt visible" : "Prompt excerpt hidden"}
-                  </span>
-                  <button
-                    type="button"
-                    class="prompt-toggle"
-                    aria-expanded={revealedPromptIds.has(s.session_id)}
-                    aria-label={`${revealedPromptIds.has(s.session_id) ? "Hide" : "Reveal"} prompt excerpt for ${s.project}`}
-                    onclick={() => togglePromptPreview(s.session_id)}
-                  >
-                    {revealedPromptIds.has(s.session_id) ? "Hide" : "Reveal"}
-                  </button>
-                </div>
-                {#if revealedPromptIds.has(s.session_id)}
-                  <div class="prompt-preview">{s.preview}</div>
-                {/if}
+                <div class="prompt-preview">{s.preview}</div>
               </div>
             {/each}
           </div>
@@ -624,9 +645,9 @@
     <section class="card">
       <header class="recs-header">
         <div>
-          <h2 class="card-title">Recommendations</h2>
+          <h3 class="card-title">Recommendations</h3>
           <p class="card-sub">
-            Things worth acting on from your last {days === 365 ? "year" : `${days} days`} of sessions.
+            Patterns Pulse spotted in your last {days} days.
           </p>
         </div>
         {#if actionableRecs.length > 0}
@@ -654,8 +675,8 @@
       {:else if actionableRecs.length === 0}
         <div class="empty-good">
           <span class="eg-check" aria-hidden="true">✓</span>
-          <strong>You're all set</strong>
-          <span>Nothing needs attention in this window.</span>
+          <strong>Nothing needs attention</strong>
+          <span>No pattern crossed a threshold in this window.</span>
         </div>
       {:else if sortedRecs.length === 0}
         <div class="empty-inline">No items match this filter.</div>
@@ -670,7 +691,7 @@
                 >
                   {rec.severity}
                 </span>
-                <h3 class="rec-title">{rec.title}</h3>
+                <h4 class="rec-title">{rec.title}</h4>
               </div>
               <p class="rec-desc">{rec.description}</p>
               {#if rec.estimated_savings}
@@ -732,9 +753,19 @@
 
   .controls {
     display: flex;
-    gap: 8px;
-    align-items: center;
+    gap: 12px;
+    align-items: flex-end;
   }
+  .export-group { display: grid; gap: 4px; }
+  .export-kicker {
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .export-actions { display: flex; gap: 8px; }
 
   .count-pill {
     font-size: 10px;
@@ -924,6 +955,8 @@
   @media (max-width: 700px) {
     .view-header { flex-direction: column; }
     .controls { width: 100%; flex-wrap: wrap; align-items: stretch; }
+    .export-group { flex: 1 1 100%; }
+    .export-actions { width: 100%; }
     .btn-primary, .btn-secondary { flex: 1; justify-content: center; }
   }
 
@@ -1008,6 +1041,9 @@
     line-height: 1.55;
     color: var(--text-secondary);
   }
+  .hero-sub { margin-bottom: 0; }
+  .section-diagnosis { margin: -4px 0 14px; }
+  .trace-meta { margin-top: -8px; color: var(--text-muted); font-size: 11px; }
 
   .hero-stats {
     display: grid;
@@ -1082,6 +1118,7 @@
   .bar-fill {
     height: 100%;
     border-radius: 99px;
+    transition: width 0.3s var(--ease);
   }
 
   .bar-value {
@@ -1122,15 +1159,15 @@
     padding: 12px 14px;
     background: var(--bg-elevated);
     border-radius: var(--radius-md);
-    border: 1px solid var(--border);
+    border-left: 3px solid var(--text-muted);
   }
 
   .inflection-item.spike {
-    background: color-mix(in srgb, var(--warning) 6%, var(--bg-elevated));
+    border-left-color: var(--warning);
   }
 
   .inflection-item.drop {
-    background: color-mix(in srgb, var(--success) 6%, var(--bg-elevated));
+    border-left-color: var(--success);
   }
 
   .inflection-head {
@@ -1193,7 +1230,7 @@
     padding: 14px 16px;
     background: var(--bg-elevated);
     border-radius: var(--radius-md);
-    border: 1px solid color-mix(in srgb, var(--rec-color, var(--accent)) 26%, var(--border));
+    border-left: 3px solid var(--rec-color, var(--accent));
   }
 
   .rec-head {
@@ -1317,34 +1354,42 @@
     to { transform: rotate(360deg); }
   }
 
-  .report-loading {
-    display: grid;
-    grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.7fr);
-    align-items: center;
-    gap: 24px;
-    min-height: 116px;
-    padding: 22px 24px;
-    background: var(--surface-panel);
+  .reports-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .loading-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 150px;
+    padding: 20px;
+    background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
   }
-
-  .loading-copy { display: flex; flex-direction: column; gap: 5px; }
-  .loading-copy strong { color: var(--text-primary); font-size: 14px; }
-  .loading-copy span { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
-  .loading-lines { display: grid; gap: 7px; }
-  .loading-lines span {
-    height: 5px;
-    border-radius: 99px;
-    background: var(--border-strong);
-    animation: loading-pulse 1.2s ease-in-out infinite alternate;
+  .loading-timeline { min-height: 330px; }
+  .loading-hero {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    align-items: center;
+    min-height: 190px;
   }
-  .loading-lines span:nth-child(2) { width: 76%; animation-delay: 120ms; }
-  .loading-lines span:nth-child(3) { width: 48%; animation-delay: 240ms; }
-
-  @keyframes loading-pulse {
-    from { opacity: 0.35; }
-    to { opacity: 0.85; }
+  .loading-content { display: flex; flex-direction: column; gap: 12px; }
+  .loading-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .loading-label { width: min(150px, 42%); height: 12px; }
+  .loading-copy { width: min(430px, 72%); height: 10px; }
+  .loading-block { flex: 1; min-height: 76px; }
+  .timeline-block { min-height: 180px; }
+  .loading-grade { width: 116px; height: 112px; }
+  .loading-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .loading-metrics .skeleton { height: 48px; }
+  @media (max-width: 820px) {
+    .loading-hero, .loading-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 620px) {
+    .loading-metrics { grid-template-columns: repeat(2, 1fr); }
   }
 
   /* cchubber analyzers — phase 4 */
@@ -1372,7 +1417,7 @@
   .tool-row { display: grid; grid-template-columns: 120px 1fr 110px; gap: 10px; align-items: center; font-size: 12px; }
   .tool-name { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tool-bar-wrap { background: var(--bg-elevated); height: 6px; border-radius: 99px; overflow: hidden; }
-  .tool-bar { background: var(--accent); height: 100%; border-radius: 99px; }
+  .tool-bar { background: var(--accent); height: 100%; border-radius: 99px; transition: width 0.4s var(--ease); }
   .tool-count { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 11px; }
 
   .prompt-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
@@ -1381,37 +1426,7 @@
   .prompt-project { font-weight: 700; color: var(--text-primary); }
   .prompt-label { color: var(--accent); background: var(--accent-dim); padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; }
   .prompt-scores { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 11px; }
-  .prompt-disclosure { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
-  .prompt-privacy { font-size: 11px; color: var(--text-muted); }
-  .prompt-toggle {
-    padding: 4px 8px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    font: inherit;
-    font-size: 11px;
-    font-weight: 650;
-    cursor: pointer;
-  }
-  .prompt-toggle:hover { color: var(--text-primary); border-color: var(--border-hover); }
-  .prompt-preview {
-    margin-top: 6px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
-    font-size: 11px;
-    color: var(--text-secondary);
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-  }
-
-  @media (max-width: 640px) {
-    .report-loading { grid-template-columns: 1fr; gap: 16px; min-height: 0; padding: 18px; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .loading-lines span { animation: none; opacity: 0.65; }
-  }
+  .prompt-preview { font-size: 11px; color: var(--text-secondary); line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
 
   /* Session Topology (trace) */
   .trace-card { background: var(--panel-sheen), var(--surface-panel); box-shadow: var(--elev-1); }

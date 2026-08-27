@@ -38,24 +38,6 @@ export const discordSettings = writable<DiscordSettings | null>(null);
 export const planInfo = writable<PlanInfo | null>(null);
 export const accessSnapshot = writable<AccessSnapshot | null>(null);
 export const backendConnection = writable<"connecting" | "live" | "disconnected">("connecting");
-
-export interface SnapshotDiagnostics {
-  lastError: string | null;
-  lastErrorAt: number | null;
-  consecutiveFailures: number;
-  lastSuccessAt: number | null;
-  discordSettingsError: string | null;
-}
-
-const emptySnapshotDiagnostics = (): SnapshotDiagnostics => ({
-  lastError: null,
-  lastErrorAt: null,
-  consecutiveFailures: 0,
-  lastSuccessAt: null,
-  discordSettingsError: null,
-});
-
-export const snapshotDiagnostics = writable<SnapshotDiagnostics>(emptySnapshotDiagnostics());
 export const selectedAccessSourceId = writable<string>("all");
 export const sourceInspectorExpanded = writable(false);
 const knownAnalyticsScopes = new Map<string, AnalyticsProviderScope>();
@@ -200,33 +182,6 @@ let snapshotSequence = 0;
 let pollInFlight: Promise<void> | null = null;
 let pollPending = false;
 
-function snapshotErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function recordSnapshotFailure(error: unknown): void {
-  snapshotDiagnostics.update((current) => ({
-    ...current,
-    lastError: snapshotErrorMessage(error),
-    lastErrorAt: Date.now(),
-    consecutiveFailures: current.consecutiveFailures + 1,
-  }));
-}
-
-function recordSnapshotSuccess(snapshot: AppSnapshot): void {
-  const parsedCapturedAt = Date.parse(snapshot.snapshot_captured_at ?? "");
-  const discordPairIsCoherent = Boolean(snapshot.discord_settings) === Boolean(snapshot.discord_preview);
-  snapshotDiagnostics.set({
-    lastError: null,
-    lastErrorAt: null,
-    consecutiveFailures: 0,
-    lastSuccessAt: Number.isFinite(parsedCapturedAt) ? parsedCapturedAt : Date.now(),
-    discordSettingsError:
-      snapshot.discord_settings_error
-      ?? (discordPairIsCoherent ? null : "Discord settings and preview are inconsistent"),
-  });
-}
-
 export function poll(): Promise<void> {
   if (pollInFlight) {
     pollPending = true;
@@ -242,10 +197,7 @@ export function poll(): Promise<void> {
       // Stale-while-revalidate: keep the last coherent snapshot on screen, but
       // revoke its live status. Provider changes still clear because crossing
       // that trust boundary must never show one provider as another.
-      if (startedAtSequence === snapshotSequence) {
-        backendConnection.set("disconnected");
-        recordSnapshotFailure(error);
-      }
+      if (startedAtSequence === snapshotSequence) backendConnection.set("disconnected");
       console.warn("Snapshot error:", error);
     })
     .finally(() => {
@@ -276,14 +228,11 @@ function applySnapshot(snapshot: AppSnapshot): void {
     health.set(snapshot.health);
     metrics.set(snapshot.metrics);
     sessions.set(snapshot.sessions);
+    discordPresencePreview.set(snapshot.discord_preview);
     rateLimits.set(snapshot.rate_limits);
     planInfo.set(snapshot.plan);
     accessSnapshot.set(snapshot.access);
-    if (snapshot.discord_settings && snapshot.discord_preview) {
-      applyDiscordSettings(snapshot.discord_settings);
-      discordPresencePreview.set(snapshot.discord_preview);
-    }
-    recordSnapshotSuccess(snapshot);
+    applyDiscordSettings(snapshot.discord_settings);
 }
 
 /** Clears provider-bound state when changing trust domains. Transient polling
@@ -297,11 +246,9 @@ function clearLiveSnapshot(
   metrics.set(null);
   sessions.set([]);
   discordPresencePreview.set(null);
-  discordSettings.set(null);
   rateLimits.set(null);
   planInfo.set(null);
   accessSnapshot.set(null);
-  snapshotDiagnostics.set(emptySnapshotDiagnostics());
 }
 
 export async function refreshDiscordPresencePreview(): Promise<void> {
@@ -312,10 +259,18 @@ export async function refreshDiscordPresencePreview(): Promise<void> {
   }
 }
 
+let discordUserRequestSequence = 0;
+let discordUserAppliedSequence = 0;
+
 export async function loadDiscordUser(): Promise<void> {
+  const requestSequence = ++discordUserRequestSequence;
   try {
     const user = await getDiscordUser();
-    discordUser.set(user);
+    // A completed stale response stays usable when its newer sibling failed.
+    if (requestSequence > discordUserAppliedSequence) {
+      discordUserAppliedSequence = requestSequence;
+      discordUser.set(user);
+    }
   } catch (e) {
     console.warn("Discord user:", e);
   }

@@ -134,18 +134,18 @@ describe("Sessions.svelte", () => {
     expect(getByText("2 active")).toBeTruthy();
   });
 
-  it("loads the history table from the api layer", async () => {
+  it("loads history as a labelled data table", async () => {
     const { sessions } = await import("@/lib/stores");
     sessions.set([]);
 
     const Sessions = (await import("@/views/Sessions.svelte")).default;
-    const { container, getByText } = render(Sessions);
+    const { container, getByRole, getByText } = render(Sessions);
     await tick();
 
     await waitFor(() => expect(getSessionHistory).toHaveBeenCalled());
-    await waitFor(() => {
-      expect(container.querySelectorAll(".ht-row").length).toBe(2);
-    });
+    const table = await waitFor(() => getByRole("table", { name: "Session history ledger" }));
+    expect(table.querySelectorAll("tbody .ht-row")).toHaveLength(2);
+    expect(table.querySelectorAll('thead th[scope="col"]')).toHaveLength(7);
     expect(getByText("Session history")).toBeTruthy();
   });
 
@@ -159,6 +159,20 @@ describe("Sessions.svelte", () => {
 
     await waitFor(() => expect(container.querySelectorAll(".ht-row").length).toBe(2));
     expect(queryByText("Most Costly Sessions (30 days)")).toBeNull();
+  });
+
+  it("uses custom project and sort controls plus segmented history ranges", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([makeSession("s1", "pulse", 3)]);
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container, getByRole } = render(Sessions);
+    await tick();
+
+    expect(container.querySelector("select")).toBeNull();
+    expect(getByRole("button", { name: "Filter by project" })).toBeTruthy();
+    expect(getByRole("group", { name: "Sort sessions" })).toBeTruthy();
+    expect(getByRole("group", { name: "History range" })).toBeTruthy();
   });
 
   it("excludes retained idle snapshots from live KPIs and rows", async () => {
@@ -194,7 +208,8 @@ describe("Sessions.svelte", () => {
 
     await waitFor(() => expect(container.querySelectorAll(".ht-row").length).toBe(1));
     const row = container.querySelector(".ht-row");
-    expect(row?.textContent).toContain("Unavailable");
+    expect(row?.textContent).toContain("—");
+    expect(row?.textContent).not.toContain("Unavailable");
     expect(row?.textContent).not.toContain("$99.00");
   });
 
@@ -211,7 +226,35 @@ describe("Sessions.svelte", () => {
     const { container } = render(Sessions);
 
     await waitFor(() => expect(container.querySelectorAll(".ht-row")).toHaveLength(1));
-    expect(container.querySelector(".ht-row")?.textContent).toContain("$2.50 estimated");
+    const row = container.querySelector(".ht-row");
+    expect(row?.textContent).toContain("$2.50");
+    expect(row?.textContent).toContain("estimate");
+  });
+
+  it("keeps search and all-time facts in one divided toolbar", async () => {
+    const { sessions } = await import("@/lib/stores");
+    sessions.set([]);
+    getAnalyticsSummary.mockResolvedValueOnce({
+      ...summary,
+      cost_basis: "partial",
+      total_cost: 8303.05,
+    });
+
+    const Sessions = (await import("@/views/Sessions.svelte")).default;
+    const { container, getByRole } = render(Sessions);
+
+    await waitFor(() => expect(container.querySelector(".history-summary")).not.toBeNull());
+    const input = getByRole("textbox", { name: "Search session history" });
+    const toolbar = input.closest(".history-search-toolbar");
+    const facts = toolbar?.querySelector(".history-summary");
+
+    expect(toolbar).not.toBeNull();
+    expect(facts).not.toBeNull();
+    expect(facts?.textContent?.replace(/\s+/g, " ")).toContain(
+      "$8303.05 API-equivalent · lower bound",
+    );
+    expect(toolbar?.querySelectorAll(".search-box, .history-summary")).toHaveLength(2);
+    expect(container.querySelector(".history-summary.card")).toBeNull();
   });
 
   it("marks an unavailable all-time cost as unavailable instead of zero dollars", async () => {
@@ -231,9 +274,9 @@ describe("Sessions.svelte", () => {
     await tick();
 
     await waitFor(() => {
-      expect(container.querySelector(".history-summary")?.textContent).toContain("Known monetary value: Unavailable");
+      expect(container.querySelector(".history-summary")?.textContent).toContain("5 sessions · — API-equivalent · 2.0M tokens · top contributor pulse · 30 days");
     });
-    expect(container.querySelector(".history-summary")?.textContent).not.toContain("Known monetary value: $0.00");
+    expect(container.querySelector(".history-summary")?.textContent).not.toContain("$0.00");
   });
 
   it("does not turn an initial history read failure into a false empty result", async () => {

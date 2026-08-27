@@ -76,54 +76,6 @@ fn account_response_keeps_model_scoped_spark_weekly_window_separate() {
 }
 
 #[test]
-fn account_snapshot_projects_global_weekly_without_model_scoped_five_hour() {
-    let observed_at = Utc.timestamp_opt(1_785_000_000, 0).single().unwrap();
-    let reading = parse_rate_limits_response(
-        r#"{
-          "id": 2,
-          "result": {
-            "rateLimits": {
-              "limitId": "codex",
-              "primary": { "usedPercent": 5, "windowDurationMins": 10080 },
-              "secondary": null,
-              "credits": { "hasCredits": false, "unlimited": false, "balance": "0" }
-            },
-            "rateLimitsByLimitId": {
-              "codex": {
-                "limitId": "codex",
-                "primary": { "usedPercent": 5, "windowDurationMins": 10080 },
-                "secondary": null,
-                "credits": { "hasCredits": false, "unlimited": false, "balance": "0" }
-              },
-              "codex_bengalfox": {
-                "limitId": "codex_bengalfox",
-                "limitName": "GPT-5.3-Codex-Spark",
-                "primary": { "usedPercent": 0, "windowDurationMins": 300 },
-                "secondary": { "usedPercent": 0, "windowDurationMins": 10080 },
-                "credits": null
-              }
-            }
-          }
-        }"#,
-        observed_at,
-    )
-    .expect("current Codex account response");
-
-    assert_eq!(reading.envelopes.len(), 2, "raw scopes remain available");
-    let snapshot = reading.usage_snapshot();
-    assert_eq!(
-        snapshot.scopes.len(),
-        1,
-        "account consumers receive one effective scope"
-    );
-    assert_eq!(snapshot.scopes[0].kind, RateLimitScope::GlobalAccount);
-    assert_eq!(snapshot.scopes[0].windows.len(), 1);
-    assert_eq!(snapshot.scopes[0].windows[0].window_minutes, 10_080);
-    assert_eq!(snapshot.scopes[0].windows[0].used_percent, 5.0);
-    assert_eq!(snapshot.scopes[0].windows[0].remaining_percent, 95.0);
-}
-
-#[test]
 fn account_response_does_not_invent_unreported_model_scopes() {
     let observed_at = Utc.timestamp_opt(1_785_000_000, 0).single().unwrap();
     let reading = parse_rate_limits_response(
