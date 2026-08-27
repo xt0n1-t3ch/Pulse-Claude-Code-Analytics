@@ -535,7 +535,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
- "codex-presence-core",
+ "codex-presence-core 2.0.0 (git+https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence?rev=9d20ffdb1c4ec6fa37edc00952badd041ec5bc02)",
  "ctrlc",
  "dirs",
  "discord-rich-presence",
@@ -654,6 +654,16 @@ name = "clap_lex"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
+
+[[package]]
+name = "codex-presence-core"
+version = "2.0.0"
+source = "git+https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence?rev=9d20ffdb1c4ec6fa37edc00952badd041ec5bc02#9d20ffdb1c4ec6fa37edc00952badd041ec5bc02"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "codex-presence-core"
@@ -3379,7 +3389,7 @@ dependencies = [
  "anyhow",
  "cc-discord-presence",
  "chrono",
- "codex-presence-core",
+ "codex-presence-core 2.0.0 (git+https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence?rev=a508507e0849fd5c9e09c7d1c55eebe2d199cfc0)",
  "fs2",
  "rusqlite",
  "serde",
