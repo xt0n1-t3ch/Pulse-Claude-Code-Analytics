@@ -43,7 +43,7 @@ Local analytics and Discord Rich Presence for **Claude Code, Codex and OpenCode*
 | Quality and security | [Test map](../tests/index.md) · [Dependency audit](maintainers/dependencies.md) |
 | Releases | [Release procedure](maintainers/releases.md) · [Six-platform acceptance](maintainers/platforms.md) |
 
-The public v1.8.1 release has Windows x64 installers only. The six-platform workflow and a source build are not proof that other installers have been published. See [current platform status](maintainers/platforms.md#current-release-status).
+The immutable v1.8.2 release includes all six platform/architecture targets, checksums and signed updater payloads. Native package checks passed; installed-GUI acceptance is separate. See [current platform status](maintainers/platforms.md#current-release-status).
 
 ## Version
 

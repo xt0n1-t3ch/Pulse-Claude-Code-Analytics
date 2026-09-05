@@ -55,7 +55,9 @@ These repository captures show earlier Claude and Codex presence layouts. They a
 
 <h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" height="28" align="center">&nbsp; What's new</h2>
 
-Pulse v1.8.2 adds refreshed provider documentation and a gated six-platform release process. It retains the 1.8 feature update and non-Windows compilation fix. Highlights:
+Pulse v1.8.2 ships Windows, macOS and Linux packages for x64 and ARM64, with provider-neutral storage and refreshed documentation. It retains the 1.8 feature update. Highlights:
+
+- Keep Pulse data under `~/.pulse-analytics`, with a `PULSE_HOME` override and a non-destructive migration from legacy storage.
 
 - Track OpenCode sessions from local SQLite, including mixed-model history and provider-reported costs.
 - See OpenCode Go limits for five-hour, weekly and monthly windows, separate from other providers.
@@ -71,15 +73,15 @@ See the [changelog](CHANGELOG.md) for the release history.
 
 Choose an installer for your operating system and architecture from [GitHub Releases](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest).
 
-| Platform | Release targets | Installer formats |
+| Platform | v1.8.2 downloads | Installer formats |
 | --- | --- | --- |
-| Windows | x64 and ARM64 | `.exe` (NSIS), `.msi` |
-| macOS | Intel and Apple Silicon | `.dmg` |
-| Linux | x64 and ARM64 | `.deb`, `.rpm`, `.AppImage` |
+| Windows | [x64](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/download/v1.8.2/pulse-windows-x64-Pulse_1.8.2_x64-setup.exe) · [ARM64](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/download/v1.8.2/pulse-windows-arm64-Pulse_1.8.2_arm64-setup.exe) | `.exe` (NSIS), `.msi` |
+| macOS | [Intel](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/download/v1.8.2/pulse-macos-x64-Pulse_1.8.2_x64.dmg) · [Apple Silicon](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/download/v1.8.2/pulse-macos-arm64-Pulse_1.8.2_aarch64.dmg) | `.dmg`, app archive |
+| Linux | [x64](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/download/v1.8.2/pulse-linux-x64-Pulse_1.8.2_amd64.AppImage) · [ARM64](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/download/v1.8.2/pulse-linux-arm64-Pulse_1.8.2_aarch64.AppImage) | `.deb`, `.rpm`, `.AppImage` |
 
 macOS GitHub packages are not Apple-signed or notarized. macOS may block first launch. Updater signatures are separate from Apple signing.
 
-These are the required targets for a complete release, not a claim that every version has all six builds. **v1.8.1 currently contains Windows x64 installers only.** Its published files are immutable. macOS, Linux and Windows ARM64 need a later complete release, or a build from source.
+The immutable [v1.8.2 release](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.8.2) contains all six targets. The links above select NSIS, DMG or AppImage; MSI, DEB and RPM alternatives are on the release page. Native build/test checks passed; installed-GUI acceptance on every operating system remains a separate check. See [platform verification](docs/maintainers/platforms.md).
 
 Every complete release must include `SHA256SUMS.txt`, Windows software bills of materials and `latest.json` with signed updater payloads for all six targets. Do not install an asset for a different architecture to work around a missing download.
 
@@ -88,14 +90,14 @@ Every complete release must include `SHA256SUMS.txt`, Windows software bills of 
 
 Download the matching `.exe` or `.msi`, compare its SHA-256 hash with `SHA256SUMS.txt`, then run the installer. Pulse uses Microsoft Edge WebView2. Windows Efficiency mode is specific to Windows.
 
-For v1.8.1, the files are `Pulse_1.8.1_x64-setup.exe` and `Pulse_1.8.1_x64_en-US.msi`. The release also includes `pulse-windows-x64.spdx.json`.
+Asset names include the platform and architecture, such as `pulse-windows-x64-Pulse_1.8.2_x64-setup.exe`. Each Windows architecture has its own SPDX file.
 
 </details>
 
 <details>
 <summary>macOS installation</summary>
 
-When a matching release is available, download the Intel or Apple Silicon `.dmg`, verify its checksum and drag Pulse to Applications. The configured minimum is macOS 11.0.
+Download the Intel or Apple Silicon `.dmg`, verify its checksum and drag Pulse to Applications. The configured minimum is macOS 11.0.
 
 These GitHub packages have no Apple Developer ID signature or notarization. Keep system security controls enabled; the native build checks do not establish Gatekeeper acceptance.
 
@@ -104,7 +106,7 @@ These GitHub packages have no Apple Developer ID signature or notarization. Keep
 <details>
 <summary>Linux installation</summary>
 
-When a matching release is available, verify its checksum and install the package for your distribution and architecture. Debian-based systems use `.deb`; RPM-based systems use `.rpm`. AppImage is the standalone packaging option, not a promise of compatibility with every distribution.
+Verify the checksum and install the package for your distribution and architecture. Debian-based systems use `.deb`; RPM-based systems use `.rpm`. AppImage is the standalone packaging option, not a promise of compatibility with every distribution.
 
 The release builds use Ubuntu 22.04. GTK 3, WebKitGTK 4.1 and an AppIndicator-compatible desktop are required for the corresponding native features. Tray behavior depends on the desktop environment.
 
