@@ -6,7 +6,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 | Doc | Purpose |
 | --- | --- |
-| [opencode-and-astra.md](opencode-and-astra.md) | Pulse v1.8.0: OpenCode nativo, selector único, Go, perfil local, Astra, evidencia y rollback local |
+| [opencode-and-astra.md](opencode-and-astra.md) | Pulse v1.8.1: OpenCode nativo, selector único, Go, perfil local, Astra, evidencia y rollback local |
 | [architecture.md](architecture.md) | High-level component map: daemon -> Tauri -> SQLite -> Svelte |
 | [architecture/dev-bridge.md](architecture/dev-bridge.md) | Debug-only loopback bridge for real Rust data in the Vite browser |
 | [architecture/adaptive-access.md](architecture/adaptive-access.md) | Versioned provider/Discord fixture envelope, access-route DTO, and Browser/Tauri/Discord proof boundaries |
@@ -165,7 +165,7 @@ cost cockpit, de-nested Costs surfaces, Reports bundle caching with loading skel
 ## v1.6.0 docs refresh
 
 - Documented the versioned snapshot/event transport that keeps the frontend, Discord publisher, and SQLite persistence on one semantic state.
-- Added semantic Codex quota scopes, Credits, absolute local reset timestamps, and the exact canonical `codex-presence-core` v1.8.0 Git revision.
+- Added semantic Codex quota scopes, Credits, absolute local reset timestamps, and the exact canonical `codex-presence-core` v1.8.1 Git revision.
 - Updated the responsive Dark/Light UI, Discord field-order contract, config-schema 13 migration, analytics-schema 5 migration, and performance evidence.
 - Hardened releases with exact version surfaces, protected-main ancestry, Windows SPDX SBOM validation, complete platform assets, and immutable publication.
 - Kept the release as a SemVer minor because v1.6.0 adds public snapshot semantics and substantial UI capabilities without removing an existing command.
@@ -240,7 +240,7 @@ cost cockpit, de-nested Costs surfaces, Reports bundle caching with loading skel
 
 ## Version
 
-- Current app: **v1.8.0**
+- Current app: **v1.8.1**
 - Shared core: **2.0.0**, immutable v1.10.3 pin
 - Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v6**
 - Last docs refresh: 2026-08-25 (provider isolation, dynamic quotas,
@@ -248,7 +248,7 @@ cost cockpit, de-nested Costs surfaces, Reports bundle caching with loading skel
   performance evidence)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.
 
-## Current release v1.8.0
+## Current release v1.8.1
 
 [Windows Efficiency mode](windows-efficiency.md) documents the process policy and read-only validation. See the root README and changelog for the release contract.
 

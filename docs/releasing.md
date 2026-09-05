@@ -12,7 +12,7 @@ README, docs-index, and changelog version surface, plus
 `src/codex/UPSTREAM.json`'s `compatibility.pulse` pin.
 
 Pulse additionally refuses release when `codex-presence-core` is a path
-dependency. Pulse v1.8.0 consumes core 2.0.0 from the immutable upstream
+dependency. Pulse v1.8.1 consumes core 2.0.0 from the immutable upstream
 `v1.10.3` release at its full 40-character Git revision; the canonical Git
 dependency and `src/codex/UPSTREAM.json` must carry the same SHA.
 
