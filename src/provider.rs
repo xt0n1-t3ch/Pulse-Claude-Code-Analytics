@@ -10,6 +10,7 @@ pub enum Provider {
     #[default]
     Claude,
     Codex,
+    OpenCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +25,7 @@ impl Provider {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::OpenCode => "opencode",
         }
     }
 
@@ -31,6 +33,7 @@ impl Provider {
         match self {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
+            Self::OpenCode => "OpenCode",
         }
     }
 
@@ -38,6 +41,7 @@ impl Provider {
         match self {
             Self::Claude => "Claude",
             Self::Codex => "Codex",
+            Self::OpenCode => "OpenCode",
         }
     }
 
@@ -45,6 +49,7 @@ impl Provider {
         match self {
             Self::Claude => "CLAUDE.md",
             Self::Codex => "AGENTS.md",
+            Self::OpenCode => "AGENTS.md",
         }
     }
 
@@ -52,6 +57,7 @@ impl Provider {
         match self {
             Self::Claude => ".claude",
             Self::Codex => ".codex",
+            Self::OpenCode => "opencode",
         }
     }
 
@@ -59,6 +65,7 @@ impl Provider {
         match self {
             Self::Claude => "~/.claude/projects/**/*.jsonl",
             Self::Codex => "~/.codex/sessions/**/*.jsonl",
+            Self::OpenCode => "~/.local/share/opencode/opencode*.db",
         }
     }
 
@@ -66,6 +73,7 @@ impl Provider {
         match self {
             Self::Claude => "~/.claude/discord-presence-data.json + usage API",
             Self::Codex => "~/.codex/.codex-global-state.json + session telemetry",
+            Self::OpenCode => "OpenCode local SQLite metadata",
         }
     }
 
@@ -73,6 +81,7 @@ impl Provider {
         match self {
             Self::Claude => "Fix with Claude Code",
             Self::Codex => "Fix with Codex",
+            Self::OpenCode => "Fix with OpenCode",
         }
     }
 
@@ -87,6 +96,11 @@ impl Provider {
                 model_routing: true,
                 extra_usage: true,
             },
+            Self::OpenCode => ProviderCapabilities {
+                cache_health: false,
+                model_routing: false,
+                extra_usage: false,
+            },
             Self::Codex => ProviderCapabilities {
                 cache_health: true,
                 model_routing: false,
@@ -99,6 +113,7 @@ impl Provider {
         match self {
             Self::Claude => crate::config::claude_home(),
             Self::Codex => crate::codex::config::codex_home(),
+            Self::OpenCode => crate::opencode::data_dir(),
         }
     }
 
@@ -106,6 +121,7 @@ impl Provider {
         match raw.trim().to_ascii_lowercase().as_str() {
             "claude" | "claude_code" | "claude-code" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
+            "opencode" => Some(Self::OpenCode),
             _ => None,
         }
     }

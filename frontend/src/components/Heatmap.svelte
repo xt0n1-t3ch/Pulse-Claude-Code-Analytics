@@ -45,18 +45,12 @@
 </script>
 
 <div class="heatmap">
-  <div class="heatmap-grid" role="img" aria-label={`${totalSessions} sessions across ${activeHours} active hours`}>
+  <div class="heatmap-grid" role="img" aria-label={`${totalSessions} sessions. Sessions by local hour: ${HOURS.map((hour) => `${hourLabel(hour)} ${sessionCount(hour)}`).join(", ")}`}>
     {#each HOURS as h}
-      <div
-        class="heatmap-cell"
-        style="background:{cellColor(intensity(h))};height:{CELL}px"
-        title="{hourLabel(h)}: {sessionCount(h)} sessions"
-      ></div>
-    {/each}
-  </div>
-  <div class="heatmap-labels">
-    {#each [0, 6, 12, 18] as h}
-      <span class="heatmap-label">{hourLabel(h)}</span>
+      <div class="hour-slot">
+        <div class="heatmap-cell" style="background:{cellColor(intensity(h))};height:{CELL}px" title="{hourLabel(h)}: {sessionCount(h)} sessions"></div>
+        <span class="heatmap-label">{hourLabel(h)}</span>
+      </div>
     {/each}
   </div>
   <div class="heatmap-summary">
@@ -79,10 +73,15 @@
   .heatmap-grid { display: grid; grid-template-columns: repeat(24, minmax(4px, 1fr)); gap: 2px; }
   .heatmap-cell { border-radius: 3px; outline: 1px solid transparent; transition: background 0.2s ease, outline-color 0.15s ease; cursor: default; }
   .heatmap-cell:hover { outline-color: var(--border-hover); }
-  .heatmap-labels { display: flex; justify-content: space-between; height: 14px; }
   .heatmap-label { font-size: 9px; color: var(--text-muted); font-weight: 500; }
   .heatmap-legend { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
   .heatmap-summary { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--text-secondary); font: 600 10px var(--font-mono); }
   .legend-text { font-size: 9px; color: var(--text-muted); }
   .legend-cell { width: 10px; height: 10px; border-radius: 2px; }
+  .heatmap-grid { grid-template-columns:repeat(12,minmax(0,1fr)); gap:10px 5px; }
+  .hour-slot { display:grid; gap:4px; text-align:center; min-width:0; }
+  .heatmap-label { font-size:9px; white-space:nowrap; }
+  .heatmap-summary { justify-content:center; font-family:var(--font-sans); font-weight:400; }
+  .heatmap-legend { justify-content:center; }
+  @media(max-width:420px) { .heatmap-grid { grid-template-columns:repeat(6,minmax(0,1fr)); } }
 </style>

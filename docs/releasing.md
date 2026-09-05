@@ -12,8 +12,8 @@ README, docs-index, and changelog version surface, plus
 `src/codex/UPSTREAM.json`'s `compatibility.pulse` pin.
 
 Pulse additionally refuses release when `codex-presence-core` is a path
-dependency. Pulse v1.7.9 consumes core 2.0.0 from the immutable upstream
-`v1.10.2` release at its full 40-character Git revision; the canonical Git
+dependency. Pulse v1.8.0 consumes core 2.0.0 from the immutable upstream
+`v1.10.3` release at its full 40-character Git revision; the canonical Git
 dependency and `src/codex/UPSTREAM.json` must carry the same SHA.
 
 ## Local verification (replaces CI)
@@ -32,7 +32,7 @@ tag, or schedule.
 ## Required proof
 
 1. `npm run verify` passes without warnings, and the Tauri release bundle builds.
-2. Config schema 13 and database schema 5 migrations pass from fixtures.
+2. Config schema 13 and database schema 6 migrations pass from fixtures.
 3. Dark and Light evidence exists for Dashboard, Discord, Sessions, Costs,
    Reports, and Settings at 1280×860, 900×600, and 720×560.
 4. Windows runtime proves single-instance, close-to-tray + Settings toggle,
@@ -61,3 +61,7 @@ available for manual download.
 
 Never move a published tag or replace a published asset — publish a new patch
 version when a correction is required.
+
+## Local portable validation
+
+Run `npm run build:portable` to compile the frontend and the native Pulse executable without creating installers. The Tauri CLI enables the custom protocol and embeds `frontend/dist`. A raw `cargo build --release -p pulse --bin pulse` does not select that protocol and can leave the window pointing at the development URL. Validate the installed window with ports 1420 and 1421 stopped, not only the Rust process or Discord connection.

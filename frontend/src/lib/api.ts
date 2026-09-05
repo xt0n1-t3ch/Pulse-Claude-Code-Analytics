@@ -110,6 +110,7 @@ export interface IntroPricingInfo {
 }
 
 export interface SessionInfo {
+    opencode?: OpenCodeMetadata | null;
     session_id: string;
     session_name: string | null;
     project: string;
@@ -320,6 +321,7 @@ export interface DiscordSettings {
 }
 
 export interface AppSnapshot {
+    opencode_diagnostics?: string[];
     revision: number;
     sync_state?: "syncing" | "live";
     snapshot_captured_at?: string;
@@ -440,6 +442,7 @@ export function setPlanOverride(plan: string, provider?: "codex" | "claude"): Pr
 export type CostBasis = "exact" | "partial" | "estimated" | "unavailable";
 
 export interface HistoricalSession {
+    opencode?: OpenCodeMetadata | null;
     id: string;
     provider: string;
     session_name: string | null;
@@ -1177,4 +1180,28 @@ export function checkAppUpdate(): Promise<AppUpdateInfo> {
 
 export function openAppReleasePage(url?: string | null): Promise<void> {
     return invoke("open_app_release_page", { url: url ?? null });
+}
+
+export interface OpenCodeMetadata {
+    model_provider: string;
+    model_id: string;
+    model_name: string;
+    variant: string | null;
+    surface: string;
+    context_source: string | null;
+    source_database: string;
+    models: { provider_id: string; model_id: string; input: number; output: number; reasoning: number; cache_read: number; cache_write: number; cost: number | null }[];
+}
+
+export function markNotificationUnread(id: number): Promise<boolean> {
+    return invoke("mark_notification_unread", { id });
+}
+export function markAllNotificationsUnread(): Promise<number> {
+    return invoke("mark_all_notifications_unread");
+}
+export function dismissAllNotifications(): Promise<{ count: number; undo_token: string }> {
+    return invoke("dismiss_all_notifications");
+}
+export function restoreNotifications(token: string): Promise<number> {
+    return invoke("restore_notifications", { token });
 }

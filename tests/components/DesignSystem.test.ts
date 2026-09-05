@@ -4,6 +4,23 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/svelte";
 
 describe("Signal Ledger design system", () => {
+  it("fits allowance and session collections to their actual content", () => {
+    const dashboard = readFileSync(resolve(process.cwd(), "src/views/Dashboard.svelte"), "utf8");
+    const allowances = readFileSync(resolve(process.cwd(), "src/components/AllowanceRail.svelte"), "utf8");
+    expect(dashboard).not.toContain("max-height:calc(100dvh - 160px)");
+    expect(dashboard).toContain(".instance-grid { display: flex; flex-wrap: wrap; }");
+    expect(allowances).toContain("height: auto");
+    expect(allowances).toContain("repeat(auto-fit, minmax(min(250px, 100%), 1fr))");
+  });
+
+  it("uses a neutral theme-aware active tab and shared centered mobile headings", () => {
+    const nav = readFileSync(resolve(process.cwd(), "src/components/TopBar.svelte"), "utf8");
+    const css = readFileSync(resolve(process.cwd(), "src/styles/global.css"), "utf8");
+    expect(nav).not.toContain("button.active::after");
+    expect(nav).toContain("color: var(--text-primary); background: var(--surface-raised); border-color: var(--text-muted)");
+    expect(css).toContain(".main-content .app-view > .view-header > :first-child");
+  });
+
   it("owns the dark neutral palette and shared operator-console patterns centrally", () => {
     const css = readFileSync(resolve(process.cwd(), "src/styles/global.css"), "utf8");
 
@@ -43,7 +60,7 @@ describe("Signal Ledger design system", () => {
     expect(reports).not.toContain('class="view-kicker"');
     expect(reports).toContain("{windowLabel} window");
     expect(discord).not.toContain('class="view-kicker"');
-    expect(discord).toContain('<h2 class="view-title">Broadcast</h2>');
+    expect(discord).toContain('<h2 class="view-title">Discord</h2>');
     expect(settings).not.toContain('class="view-kicker"');
     expect(settings).toContain('<span class="version-chip">{$health?.version ? `v${$health.version}` : "Version unavailable"}</span>');
     expect(settings).not.toContain("<DataSourceInspector");

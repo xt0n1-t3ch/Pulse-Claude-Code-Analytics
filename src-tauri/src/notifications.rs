@@ -529,6 +529,37 @@ impl<'conn> NotificationStore<'conn> {
         )?)
     }
 
+    pub fn mark_unread(&self, id: i64) -> Result<bool> {
+        Ok(self.connection.execute(
+            &format!("UPDATE {TABLE} SET read_at = NULL WHERE id = ?1 AND dismissed_at IS NULL"),
+            params![id],
+        )? > 0)
+    }
+
+    pub fn mark_all_unread(&self) -> Result<usize> {
+        Ok(self.connection.execute(
+            &format!("UPDATE {TABLE} SET read_at = NULL WHERE dismissed_at IS NULL AND read_at IS NOT NULL"),
+            [],
+        )?)
+    }
+
+    pub fn dismiss_all(&self) -> Result<(usize, String)> {
+        let token = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let count = self.connection.execute(
+            &format!("UPDATE {TABLE} SET dismissed_at = ?1 WHERE dismissed_at IS NULL"),
+            params![token],
+        )?;
+        Ok((count, token))
+    }
+
+    pub fn restore_batch(&self, token: &str) -> Result<usize> {
+        DateTime::parse_from_rfc3339(token).context("invalid notification undo token")?;
+        Ok(self.connection.execute(
+            &format!("UPDATE {TABLE} SET dismissed_at = NULL WHERE dismissed_at = ?1"),
+            params![token],
+        )?)
+    }
+
     pub fn dismiss(&self, id: i64) -> Result<bool> {
         Ok(self.connection.execute(
             &format!("UPDATE {TABLE} SET dismissed_at = COALESCE(dismissed_at, ?1) WHERE id = ?2"),
@@ -1089,6 +1120,45 @@ mod tests {
 
     fn time() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 8, 1, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn bulk_read_unread_clear_and_undo_preserve_records_and_read_state() {
+        let connection = connection();
+        let store = NotificationStore::new(&connection);
+        let make = |provider: &str, key: &str| {
+            store
+                .observe(
+                    NotificationSpec {
+                        kind: NotificationKind::QuotaReset,
+                        provider: provider.into(),
+                        key: key.into(),
+                        title: "Quota reset".into(),
+                        body: "Provider-reported reset".into(),
+                        action: None,
+                    },
+                    time(),
+                )
+                .unwrap()
+                .unwrap()
+        };
+        let first = make("codex", "first");
+        let second = make("claude", "second");
+        assert_eq!(store.mark_all_read().unwrap(), 2);
+        assert_eq!(store.unread_count().unwrap(), 0);
+        assert!(store.mark_unread(first.id).unwrap());
+        assert_eq!(store.unread_count().unwrap(), 1);
+        assert_eq!(store.mark_all_unread().unwrap(), 1);
+        assert!(store.mark_read(second.id).unwrap());
+        let (count, token) = store.dismiss_all().unwrap();
+        assert_eq!(count, 2);
+        assert!(store.list(None).unwrap().is_empty());
+        assert_eq!(store.list_all(None).unwrap().len(), 2);
+        assert_eq!(store.unread_count().unwrap(), 0);
+        assert_eq!(store.restore_batch(&token).unwrap(), 2);
+        assert_eq!(store.unread_count().unwrap(), 1);
+        assert_eq!(store.restore_batch(&token).unwrap(), 0);
+        assert!(store.restore_batch("not-a-token").is_err());
     }
 
     #[test]

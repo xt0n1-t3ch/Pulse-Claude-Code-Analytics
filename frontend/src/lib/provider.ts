@@ -6,7 +6,7 @@ import {
     type ProviderCopyInfo,
 } from "./api";
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "opencode";
 
 export interface ProviderProfile {
     id: Provider;
@@ -35,6 +35,12 @@ export interface ProviderProfile {
 }
 
 const BASE: Record<Provider, ProviderProfile> = {
+    opencode: {
+        id: "opencode", label: "OpenCode", productName: "OpenCode", tagline: "OpenCode Analytics",
+        accent: "var(--text-primary)", defaultAssetKey: "opencode-v2", supportsExtraUsage: false,
+        sessionsPath: "~/.local/share/opencode/opencode*.db", instructionFile: "AGENTS.md",
+        homeDir: "~/.config/opencode", fixLabel: "Fix with OpenCode", globalStateSource: "Local SQLite session metadata",
+    },
     claude: {
         id: "claude",
         label: "Claude",
@@ -89,8 +95,8 @@ const NEUTRAL_PROFILE: ProviderProfile = {
 const STORAGE_KEY = "pulse-provider";
 const storage = globalThis.localStorage;
 const stored = storage?.getItem(STORAGE_KEY) ?? null;
-const hasStoredProvider = stored === "codex" || stored === "claude";
-const initialProvider: Provider = stored === "codex" ? "codex" : "claude";
+const hasStoredProvider = stored === "codex" || stored === "claude" || stored === "opencode";
+const initialProvider: Provider = stored === "opencode" ? "opencode" : stored === "codex" ? "codex" : "claude";
 
 export const provider: Writable<Provider> = writable<Provider>(initialProvider);
 export const providerCopy: Writable<ProviderCopyInfo | null> = writable(null);
@@ -186,7 +192,7 @@ void (async () => {
     try {
         const info = await getActiveProvider();
         if (bootstrapGeneration !== providerGeneration) return;
-        const p = info.active_provider === "codex" ? "codex" : "claude";
+        const p = info.active_provider === "opencode" ? "opencode" : info.active_provider === "codex" ? "codex" : "claude";
         confirmedProvider = p;
         publishProvider(p);
         const copy = await getProviderCopy();

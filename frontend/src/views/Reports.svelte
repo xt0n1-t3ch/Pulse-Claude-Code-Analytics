@@ -360,7 +360,7 @@
           </strong>
           <span>
             {timelinePricedSessions} of {timelineSessions} sessions priced
-            {timelineCostSources.length > 0 ? ` · ${timelineCostSources.join(", ")}` : ""}
+            {timelineCostSources.length > 0 ? ` · ${monetaryValueLabel(timelineCostSources)}` : ""}
           </span>
         </div>
       </div>
@@ -376,7 +376,7 @@
 
       <div class="th-stats">
         <div class="th-stat">
-          <span class="ths-label">{timelineCostBasis === "partial" ? `${monetaryValueLabel(timelineCostSources)} lower bound` : monetaryValueLabel(timelineCostSources)}</span>
+          <span class="ths-label">{timelineCostBasis === "partial" ? "Known subtotal" : monetaryValueLabel(timelineCostSources)}</span>
           <span class="ths-value">{timelineCostBasis === "unavailable" ? "—" : fmtCost(totalCost)}</span>
           <span class="ths-meta">{dailyCosts.length} days analysed</span>
         </div>
@@ -519,7 +519,7 @@
       </section>
     </div>
 
-    {#if trace && trace.total_sessions > 0}
+    {#if trace && trace.total_sessions > 0 && trace.traced_sessions > 0}
       {@const tracedPct = trace.total_sessions > 0 ? (trace.traced_sessions / trace.total_sessions) * 100 : 0}
       {@const mcpPct = trace.total_tool_calls > 0 ? (trace.mcp_tool_calls / trace.total_tool_calls) * 100 : 0}
       <section class="card trace-card">
@@ -675,8 +675,8 @@
       {:else if actionableRecs.length === 0}
         <div class="empty-good">
           <span class="eg-check" aria-hidden="true">✓</span>
-          <strong>Nothing needs attention</strong>
-          <span>No pattern crossed a threshold in this window.</span>
+          <strong>No actions suggested</strong>
+          <span>{$selectedAnalyticsProviderScope === "all" ? "Select a provider for its specific recommendations." : "No thresholds crossed in this window."}</span>
         </div>
       {:else if sortedRecs.length === 0}
         <div class="empty-inline">No items match this filter.</div>
@@ -1492,4 +1492,22 @@
   }
   .report-empty strong { color: var(--text-primary); font-size: var(--fs-lg); }
   .report-empty span { max-width: 580px; font-size: var(--fs-sm); line-height: 1.55; }
+  @media (max-width: 620px) {
+    .timeline-head, .prompt-head { flex-wrap: wrap; }
+    .tool-row, .trace-tool-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; }
+    .tool-bar-wrap, .trace-tool-bar-wrap { grid-column: 1 / -1; grid-row: 2; }
+    .tool-name, .trace-tool-name { white-space: normal; overflow-wrap: anywhere; }
+    .card, .hero-card { padding: 16px; }
+    .grade-letter { font-size: 64px; }
+  }
+  .card-title { font-size:15px; text-transform:none; letter-spacing:-0.01em; color:var(--text-primary); font-weight:650; }
+  .card-sub { line-height:1.6; max-width:70ch; }
+  .mini-kv { border:0; border-top:1px solid var(--divider); border-radius:0; background:transparent; padding:12px 0; }
+  .mini-kv strong { font-size:17px; font-weight:650; }
+  .trace-badge { border:0; background:var(--bg-elevated); }
+  .prompt-item { padding:14px; background:var(--bg-elevated); }
+  .prompt-head { flex-wrap:wrap; row-gap:6px; }
+  .prompt-preview { font-size:12px; line-height:1.65; }
+  .empty-good { display:flex; flex-direction:row; justify-content:flex-start; align-items:center; gap:12px; padding:14px 0; min-height:0; text-align:left; flex-wrap:wrap; }
+  .empty-good .eg-check { width:24px; height:24px; font-size:14px; }
 </style>

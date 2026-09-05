@@ -6,6 +6,7 @@ Pulse is the Tauri 2.0 analytics GUI for Claude Code and OpenAI Codex, paired wi
 
 | Doc | Purpose |
 | --- | --- |
+| [opencode-and-astra.md](opencode-and-astra.md) | Pulse v1.8.0: OpenCode nativo, selector único, Go, perfil local, Astra, evidencia y rollback local |
 | [architecture.md](architecture.md) | High-level component map: daemon -> Tauri -> SQLite -> Svelte |
 | [architecture/dev-bridge.md](architecture/dev-bridge.md) | Debug-only loopback bridge for real Rust data in the Vite browser |
 | [architecture/adaptive-access.md](architecture/adaptive-access.md) | Versioned provider/Discord fixture envelope, access-route DTO, and Browser/Tauri/Discord proof boundaries |
@@ -239,10 +240,16 @@ cost cockpit, de-nested Costs surfaces, Reports bundle caching with loading skel
 
 ## Version
 
-- Released app: **v1.7.8**
-- Unreleased target: **not selected**
-- Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v5**
+- Current app: **v1.8.0**
+- Shared core: **2.0.0**, immutable v1.10.3 pin
+- Schema: **Claude config v6 / Codex config v13 / Pulse analytics DB v6**
 - Last docs refresh: 2026-08-25 (provider isolation, dynamic quotas,
   durable notification identity, responsive UI overhaul, and route-split
   performance evidence)
 - Windows WSL transcript roots are opt-in with `CC_PRESENCE_INCLUDE_WSL=1`; default Windows polling stays native and does not spawn `wsl.exe`.
+
+## Current release v1.8.0
+
+[Windows Efficiency mode](windows-efficiency.md) documents the process policy and read-only validation. See the root README and changelog for the release contract.
+
+[Dependency audit scope](dependency-audit.md) records inherited Tauri warning-class advisories without suppressing them.

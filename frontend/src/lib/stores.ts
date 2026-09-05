@@ -20,7 +20,6 @@ import {
   hasTauriIpc,
 } from "./api";
 import {
-  analyticsProviderScopeForSelection,
   authenticatedAccessRoutes,
   displayableAccessRoutes,
   type AnalyticsProviderScope,
@@ -40,30 +39,8 @@ export const accessSnapshot = writable<AccessSnapshot | null>(null);
 export const backendConnection = writable<"connecting" | "live" | "disconnected">("connecting");
 export const selectedAccessSourceId = writable<string>("all");
 export const sourceInspectorExpanded = writable(false);
-const knownAnalyticsScopes = new Map<string, AnalyticsProviderScope>();
 export const selectedAnalyticsProviderScope = writable<AnalyticsProviderScope>("all");
-let currentSelectedAccessSourceId = "all";
-
-accessSnapshot.subscribe((snapshot) => {
-  if (!snapshot) return;
-  for (const route of displayableAccessRoutes(snapshot.routes)) {
-    knownAnalyticsScopes.set(route.source.id, route.source.provider);
-  }
-  if (currentSelectedAccessSourceId !== "all") {
-    const scope = knownAnalyticsScopes.get(currentSelectedAccessSourceId);
-    if (scope) selectedAnalyticsProviderScope.set(scope);
-  }
-});
-
-selectedAccessSourceId.subscribe((selectedId) => {
-  currentSelectedAccessSourceId = selectedId;
-  if (selectedId === "all") {
-    selectedAnalyticsProviderScope.set("all");
-    return;
-  }
-  const scope = knownAnalyticsScopes.get(selectedId);
-  if (scope) selectedAnalyticsProviderScope.set(scope);
-});
+export const opencodeDiagnostics = writable<string[]>([]);
 
 export const selectedAccessRoutes = derived(
   [accessSnapshot, selectedAccessSourceId],
@@ -220,10 +197,6 @@ export function invalidateLiveSnapshotForProviderChange(): void {
 
 function applySnapshot(snapshot: AppSnapshot): void {
     snapshotSequence++;
-    const routes = displayableAccessRoutes(snapshot.access.routes);
-    const selectedId = currentSelectedAccessSourceId;
-    const selectedScope = analyticsProviderScopeForSelection(selectedId, routes);
-    if (selectedScope) selectedAnalyticsProviderScope.set(selectedScope);
     backendConnection.set(snapshot.sync_state === "syncing" ? "connecting" : "live");
     health.set(snapshot.health);
     metrics.set(snapshot.metrics);
@@ -232,6 +205,7 @@ function applySnapshot(snapshot: AppSnapshot): void {
     rateLimits.set(snapshot.rate_limits);
     planInfo.set(snapshot.plan);
     accessSnapshot.set(snapshot.access);
+  opencodeDiagnostics.set(snapshot.opencode_diagnostics ?? []);
     applyDiscordSettings(snapshot.discord_settings);
 }
 

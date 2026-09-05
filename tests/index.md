@@ -222,6 +222,28 @@ npm --prefix frontend run build
 | Doc | Where | Purpose |
 |:---|:---|:---|
 | [README.md](../README.md) | repo root | Install, feature overview, daemon + GUI quick start |
-| [CHANGELOG.md](../CHANGELOG.md) | repo root | Release history (Claude config schema v5, Codex config schema v9, DB schema v3) |
+| [CHANGELOG.md](../CHANGELOG.md) | repo root | Release history (Claude config schema v6, Codex config schema v13, DB schema v6) |
 | [docs/index.md](../docs/index.md) | `docs/` | Documentation hub: architecture, Discord assets, reasoning-effort variants, analyzers, cost calculation |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | repo root | Contribution + local-dev workflow |
+
+## OpenCode y Astra
+
+- `src/opencode/store/tests.rs`: ambas tablas de mensajes, ocho familias, multimodelo, coste cero/ausente, paginación y SQLite bloqueado/incompatible.
+- `src/opencode/process.rs`: PID, padre y executable del proceso gestionado; rechaza registros obsoletos.
+- `src/opencode/presence.rs`: privacidad, identidad OpenCode y ausencia de costes inventados.
+- `src-tauri/src/db.rs::opencode_tests`: metadatos persistidos y consultas históricas sin tarifas prestadas.
+- `tests/components/AccessSourceBar.test.ts` y `Discord.test.ts`: filtros independientes, aplicación nativa y capacidades no disponibles.
+- `scripts/check-model-catalog-parity.ps1`: igualdad del catálogo con el repo canónico.
+- `axe-core` permite auditar el DOM renderizado en el navegador integrado; acompañe el resultado con teclado, screenshots y prueba visual real en Discord.
+
+La matriz `every_plan_override_survives_reload_and_matches_the_discord_payload` cubre todos los planes, precedencia manual, reload, rechazo de valores inválidos y retorno a Auto-detect. `account_plan_is_independent_from_quota_windows` separa plan y cuotas.
+
+`opencode_go::tests` valida las tres ventanas y la fecha mensual sin duración inventada. `discord_identity::tests` valida READY y excluye credenciales del DTO. Heatmap expone las 24 horas en formato de 12 horas; Notifications añade filtro de no leídas, cierre con Escape y retorno de foco.
+
+Las regresiones OpenCode incluyen caducidad y atribución Go, roundtrip del toggle de cuotas, presets y orden del compositor, además del logo opencode-v2 en la UI.
+
+## Windows efficiency and release validation
+
+`src/power.rs` tests option parsing and the Windows ABI layout. `scripts/check-windows-efficiency.ps1` reads the running process policy. Release checks validate versions, PE architecture, software bills of materials and checksums.
+
+Notification regressions cover per-item/bulk read state, soft clear and Undo, command routing and confirmation. OpenCode lifecycle tests distinguish null completion from completed responses and reject stale tool-state overrides.

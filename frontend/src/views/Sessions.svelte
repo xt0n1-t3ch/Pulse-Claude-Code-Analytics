@@ -38,9 +38,10 @@
     { key: "is_active", label: "Active", enabled: false },
   ];
 
-  let sortBy = $state("cost");
+  let sortBy = $state("recent");
   let projectFilter = $state("");
   const sortOptions = [
+    { value: "recent", label: "Recent" },
     { value: "cost", label: "Monetary value" },
     { value: "tokens", label: "Tokens" },
     { value: "duration", label: "Duration" },
@@ -68,6 +69,7 @@
       ? liveSessions.filter((s) => s.project === projectFilter)
       : liveSessions;
     return [...list].sort((a, b) => {
+      if (sortBy === "recent") return Date.parse(b.started_at ?? "") - Date.parse(a.started_at ?? "");
       if (sortBy === "cost") {
         const left = a.cost_available === true ? a.cost : -1;
         const right = b.cost_available === true ? b.cost : -1;
@@ -136,20 +138,28 @@
   ]);
 
   let compareList = $derived(history.filter((h) => compareIds.has(h.id)));
-  let visibleHistory = $derived(history.slice(0, visibleHistoryLimit));
+  let visibleHistory = $derived([...history].sort((a,b) => {
+    if (sortBy === "cost") return (b.known_cost ?? -1) - (a.known_cost ?? -1);
+    if (sortBy === "tokens") return b.total_tokens - a.total_tokens;
+    if (sortBy === "duration") return b.duration_secs - a.duration_secs;
+    if (sortBy === "tps") return b.output_tokens / Math.max(b.duration_secs,1) - a.output_tokens / Math.max(a.duration_secs,1);
+    if (sortBy === "project") return a.project.localeCompare(b.project);
+    return Date.parse(b.started_at ?? "") - Date.parse(a.started_at ?? "");
+  }).slice(0, visibleHistoryLimit));
 
-  async function loadHistory(): Promise<void> {
+  let backgroundRefreshing = false;
+  async function loadHistory(background = false): Promise<void> {
+    if (background && (historyLoading || backgroundRefreshing)) return;
+    backgroundRefreshing = true;
     const request = ++historyRequest;
     const provider = $selectedAnalyticsProviderScope;
-    historyLoading = true;
+    if (!background) { historyLoading = true; showExport = false; compareIds = new Set(); }
     historyError = null;
-    showExport = false;
-    compareIds = new Set();
     try {
-      const useAdvanced = fromDate || toDate || minCost !== null || modelFilter;
+      const useAdvanced = fromDate || toDate || minCost !== null || modelFilter || historyDays === 1;
       const [nextSummary, nextHistory] = await Promise.all([
         getAnalyticsSummary(provider),
-        useAdvanced
+        searchQuery.trim() ? searchSessions(searchQuery, 500, provider) : useAdvanced
           ? getSessionHistoryFiltered({
               // Compose the selected date-range window with the advanced
               // filters: without an explicit From, fall back to the window
@@ -158,7 +168,7 @@
               // time. An explicit From always wins.
               from_iso: fromDate
                 ? new Date(fromDate).toISOString()
-                : historyDays > 0
+                : historyDays === 1 ? new Date(new Date().setHours(0,0,0,0)).toISOString() : historyDays > 0
                   ? new Date(Date.now() - historyDays * 86_400_000).toISOString()
                   : null,
               to_iso: toDate ? new Date(toDate + "T23:59:59").toISOString() : null,
@@ -172,16 +182,23 @@
       ]);
       if (request !== historyRequest) return;
       summary = nextSummary;
-      history = nextHistory;
-      visibleHistoryLimit = HISTORY_PAGE_SIZE;
-      knownProjects = [...new Set(nextHistory.map((session) => session.project))].sort();
+      const lower = fromDate ? Date.parse(fromDate + "T00:00:00") : historyDays === 1 ? new Date().setHours(0,0,0,0) : Date.now() - historyDays * 86_400_000;
+      const upper = toDate ? Date.parse(toDate + "T23:59:59") : Infinity;
+      history = searchQuery.trim() ? nextHistory.filter((row) => {
+        const time = Date.parse(row.started_at ?? "");
+        return time >= lower && time <= upper && (!projectFilter || row.project === projectFilter)
+          && (!modelFilter || `${row.model} ${row.model_id}`.toLowerCase().includes(modelFilter.toLowerCase()))
+          && (minCost === null || (row.known_cost !== null && row.known_cost >= minCost));
+      }) : nextHistory;
+      if (!background) visibleHistoryLimit = HISTORY_PAGE_SIZE;
+      knownProjects = [...new Set([...knownProjects,...nextHistory.map((session) => session.project)])].sort();
     } catch (error) {
       if (request !== historyRequest) return;
       historyError = error instanceof Error && error.message
         ? `Session history unavailable. ${error.message}`
         : "Session history unavailable. Pulse could not load your saved sessions.";
     } finally {
-      if (request === historyRequest) historyLoading = false;
+      if (request === historyRequest) { historyLoading = false; backgroundRefreshing = false; }
     }
   }
 
@@ -193,29 +210,7 @@
     loadHistory();
   }
 
-  async function doSearch(): Promise<void> {
-    if (!searchQuery.trim()) return loadHistory();
-    const request = ++historyRequest;
-    const provider = $selectedAnalyticsProviderScope;
-    historyLoading = true;
-    historyError = null;
-    showExport = false;
-    try {
-      const result = await searchSessions(searchQuery, 100, provider);
-      if (request === historyRequest && provider === $selectedAnalyticsProviderScope) {
-        history = result;
-        visibleHistoryLimit = HISTORY_PAGE_SIZE;
-      }
-    } catch (error) {
-      if (request === historyRequest) {
-        historyError = error instanceof Error && error.message
-          ? `Session search unavailable. ${error.message}`
-          : "Session search unavailable. Pulse could not complete the search.";
-      }
-    } finally {
-      if (request === historyRequest) historyLoading = false;
-    }
-  }
+  async function doSearch(): Promise<void> { await loadHistory(); }
 
   function toggleExpand(id: string): void {
     expandedId = expandedId === id ? null : id;
@@ -228,7 +223,11 @@
     compareIds = next;
   }
 
-  onMount(() => { loadHistory(); });
+  onMount(() => {
+    void loadHistory();
+    const timer = setInterval(() => { if (document.visibilityState !== "hidden") void loadHistory(true); }, 5000);
+    return () => clearInterval(timer);
+  });
   let previousProviderScope: string | undefined;
   $effect(() => {
     const provider = $selectedAnalyticsProviderScope;
@@ -246,17 +245,16 @@
   <div class="view-header">
     <div class="title-line">
       <h2 class="view-title">Sessions</h2>
-      <span class="view-sub">{filtered.length} active</span>
     </div>
     <div class="filters">
       <div class="filter-control project-control">
         <span class="control-label">Project</span>
         <Select
-          bind:value={projectFilter}
+          value={projectFilter}
           options={projectOptions}
           variant="inline"
           ariaLabel="Filter by project"
-          onchange={() => void (searchQuery.trim() ? doSearch() : loadHistory())}
+          onchange={(value) => { projectFilter = value; void loadHistory(); }}
         />
       </div>
       <div class="filter-control sort-control">
@@ -269,8 +267,8 @@
   <div class="stats-row metric-strip">
     <StatCard label="Active sessions" value={String(filtered.length)} />
     <StatCard label="Live tokens" value={filtered.length > 0 ? fmtTokens(totalTokens) : "—"} />
-    <StatCard label="Live monetary value" value={filtered.length > 0 ? fmtExactCost(totalCost, totalCostAvailable) : "—"} />
-    <StatCard label="Avg throughput" value={filtered.length > 0 ? fmtTps(avgTps) : "—"} />
+    {#if filtered.length > 0 && totalCostAvailable}<StatCard label="Reported value" value={fmtCost(totalCost)} />{/if}
+    {#if filtered.some((session) => session.tokens_per_sec > 0)}<StatCard label="Output rate" value={fmtTps(avgTps)} />{:else}<StatCard label="Output tokens" value={fmtTokens(totalOutput)} />{/if}
   </div>
 
   <div class="session-list">
@@ -336,9 +334,9 @@
         </label>
         {#if summary}
           <div class="history-summary">
-            <strong>{summary.total_sessions}</strong> sessions ·
+            All-time: <strong>{summary.total_sessions}</strong> sessions ·
             <strong>{summary.cost_basis === "unavailable" ? "—" : fmtCost(summary.total_cost)}</strong>
-            API-equivalent{summary.cost_basis === "partial" ? " · lower bound" : ""} ·
+            {monetaryValueLabel(summary.cost_sources)}{summary.cost_basis === "partial" ? " · known subtotal" : ""} ·
             <strong>{fmtTokens(summary.total_tokens)}</strong> tokens · top contributor
             <strong>{summary.top_project}</strong> · <strong>{summary.days_tracked}</strong> days
           </div>
@@ -350,7 +348,7 @@
       <section class="history-state error" role="alert">
         <strong>{history.length > 0 ? "Showing the last verified history" : historyError.split(".")[0]}</strong>
         <span>{historyError.split(".").slice(1).join(".").trim()}</span>
-        <button type="button" onclick={loadHistory}>Retry</button>
+        <button type="button" onclick={() => void loadHistory()}>Retry</button>
       </section>
     {:else if historyLoading}
       <section class="history-state" role="status">
@@ -449,6 +447,13 @@
             <tr class="ht-detail-row">
               <td colspan={compareMode ? 8 : 7}>
                 <div class="ht-detail" transition:fly={{ y: -8, duration: 150 }}>
+                  {#if h.opencode}
+                    <div class="model-provenance">
+                      <strong>{h.opencode.model_name || h.opencode.model_id}</strong>
+                      <span>{h.opencode.model_provider} · {h.opencode.surface} · {h.opencode.variant || "No variant reported"}</span>
+                      {#if h.opencode.models.length > 1}<ul>{#each h.opencode.models as model}<li>{model.provider_id}/{model.model_id}: {model.cost === null ? "Cost not reported" : fmtCost(model.cost)}</li>{/each}</ul>{/if}
+                    </div>
+                  {/if}
               <div class="detail-grid">
                 <div class="detail-section">
                   <span class="detail-label">Token Breakdown</span>
@@ -461,6 +466,9 @@
                   <span class="detail-label">Monetary Value Breakdown</span>
                   {#if h.known_cost === null}
                     <p class="detail-unavailable">The provider did not return enough billing inputs for this session.</p>
+                  {:else if h.opencode}
+                    <p class="detail-unavailable">OpenCode reports a total, not separate token-category charges.</p>
+                    <div class="detail-row"><span>Reported total</span><span>{fmtCost(h.total_cost)}</span></div>
                   {:else}
                     {#if h.cost_basis === "partial"}
                       <p class="detail-unavailable">Known subtotal; this session has incomplete cost coverage.</p>
@@ -516,11 +524,14 @@
 />
 
 <style>
+  .model-provenance { display: grid; gap: 6px; grid-column: 1 / -1; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+  .model-provenance strong { color: var(--text-primary); }
+  .model-provenance ul { padding-left: 18px; }
+
   .sessions-view { display: flex; flex-direction: column; gap: var(--page-gap); }
   .view-header { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
   .title-line { display: flex; align-items: center; gap: 10px; }
   .view-title { font-size: 20px; font-weight: 700; }
-  .view-sub { font-size: 11px; color: var(--text-muted); border: 1px solid var(--border); padding: 3px 9px; border-radius: 99px; font-family: var(--font-mono); }
   .filters { margin-left: auto; display: flex; align-items: end; gap: 10px; }
   .filter-control { display: grid; gap: 4px; min-width: 170px; }
   .project-control { min-width: 210px; }
@@ -660,4 +671,16 @@
     .flt, .flt.compact, .flt.model-filter { flex: 1 1 calc(50% - 8px); width: auto; min-width: 120px; }
     .filters { flex-direction: column; align-items: stretch; }
   }
+  @media (max-width: 620px) {
+    .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stats-row :global(.stat-card) { padding: 12px; min-width: 0; }
+    .filters :global(.segmented) { flex-wrap: wrap; }
+    .filters :global(.seg-opt) { min-height: 36px; }
+    .ht-col.model { white-space: normal; overflow-wrap: anywhere; }
+    .history-summary { white-space: normal; line-height: 1.6; }
+  }
+  .stats-row { grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); }
+  .filters { max-width:100%; }
+  .sort-control :global(.segmented) { flex-wrap:wrap; height:auto; min-height:32px; }
+  .sort-control :global(.seg-opt) { min-height:28px; }
 </style>

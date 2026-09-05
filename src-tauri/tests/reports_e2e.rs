@@ -22,6 +22,7 @@ struct Fixture {
 
 fn claude_session(id: &str, project: &str, model: &str) -> HistoricalSession {
     HistoricalSession {
+        opencode: None,
         id: id.to_string(),
         provider: Provider::Claude.as_str().to_string(),
         session_name: None,

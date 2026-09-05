@@ -1,222 +1,75 @@
 import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { get } from "svelte/store";
-import { beforeEach, describe, expect, it } from "vitest";
-import {
-  accessSnapshot,
-  backendConnection,
-    currentView,
-    selectedAnalyticsProviderScope,
-    selectedAccessSourceId,
-  sourceInspectorExpanded,
-} from "@/lib/stores";
-import AccessSourceBar from "@/components/AccessSourceBar.svelte";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { accessSnapshot, selectedAnalyticsProviderScope, selectedAccessSourceId } from "@/lib/stores";
+import { provider, setProvider } from "@/lib/provider";
 import type { AccessRouteSnapshot } from "@/lib/access";
-import { provider } from "@/lib/provider";
+import AccessSourceBar from "@/components/AccessSourceBar.svelte";
 
-function route(
-  id: string,
-  kind: AccessRouteSnapshot["source"]["kind"],
-  proof: AccessRouteSnapshot["source"]["proof"] = "quota_response",
-): AccessRouteSnapshot {
-  return {
-    source: {
-      id,
-      kind,
-      provider: kind.includes("claude") ? "claude" : kind.includes("anthropic") ? "anthropic" : kind.includes("open_ai") ? "openai" : "codex",
-      auth_method: kind.endsWith("_api") ? "api_key" : kind.startsWith("codex") ? "app_server" : "oauth",
-      proof,
-      plan: kind === "codex_subscription"
-        ? "Pro 20x"
-        : kind === "claude_subscription"
-          ? "Max 20x"
-          : null,
-    },
-    availability: "available",
-    freshness: "fresh",
-    provenance: "provider_api",
-    observed_at: "2026-08-01T14:00:00Z",
-    fetched_at: "2026-08-01T14:00:01Z",
-    expires_at: "2026-08-01T14:00:31Z",
-    windows: [],
-    credits: null,
-    extra_usage: null,
-    local_history: { available: false, sessions: 0 },
-    error: null,
-  };
+vi.mock("@/lib/provider", async () => {
+  const { writable } = await import("svelte/store");
+  const provider = writable("codex");
+  return { provider, setProvider: vi.fn(async (next: string) => { provider.set(next); }) };
+});
+function route(id: string, kind: AccessRouteSnapshot["source"]["kind"], product: AccessRouteSnapshot["source"]["provider"], plan: string | null = null): AccessRouteSnapshot {
+  return {source:{id,kind,provider:product,plan,auth_method:"api_key",proof:"quota_response"},availability:"available",freshness:"fresh",provenance:"provider_api",observed_at:null,fetched_at:null,expires_at:null,windows:[],credits:null,extra_usage:null,local_history:{available:false,sessions:0},error:null};
 }
 
-describe("AccessSourceBar", () => {
-  beforeEach(() => {
-    accessSnapshot.set(null);
-    backendConnection.set("connecting");
-    currentView.set("dashboard");
-    provider.set("claude");
-    selectedAccessSourceId.set("all");
-    sourceInspectorExpanded.set(false);
-  });
-
-  it("renders authenticated subscription and API lanes separately", () => {
-    accessSnapshot.set({
-      routes: [
-        route("codex-sub", "codex_subscription"),
-        route("openai-api", "open_ai_api", "authenticated_probe"),
-        route("unproved", "anthropic_api", "none"),
-      ],
-    });
-
-    const { container } = render(AccessSourceBar);
-    const labels = [...container.querySelectorAll("[data-access-source]")]
-      .map((node) => node.textContent?.replace(/\s+/g, " ").trim());
-
-    expect(labels).toEqual([
-      expect.stringContaining("Codex"),
-      expect.stringContaining("OpenAI"),
-      expect.stringContaining("All providers"),
-    ]);
-    expect(container.textContent).toContain("Subscription");
-    expect(container.textContent).toContain("API");
-    expect(container.textContent).not.toContain("Anthropic");
-  });
-
-  it("treats a successful API authentication without quota counters as healthy", () => {
-    const api = route("openai-api", "open_ai_api", "authenticated_probe");
-    api.availability = "unavailable";
-    api.freshness = "unknown";
-    accessSnapshot.set({ routes: [api] });
-    backendConnection.set("live");
-
-    const { getByLabelText, getByText } = render(AccessSourceBar);
-
-    expect(getByLabelText("Authenticated")).toBeTruthy();
-    expect(getByText("All sources live")).toBeTruthy();
-  });
-
-  it("switches the active provider when the only source is auto-selected", async () => {
-    provider.set("claude");
-    accessSnapshot.set({ routes: [route("codex-sub", "codex_subscription")] });
-
-    render(AccessSourceBar);
-
-    await waitFor(() => {
-      expect(get(provider)).toBe("codex");
-      expect(get(selectedAccessSourceId)).toBe("codex-sub");
-    });
-  });
-
-  it("shows an honest empty state when no route has provider proof", () => {
-    accessSnapshot.set({
-      routes: [route("unproved", "open_ai_api", "none")],
-    });
-
-    const { getByText } = render(AccessSourceBar);
-    expect(getByText("No authenticated usage source")).toBeTruthy();
-  });
-
-  it("shows expired Claude as selectable local history without claiming live proof", async () => {
-    provider.set("codex");
-    const claude = route("claude-sub", "claude_subscription", "none");
-    claude.source.plan = null;
-    claude.availability = "unavailable";
-    claude.freshness = "unknown";
-    claude.local_history = { available: true, sessions: 300 };
-    claude.error = "token expired";
-    claude.unavailable_reason = "expired";
-    accessSnapshot.set({
-      routes: [
-        route("codex-sub", "codex_subscription"),
-        claude,
-      ],
-    });
-
-    const { getByRole } = render(AccessSourceBar);
-    const source = getByRole("button", { name: /Claude.*Session expired/i });
-    expect(source).toBeTruthy();
-    expect(source.textContent).not.toContain("Live");
-    await fireEvent.click(source);
-    expect(get(selectedAccessSourceId)).toBe("claude-sub");
-    expect(get(selectedAnalyticsProviderScope)).toBe("claude");
-    expect(get(provider)).toBe("codex");
-  });
-
-  it("gives Claude sign-in history one concise accessible name", () => {
-    const claude = route("claude-sub", "claude_subscription", "none");
-    claude.source.plan = null;
-    claude.availability = "unavailable";
-    claude.freshness = "unknown";
-    claude.local_history = { available: true, sessions: 12 };
-    accessSnapshot.set({ routes: [claude] });
-
-    const { getByRole } = render(AccessSourceBar);
-    const source = getByRole("button", { name: "Claude — sign in required" });
-    expect(source.textContent).toContain("Sign in required");
-    expect(source.querySelector(".source-dot")?.getAttribute("aria-label")).toBe("Sign in state");
-    expect(source.querySelector(".source-dot")?.hasAttribute("title")).toBe(false);
-  });
-
-  it("turns the empty source state into one compact diagnostics action", () => {
-    accessSnapshot.set({
-      routes: [route("unproved", "open_ai_api", "none")],
-    });
-
+describe("unified provider selector", () => {
+  beforeEach(() => { vi.mocked(setProvider).mockClear(); provider.set("codex"); accessSnapshot.set({routes:[]}); selectedAnalyticsProviderScope.set("all"); selectedAccessSourceId.set("all"); });
+  it("renders one selector with OpenCode even without account quotas", () => {
     const { container, getByRole } = render(AccessSourceBar);
-    expect(container.querySelector(".access-bar.empty")).not.toBeNull();
-    expect(getByRole("button", { name: "Inspect provider diagnostics" })).toBeTruthy();
-    expect(container.querySelectorAll(".health-summary")).toHaveLength(0);
+    expect(container.querySelectorAll("section")).toHaveLength(1);
+    expect(getByRole("button", {name:/OpenCode Desktop/})).toBeTruthy();
+    expect(getByRole("button", {name:/All providers/})).toBeTruthy();
+    expect(container.textContent).not.toContain("All sessions");
+    expect(container.textContent).not.toContain("independent of account quotas");
   });
-
-  it("changes the shared workspace filter when a source is selected", async () => {
-    accessSnapshot.set({
-      routes: [
-        route("codex-sub", "codex_subscription"),
-        route("claude-sub", "claude_subscription"),
-      ],
-    });
-
-    const { getByRole } = render(AccessSourceBar);
-    await fireEvent.click(getByRole("button", { name: /Claude Max 20x Subscription/ }));
-
-    expect(get(selectedAccessSourceId)).toBe("claude-sub");
-    expect(getByRole("button", { name: /Claude Max 20x Subscription/ }).getAttribute("aria-pressed")).toBe("true");
+  it("manually selects native OpenCode for analytics and app context without inventing an account", async () => {
+    const {getByRole}=render(AccessSourceBar);
+    await fireEvent.click(getByRole("button",{name:/OpenCode Desktop/}));
+    await waitFor(()=>expect(get(selectedAnalyticsProviderScope)).toBe("opencode"));
+    expect(setProvider).toHaveBeenCalledWith("opencode");
+    expect(get(selectedAccessSourceId)).toBe("local:opencode");
   });
-
-  it("opens provider diagnostics in Settings instead of adding diagnostics to Home", async () => {
-    accessSnapshot.set({ routes: [route("codex-sub", "codex_subscription")] });
-    backendConnection.set("live");
-    currentView.set("sessions");
-    const { getByRole } = render(AccessSourceBar);
-
-    await fireEvent.click(getByRole("button", { name: "Inspect source health" }));
-    expect(get(sourceInspectorExpanded)).toBe(true);
-    expect(get(currentView)).toBe("settings");
+  it("keeps the broadcaster when selecting the aggregate", async () => {
+    provider.set("opencode"); selectedAnalyticsProviderScope.set("opencode");
+    const {getByRole}=render(AccessSourceBar);
+    await fireEvent.click(getByRole("button",{name:/All providers/}));
+    expect(get(selectedAnalyticsProviderScope)).toBe("all"); expect(get(provider)).toBe("opencode");
+    expect(setProvider).not.toHaveBeenCalled();
   });
-
-  it("includes failed and stale diagnostic lanes in source health", () => {
-    const failed = route("anthropic-api", "anthropic_api", "none");
-    failed.availability = "unavailable";
-    failed.freshness = "unknown";
-    failed.error = "authentication failed";
-
-    accessSnapshot.set({
-      routes: [
-        route("codex-sub", "codex_subscription"),
-        failed,
-      ],
-    });
-    backendConnection.set("live");
-
-    const { getByText } = render(AccessSourceBar);
-    expect(getByText("Needs attention")).toBeTruthy();
+  it("does not auto-switch when an account appears", () => {
+    accessSnapshot.set({routes:[route("claude","claude_subscription","claude","max_5x")]});
+    render(AccessSourceBar); expect(get(provider)).toBe("codex"); expect(setProvider).not.toHaveBeenCalled();
   });
-
-  it("never labels stale provider proof as live", () => {
-    const stale = route("codex-sub", "codex_subscription");
-    stale.freshness = "stale";
-    accessSnapshot.set({ routes: [stale] });
-    backendConnection.set("live");
-
-    const { getByRole } = render(AccessSourceBar);
-    const source = getByRole("button", { name: /Codex Pro 20x Subscription/ });
-    expect(source.querySelector(".source-dot")?.getAttribute("data-state")).toBe("stale");
-    expect(source.textContent).not.toContain("Live");
+  it("shows provider-reported plan labels", () => {
+    accessSnapshot.set({routes:[route("codex","codex_subscription","codex","pro_20x")]});
+    const {getByRole}=render(AccessSourceBar); expect(getByRole("button",{name:/Codex Pro 20x/})).toBeTruthy();
+  });
+  it("associates Go quotas with OpenCode rather than Codex", async () => {
+    accessSnapshot.set({routes:[route("go","open_code_go","opencode")]});
+    const {getByRole}=render(AccessSourceBar); await fireEvent.click(getByRole("button",{name:/OpenCode Go Go subscription/}));
+    await waitFor(()=>expect(get(selectedAccessSourceId)).toBe("go"));
+    expect(get(selectedAnalyticsProviderScope)).toBe("opencode");
+  });
+  it("does not expose unproved API routes as connected sources", () => {
+    const api=route("api","open_ai_api","openai"); api.source.proof="none";
+    accessSnapshot.set({routes:[api]}); const {container}=render(AccessSourceBar);
+    expect(container.querySelector('[data-provider="openai"]')).toBeNull();
+  });
+  it("selects a proven API lane without changing the native broadcaster", async () => {
+    accessSnapshot.set({routes:[route("api","open_ai_api","openai")]});
+    const {getByRole}=render(AccessSourceBar); await fireEvent.click(getByRole("button",{name:/OpenAI API/}));
+    expect(get(selectedAnalyticsProviderScope)).toBe("openai"); expect(get(provider)).toBe("codex");
+  });
+  it("keeps the previous selection when persistence fails", async () => {
+    vi.mocked(setProvider).mockRejectedValueOnce(new Error("write failed"));
+    const {getByRole}=render(AccessSourceBar); await fireEvent.click(getByRole("button",{name:/OpenCode Desktop/}));
+    await waitFor(()=>expect(setProvider).toHaveBeenCalled()); expect(get(selectedAnalyticsProviderScope)).toBe("all");
+  });
+  it("provides a single labelled native mobile selector", () => {
+    const {getByRole}=render(AccessSourceBar); const select=getByRole("combobox",{name:"Provider"});
+    expect(select.querySelectorAll("option")).toHaveLength(4);
   });
 });

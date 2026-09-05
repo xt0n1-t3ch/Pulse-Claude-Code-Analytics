@@ -486,7 +486,7 @@ describe("poll() to stores to Dashboard full flow", () => {
     await tick();
 
     await waitFor(() => expect(getByText("Provider limits")).toBeTruthy());
-    expect(getByText("Live workspace")).toBeTruthy();
+    expect(getByText("Working now")).toBeTruthy();
     expect(container.querySelector(".stats-row")).toBeNull();
     await waitFor(() => {
       expect(container.querySelectorAll("[data-session-instance]").length).toBe(2);

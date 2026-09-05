@@ -14,6 +14,9 @@ describe("Heatmap.svelte", () => {
     });
 
     expect(container.querySelectorAll(".heatmap-cell")).toHaveLength(24);
+    expect(container.querySelectorAll(".heatmap-label")).toHaveLength(24);
+    expect(container.querySelector(".heatmap-label")?.textContent).toBe("12 AM");
+    expect([...container.querySelectorAll(".heatmap-label")].at(-1)?.textContent).toBe("11 PM");
     expect(getByText("5 sessions")).toBeTruthy();
     expect(getByText("2 active hours")).toBeTruthy();
     expect(getByText("Peak 9 AM")).toBeTruthy();

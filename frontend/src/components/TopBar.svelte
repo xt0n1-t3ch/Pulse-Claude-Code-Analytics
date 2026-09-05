@@ -135,32 +135,26 @@
   .app-nav {
     min-width: 0;
     display: flex;
-    align-items: stretch;
+    align-items: center;
     gap: 3px;
     -webkit-app-region: no-drag;
   }
 
   .app-nav button {
     position: relative;
+    min-height: 32px;
     padding: 0 10px;
-    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
     font-size: 11px;
     font-weight: 500;
     white-space: nowrap;
   }
 
-  .app-nav button:hover { color: var(--text-secondary); }
-  .app-nav button.active { color: var(--text-primary); }
-  .app-nav button.active::after {
-    content: "";
-    position: absolute;
-    right: 10px;
-    bottom: 8px;
-    left: 10px;
-    height: 2px;
-    background: var(--provider-accent);
-    border-radius: var(--radius-full);
-  }
+  .app-nav button:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .app-nav button.active { color: var(--text-primary); background: var(--surface-raised); border-color: var(--text-muted); font-weight: 650; }
+  .app-nav button:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 2px; }
 
   .header-context {
     min-width: 0;
@@ -213,7 +207,6 @@
     .header-context { display: none; }
     .app-header { gap: 10px; padding-left: 12px; }
     .app-nav button { padding-inline: 7px; }
-    .app-nav button.active::after { right: 7px; left: 7px; }
   }
 
   @media (max-width: 800px) {
@@ -241,10 +234,13 @@
     }
     .app-nav::-webkit-scrollbar { display: none; }
     .app-nav button { min-width: max-content; padding-inline: 12px; }
-    .app-nav button.active::after { right: 12px; bottom: 4px; left: 12px; }
   }
 
-  @media (max-width: 460px) {
-    .brand span { display: none; }
+  @media (max-width: 620px) {
+    .app-header { height: auto; flex-shrink: 0; grid-template: "brand spacer actions" 44px "nav nav nav" auto / auto 1fr auto; }
+    .app-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; padding-block: 3px; }
+    .app-nav button { min-width: 0; min-height: 36px; padding-inline: 4px; text-align: center; }
+    .brand span { display: grid; }
+    .brand small { display: none; }
   }
 </style>

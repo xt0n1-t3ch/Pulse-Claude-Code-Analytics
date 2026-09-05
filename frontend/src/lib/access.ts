@@ -2,10 +2,12 @@ export type AccessKind =
   | "codex_subscription"
   | "open_ai_api"
   | "claude_subscription"
-  | "anthropic_api";
+  | "anthropic_api"
+  | "open_code_local"
+  | "open_code_go";
 
-export type AccessProvider = "codex" | "claude" | "openai" | "anthropic";
-export type AnalyticsProviderScope = AccessProvider | "all";
+export type AccessProvider = "codex" | "claude" | "openai" | "anthropic" | "opencode";
+export type AnalyticsProviderScope = AccessProvider | "opencode" | "all";
 export type AccessProof =
   | "authenticated_probe"
   | "quota_response"
@@ -94,8 +96,10 @@ export interface AccessSnapshot {
 
 const KIND_LABELS: Record<
   AccessKind,
-  { product: string; access: "Subscription" | "API" }
+  { product: string; access: "Subscription" | "API" | "Local" }
 > = {
+  open_code_go: { product: "OpenCode Go", access: "Subscription" },
+  open_code_local: { product: "OpenCode", access: "Local" },
   codex_subscription: { product: "Codex", access: "Subscription" },
   open_ai_api: { product: "OpenAI", access: "API" },
   claude_subscription: { product: "Claude", access: "Subscription" },
@@ -104,7 +108,7 @@ const KIND_LABELS: Record<
 
 export function accessKindLabel(kind: AccessKind): {
   product: string;
-  access: "Subscription" | "API";
+  access: "Subscription" | "API" | "Local";
 } {
   return KIND_LABELS[kind];
 }

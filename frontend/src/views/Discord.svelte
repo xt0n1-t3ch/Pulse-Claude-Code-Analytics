@@ -16,7 +16,7 @@
     previewToDisplayPrefs,
     refreshDiscordPresencePreview,
   } from "../lib/stores";
-  import { provider, providerProfile, PROVIDERS, type Provider } from "../lib/provider";
+  import { provider, providerProfile, PROVIDERS, setProvider, type Provider } from "../lib/provider";
   import {
     setCodexDesktopDesign,
     setDiscordDisplayPrefs,
@@ -115,7 +115,7 @@
   /** Fields the active provider cannot actually persist, so they are shown as
    *  unavailable instead of as a switch that silently snaps back. */
   let unsupportedFields = $derived(
-    new Set<FieldId>($discordSettings?.supports_credits === false ? ["credits"] : []),
+    new Set<FieldId>($provider === "opencode" ? ["credits", "systems"] : $discordSettings?.supports_credits === false ? ["credits"] : []),
   );
 
   type Preset = "minimal" | "standard" | "full";
@@ -154,26 +154,14 @@
   }
 
 
-  let previewProvider = $derived(
-    $selectedAnalyticsProviderScope === "all"
-      ? $provider
-      : $selectedAnalyticsProviderScope,
-  );
+  let previewProvider = $derived($provider);
   let previewSession = $derived(
     previewProvider
       ? $activeSessions.find((session) => session.provider === previewProvider)
         ?? $sessions.find((session) => session.provider === previewProvider)
       : undefined,
   );
-  let scopedPresencePreview = $derived(
-    $discordPresencePreview
-    && providerMatchesAnalyticsScope(
-      $discordPresencePreview.provider,
-      $selectedAnalyticsProviderScope,
-    )
-      ? $discordPresencePreview
-      : null,
-  );
+  let scopedPresencePreview = $derived($discordPresencePreview?.provider === $provider ? $discordPresencePreview : null);
   let activeSessionCount = $derived(
     $activeSessions.filter((session) =>
       providerMatchesAnalyticsScope(session.provider, $selectedAnalyticsProviderScope),
@@ -181,7 +169,7 @@
   );
   let previewProfile = $derived.by(() => {
     const candidate = scopedPresencePreview?.provider ?? previewSession?.provider ?? previewProvider;
-    return candidate === "claude" || candidate === "codex"
+    return candidate === "claude" || candidate === "codex" || candidate === "opencode"
       ? PROVIDERS[candidate as Provider]
       : $providerProfile;
   });
@@ -191,7 +179,7 @@
     rpArtFor(
       scopedPresencePreview?.provider
         ?? previewSession?.provider
-        ?? (previewProvider === "claude" || previewProvider === "codex" ? previewProvider : $provider),
+        ?? (previewProvider === "claude" || previewProvider === "codex" || previewProvider === "opencode" ? previewProvider : $provider),
       scopedPresencePreview?.large_image_key,
       scopedPresencePreview?.large_text,
     ),
@@ -407,14 +395,14 @@
    * "Broadcasting" would contradict the IPC diagnostic beside it.
    */
   let broadcastState = $derived(
-    !discordEnabled ? "paused" : ipcConnected ? "live" : "waiting",
+    !discordEnabled ? "paused" : $provider === "opencode" && scopedPresencePreview?.has_session === false ? "idle" : ipcConnected ? "live" : "waiting",
   );
   let broadcastLabel = $derived(
-    broadcastState === "live"
-      ? "Broadcasting"
-      : broadcastState === "waiting"
-        ? "Waiting for Discord"
-        : "Paused",
+    !discordEnabled ? "Paused"
+      : broadcastState === "idle" ? "OpenCode is idle"
+      : $discordSettings?.publisher === "external_daemon" ? "Desktop app controls presence"
+      : broadcastState === "live" ? "Broadcasting"
+      : "Waiting for Discord",
   );
 
   /**
@@ -446,14 +434,21 @@
     void $discordUser?.banner_url;
     bannerFailed = false;
   });
+  async function changeBroadcastProvider(next: Provider): Promise<void> {
+    if (settingsPending || next === $provider) return;
+    settingsPending = true;
+    try { await setProvider(next); await loadDiscordSettings(); await refreshDiscordPresencePreview(); }
+    catch (error) { addToast(`Could not switch broadcast application: ${String(error)}`, "danger"); }
+    finally { settingsPending = false; }
+  }
 </script>
 
 <div class="discord-view app-view" style="--provider-accent: {previewProfile.accent}">
   <div class="view-header">
     <div class="view-title-group">
-      <h2 class="view-title">Broadcast</h2>
+      <h2 class="view-title">Discord</h2>
       <span class="view-sub">
-        {activeCount}/{availableFieldCount} fields · {previewProfile.productName}
+        {presenceAppName} · {activeCount} fields enabled
       </span>
     </div>
     <div class="header-meta">
@@ -485,6 +480,17 @@
     </div>
   </div>
 
+  <section class="broadcast-source" aria-label="Discord broadcast application">
+    <div><h3>Broadcast from</h3><p>This choice controls Discord, not your analytics filters.</p></div>
+    <div class="broadcast-options" role="group" aria-label="Broadcast application">
+      {#each ["claude", "codex", "opencode"] as id}
+        <button type="button" class:active={$provider === id} aria-pressed={$provider === id} disabled={settingsPending}
+          onclick={() => changeBroadcastProvider(id as Provider)}>
+          <img src={rpArtFor(id, id === "codex" ? "codex-app" : undefined).large} alt="" />{PROVIDERS[id as Provider].label}
+        </button>
+      {/each}
+    </div>
+  </section>
   <div class="discord-layout">
     <!-- LEFT: Control column — one tall card, 3 sections -->
     <section class="control-card">
@@ -498,9 +504,9 @@
           <span class="bt-text">
             <span class="bt-title">Rich Presence</span>
             <span class="bt-sub">
-              {discordEnabled
-                ? `Broadcasting your ${presenceAppName} session to Discord`
-                : "Presence is paused — Discord shows no activity"}
+              {broadcastState === "live"
+                ? `Publishing your ${presenceAppName} session to Discord`
+                : discordEnabled ? `Ready to publish ${presenceAppName} when this instance owns Discord` : "Presence is paused"}
             </span>
           </span>
         </label>
@@ -540,16 +546,15 @@
         <div class="cc-section-head">
           <div class="cc-section-text">
             <h3 class="cc-section-title">Preset</h3>
-            <p class="cc-section-desc">Pick a density, or hand-tune the fields below.</p>
+            <p class="cc-section-desc">Start with a preset, then choose the details you want to share.</p>
           </div>
-          <div class="preset-seg" role="tablist" aria-label="Field preset">
+          <div class="preset-seg" role="group" aria-label="Field preset">
             {#each presetOrder as name}
               <button
                 type="button"
-                role="tab"
                 class="preset-opt"
                 class:active={activePreset === name}
-                aria-selected={activePreset === name}
+                aria-pressed={activePreset === name}
                 disabled={settingsPending}
                 onclick={() => applyPreset(name)}
               >{name.charAt(0).toUpperCase() + name.slice(1)}</button>
@@ -563,7 +568,7 @@
         <div class="cc-section-head cc-fields-head">
           <div class="cc-section-text">
             <h3 class="cc-section-title">Fields</h3>
-            <p class="cc-section-desc">Toggle visibility and reorder fields. The backend generates the exact preview.</p>
+            <p class="cc-section-desc">Enabled fields appear only when their data is available. Order controls the priority within each line.</p>
           </div>
           <span class="field-count">
             <span class="fc-num">{activeCount}</span><span class="fc-den">/{availableFieldCount}</span>
@@ -608,7 +613,7 @@
     <!-- RIGHT: Stage — live Discord profile preview -->
     <aside class="stage">
       <div class="stage-label">
-        <span class="sl-text">Live preview</span>
+        <span class="sl-text">Your Discord profile</span>
         <span class="sl-meta">
           <span class="sl-preset">{activePreset ? activePreset.charAt(0).toUpperCase() + activePreset.slice(1) : "Custom"}</span>
           <span class="sl-div">·</span>
@@ -617,15 +622,13 @@
         </span>
       </div>
 
-      <div class="dp-profile">
+      <div class="dp-profile" class:no-banner={!$discordUser?.banner_url || bannerFailed}>
         {#if $discordUser?.banner_url && !bannerFailed}
           <div class="dp-banner" style="background-image: url({$discordUser.banner_url});">
             <!-- A CSS background can't report load errors, so a hidden probe
                  mirrors the same URL and drops to the default banner on 404. -->
             <img class="dp-banner-probe" src={$discordUser.banner_url} alt="" aria-hidden="true" onerror={() => (bannerFailed = true)} />
           </div>
-        {:else}
-          <div class="dp-banner dp-banner-default"></div>
         {/if}
         <div class="dp-body">
           <div class="dp-avatar-ring">
@@ -645,9 +648,9 @@
             <div class="dp-handle">@{$discordUser.username}</div>
           {/if}
           <div class="dp-separator"></div>
-          <div class="dp-section-title">Current Activity</div>
+          <div class="dp-section-title">{$provider === "opencode" && scopedPresencePreview?.has_session === false ? "No active session" : "Current Activity"}</div>
           <div class="dp-activity-card">
-            <div class="dp-activity-header">Playing a game</div>
+            <div class="dp-activity-header">{$provider === "opencode" && scopedPresencePreview?.has_session === false ? "Idle" : "Playing"}</div>
             <div class="dp-activity-body">
               <div class="dp-activity-art" title={previewArt.largeText}>
                 <img class="dp-art-large" src={previewArt.large} alt={previewArt.largeText} draggable="false" />
@@ -661,12 +664,6 @@
                       aria-hidden="true"
                       draggable="false"
                     />
-                  {:else}
-                    <span
-                      class="dp-art-small dp-art-small-fallback"
-                      title={scopedPresencePreview.small_text ?? ""}
-                      aria-hidden="true"
-                    ><PulseMark size={22} /></span>
                   {/if}
                 {/if}
               </div>
@@ -687,6 +684,16 @@
 </div>
 
 <style>
+  .broadcast-source { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 0; border-block: 1px solid var(--border); }
+  .broadcast-source h3 { font-size: 14px; color: var(--text-primary); margin-bottom: 5px; }
+  .broadcast-source p { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+  .broadcast-options { display: flex; flex-wrap: wrap; gap: 8px; }
+  .broadcast-options button { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); min-height: 42px; }
+  .broadcast-options button.active { border-color: var(--provider-accent); color: var(--text-primary); background: var(--bg-elevated); }
+  .broadcast-options img { width: 22px; height: 22px; border-radius: 5px; }
+  .broadcast-options button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media(max-width: 700px) { .broadcast-source { align-items: flex-start; flex-direction: column; } }
+
   .discord-view {
     display: flex;
     flex-direction: column;
@@ -990,7 +997,7 @@
   .field-cell:hover { background: var(--bg-card-hover); }
   /* Provider cannot broadcast this field, so it reads as unavailable rather than
      as an switch that would silently revert. */
-  .field-cell.unavailable { opacity: 0.45; }
+  .field-cell.unavailable .field-label { color: var(--text-muted); }
   .field-cell.unavailable:hover { background: transparent; }
   .field-cell:nth-child(-n+2) { border-top: none; }
   .field-cell:nth-child(2n+1) { border-left: none; }
@@ -1104,11 +1111,6 @@
     background: linear-gradient(180deg, transparent 55%, color-mix(in srgb, var(--surface-panel) 35%, transparent) 100%);
     pointer-events: none;
   }
-  .dp-banner-default {
-    background:
-      radial-gradient(120% 140% at 15% 0%, color-mix(in srgb, var(--provider-accent) 30%, transparent) 0%, transparent 62%),
-      linear-gradient(135deg, color-mix(in srgb, var(--provider-accent) 18%, var(--bg-elevated)) 0%, var(--bg-elevated) 72%);
-  }
 
   .dp-avatar-ring {
     position: relative;
@@ -1219,7 +1221,6 @@
     -webkit-user-drag: none;
     user-select: none;
   }
-  .dp-art-small-fallback { display: flex; align-items: center; justify-content: center; overflow: hidden; }
   .dp-activity-info {
     display: flex;
     flex-direction: column;
@@ -1239,9 +1240,9 @@
   .dp-activity-state {
     font-size: 12.5px;
     color: var(--text-secondary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+
+    white-space: normal;
     line-height: 1.35;
   }
   .dp-activity-elapsed {
@@ -1263,4 +1264,9 @@
     .dp-activity-card { margin-inline: 10px; }
   }
 
+  .dp-profile.no-banner .dp-avatar-ring { margin-top:18px; }
+  .stage-label .sl-text { font-size:12px; text-transform:none; letter-spacing:0; font-weight:600; }
+  .dp-activity-card { padding:16px; }
+  .dp-activity-info { line-height:1.55; }
+  .dp-activity-state { margin-top:4px; font-size:12px; }
 </style>

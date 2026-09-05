@@ -32,7 +32,10 @@ foreach ($path in $required) {
   }
 }
 
-$temporary = "$output.tmp-$([guid]::NewGuid().ToString('N'))"
+$temporary = [System.IO.Path]::GetFullPath("$output.tmp-$([guid]::NewGuid().ToString('N'))")
+if (-not $temporary.StartsWith("$output.tmp-", [System.StringComparison]::Ordinal) -or [System.IO.Path]::GetDirectoryName($temporary) -ne [System.IO.Path]::GetDirectoryName($output)) {
+  throw "Temporary release path must remain beside the explicit output directory"
+}
 try {
   New-Item -ItemType Directory -Path $temporary | Out-Null
   foreach ($path in $required) {

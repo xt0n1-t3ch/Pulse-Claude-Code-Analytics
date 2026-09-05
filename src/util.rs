@@ -108,13 +108,7 @@ pub fn now_local() -> String {
 }
 
 pub fn format_cost(cost: f64) -> String {
-    if cost < 0.01 {
-        format!("${:.4}", cost)
-    } else if cost < 1.0 {
-        format!("${:.3}", cost)
-    } else {
-        format!("${:.2}", cost)
-    }
+    format!("${:.2}", if cost.is_finite() { cost.max(0.0) } else { 0.0 })
 }
 
 pub fn format_time_until_reset(reset_time: DateTime<Utc>) -> String {
@@ -150,8 +144,8 @@ mod tests {
 
     #[test]
     fn cost_formatting() {
-        assert_eq!(format_cost(0.001), "$0.0010");
-        assert_eq!(format_cost(0.042), "$0.042");
+        assert_eq!(format_cost(0.001), "$0.00");
+        assert_eq!(format_cost(0.042), "$0.04");
         assert_eq!(format_cost(1.50), "$1.50");
         assert_eq!(format_cost(12.345), "$12.35");
     }

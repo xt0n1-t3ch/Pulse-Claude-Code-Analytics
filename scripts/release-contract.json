@@ -2,7 +2,7 @@
   "schema_version": 1,
   "product": {
     "name": "pulse",
-    "version": "1.7.9"
+    "version": "1.8.0"
   },
   "core": {
     "package": "codex-presence-core",
@@ -16,7 +16,7 @@
     "source": "src/codex/config.rs"
   },
   "database": {
-    "schema_version": 5,
+    "schema_version": 6,
     "source": "src-tauri/src/db.rs"
   },
   "release": {

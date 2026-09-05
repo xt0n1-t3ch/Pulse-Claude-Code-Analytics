@@ -1,7 +1,9 @@
 <script lang="ts">
+  import OpenCodeMark from "./OpenCodeMark.svelte";
   import { IconShieldCheck } from "@tabler/icons-svelte";
   import codexMark from "../assets/rp/codex-app.png";
   import claudeMark from "../assets/rp/claude.svg";
+  import openCodeMark from "../assets/rp/opencode.png";
   import openAiMark from "../assets/rp/chatgpt-app.jpg";
   import { selectedAccessRoutes, selectedAccessDiagnostics } from "../lib/stores";
   import {
@@ -39,6 +41,7 @@
   });
 
   function markFor(kind: AccessKind): string {
+    if (kind === "open_code_go") return openCodeMark;
     if (kind === "claude_subscription" || kind === "anthropic_api") return claudeMark;
     if (kind === "open_ai_api") return openAiMark;
     return codexMark;
@@ -57,6 +60,7 @@
   }
 
   function canonicalWindowLabel(window: AccessQuotaWindow): string {
+    if (window.key.startsWith("opencode-go:") && window.label) return window.label;
     const minutes = window.window_minutes;
     if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) {
       return `${windowLabel(window)} limit`;
@@ -127,7 +131,7 @@
         {@const label = accessKindLabel(route.source.kind)}
         <article class="allowance-card">
           <header>
-            <img src={markFor(route.source.kind)} alt="" />
+            {#if route.source.kind === "open_code_go"}<OpenCodeMark />{:else}<img src={markFor(route.source.kind)} alt="" />{/if}
             <div>
               <strong>{accessSourceName(route.source)}</strong>
               <span>{label.access}</span>
@@ -140,7 +144,7 @@
               {#each route.windows as window, index (`${route.source.id}:${window.key}:${window.window_minutes ?? "native"}:${index}`)}
                 {@const presentation = allowancePresentation(route, window)}
                 {@const primaryLabel = canonicalWindowLabel(window)}
-                {@const modelLabel = route.source.kind === "codex_subscription" ? modelWindowLabel(window) : null}
+                {@const modelLabel = modelWindowLabel(window)}
                 <section class="window-row">
                   <div class="window-copy">
                     <div class="window-name">
@@ -155,6 +159,7 @@
                   </div>
                   <div
                     class="window-meter"
+                    role="img"
                     aria-label={`${primaryLabel} ${modelLabel ? `${modelLabel} ` : ""}${presentation == null ? "unavailable" : `${Math.round(presentation.percent)}% ${presentation.direction}`}`}
                   >
                     <span style={`width:${presentation?.percent ?? 0}%`}></span>
@@ -169,7 +174,7 @@
             </div>
           {/if}
 
-          {#if route.extra_usage}
+          {#if route.extra_usage && route.extra_usage.used != null}
             <div class="api-summary">
               <span>Month-to-date usage</span>
               <strong>
@@ -232,7 +237,7 @@
 <style>
   .allowance-rail {
     min-width: 0;
-    height: 100%;
+    height: auto;
     padding: 20px;
     /* Column of the shared Dashboard home-grid card. It contributes no border,
        radius, or shadow of its own; the parent grid owns the surface. */
@@ -250,7 +255,7 @@
   .rail-head h2 { font-size: 19px; letter-spacing: -0.03em; }
   .rail-head p { max-width: 260px; margin-top: 5px; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
 
-  .allowance-list { display: grid; }
+  .allowance-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 0 24px; align-items: start; }
   .allowance-card {
     min-width: 0;
     padding: 15px 0;
@@ -376,11 +381,7 @@
   }
   .al-sub { color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 
-  @media (max-width: 980px) {
-    .allowance-list { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
-    .allowance-card { padding-right: 18px; }
-    .allowance-card + .allowance-card { padding-left: 18px; border-left: 1px solid var(--divider); }
-  }
+
 
   @media (max-width: 620px) {
     .allowance-card { padding-right: 0; }

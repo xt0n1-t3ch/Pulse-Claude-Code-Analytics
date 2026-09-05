@@ -98,3 +98,7 @@ Users can override any activity key via the config file
 
 Any key you reference must exist in the Developer Portal for the
 configured `discord_client_id`.
+
+## OpenCode en Pulse 1.8.0
+
+La aplicación OpenCode usa el Application ID `1545590419763761303` y la clave `opencode-v2`. El PNG proporcionado por Tony y su procedencia viven en `assets/branding/`; el preview usa la misma imagen. CLI, Desktop y OpenChamber conservan una identidad Discord común. Consulta [OpenCode y Astra](opencode-and-astra.md) para las fuentes de datos y los límites de atribución.

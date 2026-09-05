@@ -12,6 +12,7 @@ describe("provider plan catalogs", () => {
       { value: "plus", label: "Plus" },
       { value: "business", label: "Business" },
       { value: "enterprise", label: "Enterprise" },
+      { value: "edu", label: "Edu" },
       { value: "pro_5x", label: "Pro 5x" },
       { value: "pro_20x", label: "Pro 20x" },
     ]);

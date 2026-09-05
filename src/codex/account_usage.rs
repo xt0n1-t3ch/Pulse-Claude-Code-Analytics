@@ -27,6 +27,7 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(8);
 /// not attach timestamps to `account/rateLimits/read` responses.
 #[derive(Clone, Debug)]
 pub struct AccountUsageReading {
+    pub account_plan_type: Option<String>,
     pub envelopes: Vec<RateLimitEnvelope>,
     pub individual_limits: Vec<IndividualSpendLimit>,
     pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
@@ -34,6 +35,19 @@ pub struct AccountUsageReading {
 }
 
 impl AccountUsageReading {
+    pub fn plan_envelopes(&self) -> Vec<RateLimitEnvelope> {
+        let mut envelopes = self.envelopes.clone();
+        if let Some(plan) = self.account_plan_type.as_ref() {
+            envelopes.push(RateLimitEnvelope {
+                plan_type: Some(plan.clone()),
+                scope: codex_presence_core::RateLimitScope::GlobalAccount,
+                observed_at: Some(self.observed_at),
+                ..Default::default()
+            });
+        }
+        envelopes
+    }
+
     pub fn usage_snapshot(&self) -> UsageSnapshot {
         // `rateLimitsByLimitId` can contain model-scoped windows alongside the
         // account-wide bucket. Pulse's account route and broadcaster consume
@@ -186,7 +200,29 @@ fn query_account_usage(timeout: Duration) -> Result<AccountUsageReading> {
             &serde_json::json!({ "id": 2, "method": ACCOUNT_RATE_LIMITS_METHOD, "params": null }),
         )?;
         let response = read_response(&rx, 2, timeout)?;
-        parse_rate_limits_response(&response.to_string(), Utc::now())
+        let observed_at = Utc::now();
+        let usage = parse_rate_limits_response(&response.to_string(), observed_at);
+        write_json_line(
+            &mut stdin,
+            &serde_json::json!({"id": 3, "method": "account/read", "params": {"refreshToken": false}}),
+        )?;
+        let account_plan_type = read_response(&rx, 3, timeout)
+            .ok()
+            .and_then(|response| account_plan_type(&response));
+        match usage {
+            Ok(mut reading) => {
+                reading.account_plan_type = account_plan_type;
+                Ok(reading)
+            }
+            Err(_) if account_plan_type.is_some() => Ok(AccountUsageReading {
+                account_plan_type,
+                envelopes: Vec::new(),
+                individual_limits: Vec::new(),
+                rate_limit_reset_credits: None,
+                observed_at,
+            }),
+            Err(error) => Err(error),
+        }
     })();
 
     stop_owned_child(&mut child);
@@ -374,11 +410,23 @@ pub fn parse_rate_limits_response(
     } = parse_account_rate_limits_response(response, observed_at)
         .map_err(|error| anyhow::anyhow!(error))?;
     Ok(AccountUsageReading {
+        account_plan_type: None,
         envelopes,
         individual_limits,
         rate_limit_reset_credits,
         observed_at,
     })
+}
+
+fn account_plan_type(response: &Value) -> Option<String> {
+    let account = response.pointer("/result/account")?;
+    if account.get("type").and_then(Value::as_str) != Some("chatgpt") {
+        return None;
+    }
+    let plan = account.get("planType").and_then(Value::as_str)?;
+    (crate::codex::telemetry::plan::parse_plan_type(Some(plan))
+        != crate::codex::telemetry::plan::DetectedPlanTier::Unknown)
+        .then(|| plan.to_string())
 }
 
 #[cfg(test)]
@@ -390,6 +438,7 @@ mod tests {
         windows: Vec<codex_presence_core::UsageWindow>,
     ) -> AccountUsageReading {
         AccountUsageReading {
+            account_plan_type: None,
             envelopes: vec![RateLimitEnvelope {
                 limit_id: Some("codex".to_string()),
                 scope: codex_presence_core::RateLimitScope::GlobalAccount,
@@ -538,5 +587,41 @@ mod tests {
         assert_eq!(snapshot.scopes[0].windows.len(), 1);
         assert_eq!(snapshot.scopes[0].windows[0].window_minutes, 10_080);
         assert_eq!(snapshot.scopes[0].windows[0].remaining_percent, 95.0);
+    }
+    #[test]
+    fn account_plan_is_independent_from_quota_windows() {
+        for raw in [
+            "free",
+            "go",
+            "plus",
+            "pro",
+            "prolite",
+            "pro_5x",
+            "pro_20x",
+            "business",
+            "enterprise",
+            "edu",
+        ] {
+            let response =
+                serde_json::json!({"result":{"account":{"type":"chatgpt","planType":raw}}});
+            assert_eq!(account_plan_type(&response).as_deref(), Some(raw));
+        }
+        assert!(
+            account_plan_type(&serde_json::json!({"result":{"account":{"type":"apiKey"}}}))
+                .is_none()
+        );
+        let reading = AccountUsageReading {
+            account_plan_type: Some("prolite".into()),
+            envelopes: Vec::new(),
+            individual_limits: Vec::new(),
+            rate_limit_reset_credits: None,
+            observed_at: Utc::now(),
+        };
+        assert_eq!(
+            reading.plan_envelopes()[0].plan_type.as_deref(),
+            Some("prolite")
+        );
+        assert!(reading.envelopes.is_empty());
+        assert!(reading.effective_limits().is_none());
     }
 }
