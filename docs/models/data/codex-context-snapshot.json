@@ -1,0 +1,99 @@
+{
+  "source": "Local Codex models_cache.json; visible models only",
+  "observed_at": "2026-09-05T08:18:22.671343100Z",
+  "client_version": "0.153.3",
+  "scope": "One local inventory; not an account entitlement or a successful maximum-size request",
+  "models": [
+    {
+      "id": "gpt-6-astra",
+      "raw_tokens": 272000,
+      "effective_percent": 95,
+      "usable_tokens": 258400,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "raw_tokens": 272000,
+      "effective_percent": 95,
+      "usable_tokens": 258400,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "raw_tokens": 272000,
+      "effective_percent": 95,
+      "usable_tokens": 258400,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "raw_tokens": 272000,
+      "effective_percent": 95,
+      "usable_tokens": 258400,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-5.5",
+      "raw_tokens": 272000,
+      "effective_percent": 95,
+      "usable_tokens": 258400,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "raw_tokens": 272000,
+      "effective_percent": 95,
+      "usable_tokens": 258400,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "raw_tokens": 128000,
+      "effective_percent": 95,
+      "usable_tokens": 121600,
+      "reasoning_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # Pulse v1.7.0 design QA
 
+Historical evidence retained after repository cleanup. These screenshots are not a current release acceptance claim. Paths below are repository-relative.
+
 ## Audit scope
 
 - Product: Pulse desktop analytics workspace.
@@ -19,26 +21,26 @@
 
 | Evidence | Path | Pixels | Format proof |
 | --- | --- | ---: | --- |
-| Initial source/Home comparison | `design-qa/final-v170/00-reference-vs-home-1488x1058.png` | `2976 x 1058` | PNG `89504e470d0a1a0a` |
-| Final source/Home comparison | `design-qa/final-v170/22-reference-vs-home-final.png` | `2976 x 1058` | PNG `89504e470d0a1a0a` |
-| Final Home | `design-qa/final-v170/21-home-final-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
-| Sessions | `design-qa/final-v170/02-sessions-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
-| Context | `design-qa/final-v170/03-context-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
-| Costs, Codex unavailable | `design-qa/final-v170/04c-costs-codex-final-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
-| Reports | `design-qa/final-v170/05-reports-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
-| Discord | `design-qa/final-v170/06-discord-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
-| Settings | `design-qa/final-v170/07-settings-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
-| Seven-route wide contact sheet | `design-qa/final-v170/08-wide-contact-sheet.png` | `1520 x 2180` | PNG `89504e470d0a1a0a` |
-| Seven-route mobile contact sheet | `design-qa/final-v170/18-mobile-contact-sheet.png` | `1624 x 1720` | PNG `89504e470d0a1a0a` |
-| Home mobile | `design-qa/final-v170/11-home-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Sessions mobile | `design-qa/final-v170/12-sessions-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Context mobile | `design-qa/final-v170/13-context-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Costs mobile | `design-qa/final-v170/14-costs-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Reports mobile | `design-qa/final-v170/15-reports-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Discord mobile | `design-qa/final-v170/16-discord-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Settings mobile | `design-qa/final-v170/17-settings-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Notification center mobile | `design-qa/final-v170/19-notifications-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
-| Claude local-history Costs | `design-qa/final-v170/20-costs-claude-local-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Initial source/Home comparison | `assets/evidence/visual-qa/final-v170/00-reference-vs-home-1488x1058.png` | `2976 x 1058` | PNG `89504e470d0a1a0a` |
+| Final source/Home comparison | `assets/evidence/visual-qa/final-v170/22-reference-vs-home-final.png` | `2976 x 1058` | PNG `89504e470d0a1a0a` |
+| Final Home | `assets/evidence/visual-qa/final-v170/21-home-final-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
+| Sessions | `assets/evidence/visual-qa/final-v170/02-sessions-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
+| Context | `assets/evidence/visual-qa/final-v170/03-context-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
+| Costs, Codex unavailable | `assets/evidence/visual-qa/final-v170/04c-costs-codex-final-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
+| Reports | `assets/evidence/visual-qa/final-v170/05-reports-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
+| Discord | `assets/evidence/visual-qa/final-v170/06-discord-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
+| Settings | `assets/evidence/visual-qa/final-v170/07-settings-1488x1058.jpg` | `1488 x 1058` | JPEG `ffd8ff` |
+| Seven-route wide contact sheet | `assets/evidence/visual-qa/final-v170/08-wide-contact-sheet.png` | `1520 x 2180` | PNG `89504e470d0a1a0a` |
+| Seven-route mobile contact sheet | `assets/evidence/visual-qa/final-v170/18-mobile-contact-sheet.png` | `1624 x 1720` | PNG `89504e470d0a1a0a` |
+| Home mobile | `assets/evidence/visual-qa/final-v170/11-home-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Sessions mobile | `assets/evidence/visual-qa/final-v170/12-sessions-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Context mobile | `assets/evidence/visual-qa/final-v170/13-context-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Costs mobile | `assets/evidence/visual-qa/final-v170/14-costs-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Reports mobile | `assets/evidence/visual-qa/final-v170/15-reports-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Discord mobile | `assets/evidence/visual-qa/final-v170/16-discord-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Settings mobile | `assets/evidence/visual-qa/final-v170/17-settings-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Notification center mobile | `assets/evidence/visual-qa/final-v170/19-notifications-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
+| Claude local-history Costs | `assets/evidence/visual-qa/final-v170/20-costs-claude-local-390x844.jpg` | `390 x 844` | JPEG `ffd8ff` |
 
 The browser capture API emitted JPEG bytes, so accepted browser screenshots use
 the matching `.jpg` extension. ImageMagick produced the PNG comparison/contact

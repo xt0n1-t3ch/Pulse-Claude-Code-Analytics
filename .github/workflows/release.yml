@@ -9,6 +9,11 @@ on:
         description: Existing annotated release tag to build and publish
         required: true
         type: string
+      publish_release:
+        description: Publish after every platform passes (otherwise verify and retain artifacts only)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,14 +31,24 @@ env:
 
 jobs:
   preflight:
-    name: Preflight · Release contract
-    runs-on: ubuntu-latest
+    name: Preflight - Release contract
+    runs-on: ubuntu-22.04
     outputs:
       tag_commit: ${{ steps.release_target.outputs.tag_commit }}
     permissions:
       actions: read
       contents: read
     steps:
+      - name: Require updater signing credentials
+        if: inputs.publish_release
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'Missing updater signing secret: TAURI_SIGNING_PRIVATE_KEY'
+          }
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.tag }}
@@ -104,6 +119,13 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Lint Rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
@@ -114,7 +136,7 @@ jobs:
         run: cargo build --locked --workspace --all-targets
 
   build:
-    name: Build · ${{ matrix.label }}
+    name: Build - ${{ matrix.label }}
     needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
@@ -122,29 +144,29 @@ jobs:
       matrix:
         include:
           - label: windows-x64
-            os: windows-latest
+            os: windows-2022
             target: x86_64-pc-windows-msvc
-            tauri-args: ""
+            bundles: nsis,msi
           - label: windows-arm64
             os: windows-11-arm
             target: aarch64-pc-windows-msvc
-            tauri-args: --target aarch64-pc-windows-msvc
+            bundles: nsis,msi
           - label: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            tauri-args: --target aarch64-apple-darwin
+            bundles: app,dmg
           - label: macos-x64
-            os: macos-latest
+            os: macos-15-intel
             target: x86_64-apple-darwin
-            tauri-args: --target x86_64-apple-darwin
+            bundles: app,dmg
           - label: linux-x64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            tauri-args: ""
+            bundles: deb,rpm,appimage
           - label: linux-arm64
             os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-            tauri-args: --target aarch64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -161,6 +183,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: ${{ matrix.target }}
+          components: clippy
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
@@ -173,31 +196,73 @@ jobs:
           npm install --global "npm@$env:NPM_VERSION"
           if ((npm --version).Trim() -ne $env:NPM_VERSION) { throw "Unexpected npm version" }
 
-      - name: Build frontend
-        working-directory: frontend
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Verify native platform
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          npm ci
-          npm run build
+          $hostLine = rustc -vV | Select-String '^host: '
+          if ($LASTEXITCODE -ne 0 -or -not $hostLine) { throw 'Cannot identify Rust host' }
+          $hostTarget = $hostLine.ToString().Substring(6).Trim()
+          if ($hostTarget -ne $env:TARGET) { throw "Expected native $env:TARGET runner, got $hostTarget" }
+          cargo clippy --locked --workspace --all-targets --target "$env:TARGET" -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Native clippy failed' }
+          cargo test --locked --workspace --target "$env:TARGET"
+          if ($LASTEXITCODE -ne 0) { throw 'Native tests failed' }
+
+      - name: Prepare bundle arguments
+        id: bundle_args
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          BUNDLES: ${{ matrix.bundles }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+        run: |
+          $arguments = "--target $env:TARGET --bundles $env:BUNDLES"
+          if ($env:PUBLISH_RELEASE -ne 'true') {
+            New-Item -ItemType Directory -Force src-tauri/.build | Out-Null
+            '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 src-tauri/.build/platform-verification.json
+            $arguments += ' --config .build/platform-verification.json'
+          }
+          "args=$arguments -- --locked" >> $env:GITHUB_OUTPUT
 
       - name: Build Tauri bundle
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Required for in-app updates: the updater plugin refuses any
-          # package whose signature does not verify against the pubkey in
-          # tauri.conf.json. Without these secrets the bundle still builds,
-          # but no updater artifacts (.sig / latest.json) are produced.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Verification artifacts are not release or updater candidates.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.publish_release && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.publish_release && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           projectPath: src-tauri
-          args: ${{ matrix.tauri-args }}
+          args: ${{ steps.bundle_args.outputs.args }}
+
+      - name: Verify macOS package architecture
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          app="target/$TARGET/release/bundle/macos/Pulse.app"
+          test -d "$app"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
+          arch=x86_64
+          if [[ "$TARGET" == aarch64-* ]]; then arch=arm64; fi
+          lipo -verify_arch "$arch" "$app/Contents/MacOS/$executable"
+          echo 'GitHub macOS packages have no Apple Developer ID signature or notarization.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect complete platform artifact set
         shell: pwsh
         env:
           PLATFORM: ${{ matrix.label }}
           TARGET: ${{ matrix.target }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
         run: |
           $candidates = @(
             "target/$env:TARGET/release/bundle",
@@ -207,7 +272,8 @@ jobs:
           )
           $bundle = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -First 1
           if (-not $bundle) { throw "No release assets bundle directory found for $env:PLATFORM" }
-          ./scripts/release-platform-assets.ps1 -InputDirectory $bundle -OutputDirectory dist -Platform $env:PLATFORM
+          $verificationOnly = $env:PUBLISH_RELEASE -ne 'true'
+          ./scripts/release-platform-assets.ps1 -InputDirectory $bundle -OutputDirectory dist -Platform $env:PLATFORM -VerificationOnly:$verificationOnly
 
       - name: Generate and verify Windows SPDX SBOM
         if: runner.os == 'Windows'
@@ -227,12 +293,13 @@ jobs:
           name: pulse-${{ matrix.label }}
           path: dist/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   publish:
     name: Publish immutable release
+    if: inputs.publish_release
     needs: [preflight, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -256,6 +323,7 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           path: artifacts
+          pattern: pulse-*
 
       - name: Prepare complete release assets and checksums
         shell: pwsh

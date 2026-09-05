@@ -15,7 +15,7 @@ Open an issue at [github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/issues](http
 - Which provider you use (Claude Code, Codex, or both).
 - Steps to reproduce.
 - Expected vs actual behavior.
-- Relevant log lines (run with `RUST_LOG=debug` — see [docs/troubleshooting.md](docs/troubleshooting.md)).
+- Relevant log lines (run with `RUST_LOG=debug` — see [docs/troubleshooting.md](docs/guides/troubleshooting.md)).
 
 Reproduction steps are the single biggest factor in turnaround time. The issue templates guide you through the fields.
 

@@ -813,6 +813,133 @@ fn release_matrix_requires_native_arm64_artifacts_for_windows_and_linux() {
 }
 
 #[test]
+fn release_checks_are_native_for_all_six_platforms_and_publish_is_opt_in() {
+    let root = repository_root();
+    let workflow = read(root.join(".github/workflows/release.yml"));
+    let build = workflow
+        .split("\n  build:")
+        .nth(1)
+        .expect("build job")
+        .split("\n  publish:")
+        .next()
+        .expect("build body");
+    for (label, runner, target) in [
+        ("windows-x64", "windows-2022", "x86_64-pc-windows-msvc"),
+        ("windows-arm64", "windows-11-arm", "aarch64-pc-windows-msvc"),
+        ("macos-arm64", "macos-latest", "aarch64-apple-darwin"),
+        ("macos-x64", "macos-15-intel", "x86_64-apple-darwin"),
+        ("linux-x64", "ubuntu-22.04", "x86_64-unknown-linux-gnu"),
+        (
+            "linux-arm64",
+            "ubuntu-22.04-arm",
+            "aarch64-unknown-linux-gnu",
+        ),
+    ] {
+        let row =
+            format!("- label: {label}\n            os: {runner}\n            target: {target}");
+        assert!(build.contains(&row), "missing native matrix entry: {label}");
+    }
+    assert!(build.contains("$hostTarget -ne $env:TARGET"));
+    assert!(build.contains(r#"cargo test --locked --workspace --target "$env:TARGET""#));
+    assert!(build.contains(
+        r#"cargo clippy --locked --workspace --all-targets --target "$env:TARGET" -- -D warnings"#
+    ));
+    assert!(workflow.contains("publish_release:"));
+    assert!(workflow.contains("type: boolean\n        default: false"));
+    let publish = workflow.split("\n  publish:").nth(1).expect("publish job");
+    assert!(publish.contains("if: inputs.publish_release"));
+    assert!(publish.contains("needs: [preflight, build]"));
+    assert!(build.contains("name: frontend-dist"));
+    assert!(
+        !build.contains("npm run build"),
+        "native jobs must consume the shared frontend artifact"
+    );
+    assert_eq!(workflow.matches("npm run build").count(), 1);
+}
+
+#[test]
+fn github_macos_packages_require_updater_signatures_not_apple_credentials() {
+    let workflow = read(repository_root().join(".github/workflows/release.yml"));
+    let gate = workflow
+        .find("Require updater signing credentials")
+        .expect("updater gate");
+    let native_build = workflow.find("Build Tauri bundle").expect("native build");
+    assert!(gate < native_build);
+    assert!(workflow.contains("TAURI_SIGNING_PRIVATE_KEY"));
+    assert!(!workflow.contains("secrets.APPLE_"));
+    assert!(workflow.contains("Verify macOS package architecture"));
+    assert!(workflow.contains("lipo -verify_arch"));
+    assert!(workflow.contains("no Apple Developer ID signature or notarization"));
+    assert!(workflow.contains("createUpdaterArtifacts\":false"));
+}
+
+#[test]
+fn local_release_requires_explicit_windows_recovery_before_external_commands() {
+    let output = script_command("release-local.ps1")
+        .env("PATH", "")
+        .output()
+        .expect("run local release gate without network tools");
+    assert_failure_contains(&output, "-WindowsOnlyRecovery");
+    let source = read(repository_root().join("scripts/release-local.ps1"));
+    let gate = source
+        .find("if (-not $WindowsOnlyRecovery)")
+        .expect("recovery gate");
+    let remote = source
+        .find("$repository = Get-RequiredRepository")
+        .expect("remote preflight");
+    assert!(gate < remote);
+    assert!(source.contains(r#""--draft", "--verify-tag", "--latest=false""#));
+    assert!(source.contains("gh release edit $Tag --draft=false --latest=false"));
+    assert!(source.contains("Windows x64 recovery"));
+}
+
+#[test]
+fn unsigned_verification_assets_do_not_relax_the_public_release_contract() {
+    let fixture = TempDir::new().expect("fixture");
+    for (platform, names) in [
+        ("windows-x64", vec!["Pulse.exe", "Pulse.msi"]),
+        ("windows-arm64", vec!["Pulse.exe", "Pulse.msi"]),
+        ("macos-x64", vec!["Pulse.dmg"]),
+        ("macos-arm64", vec!["Pulse.dmg"]),
+        (
+            "linux-x64",
+            vec!["Pulse.deb", "Pulse.rpm", "Pulse.AppImage"],
+        ),
+        (
+            "linux-arm64",
+            vec!["Pulse.deb", "Pulse.rpm", "Pulse.AppImage"],
+        ),
+    ] {
+        let input = fixture.path().join(format!("input-{platform}"));
+        for name in &names {
+            write(input.join(name), "unsigned test fixture");
+        }
+        let strict = platform_assets_command(
+            &input,
+            &fixture.path().join(format!("strict-{platform}")),
+            platform,
+        )
+        .output()
+        .expect("strict collector");
+        assert_failure_contains(&strict, "Missing required release asset");
+        let dest = fixture.path().join(format!("verify-{platform}"));
+        let verified = platform_assets_command(&input, &dest, platform)
+            .arg("-VerificationOnly")
+            .output()
+            .expect("verification collector");
+        assert_success(&verified);
+        assert_eq!(
+            fs::read_dir(dest).expect("collected files").count(),
+            names.len()
+        );
+    }
+    let publish = release_assets_command(fixture.path(), &fixture.path().join("public"))
+        .output()
+        .expect("reject unsigned publication");
+    assert_failure_contains(&publish, "Missing required release asset");
+}
+
+#[test]
 fn tauri_e2e_runner_starts_owned_frontend_before_pulse() {
     let source = read(repository_root().join("scripts/e2e/run-pulse.ps1"));
     let tauri = source

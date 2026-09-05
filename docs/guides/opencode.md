@@ -1,6 +1,8 @@
-# Usar OpenCode y GPT-6 Astra en Pulse
+[Documentación](../index.md) / OpenCode y Astra
 
-Esta referencia explica a usuarios y mantenedores de Pulse 1.8.0 cómo separar sesiones, cuentas y publicación en Discord. OpenCode funciona con datos locales; Astra usa el catálogo compartido con el runtime independiente 1.11.0. Los artefactos y sus versiones siguen el contrato de release de cada repositorio.
+# ![](../../assets/icons/terminal.svg) Usar OpenCode y GPT-6 Astra en Pulse
+
+Esta referencia explica a usuarios y mantenedores de Pulse 1.8.1 cómo separar sesiones, cuentas y publicación en Discord. OpenCode funciona con datos locales; Astra usa el catálogo compartido con el runtime independiente; el pin del core y la copia del catálogo tienen contratos distintos. Los artefactos y sus versiones siguen el contrato de release de cada repositorio.
 
 ## Índice
 
@@ -10,6 +12,9 @@ Esta referencia explica a usuarios y mantenedores de Pulse 1.8.0 cómo separar s
 - [Verificar Astra y las imágenes](#verificar-astra-y-las-imágenes)
 - [Actualizar y recuperar](#actualizar-y-recuperar)
 - [Detección del plan y override](#detección-del-plan-y-override)
+- [Límites OpenCode Go](#límites-opencode-go)
+- [Perfil Discord local](#perfil-discord-local)
+- [Notificaciones y eficiencia](#notificaciones-y-eficiencia)
 
 ## Seleccionar sesiones y publicación
 
@@ -43,11 +48,11 @@ Los diagnósticos del lector aparecen en Settings. Los prompts y argumentos de c
 
 ## Verificar Astra y las imágenes
 
-`gpt-6-astra` se muestra como GPT-6 Astra. El catálogo registra una ventana total de 1.050.000 tokens, entrada máxima de 922.000 y salida máxima de 128.000. `ultra` se conserva como etiqueta observada del harness, no como nivel de la API.
+`gpt-6-astra` se muestra como GPT-6 Astra. El [catálogo de modelos](../models/codex.md) es la referencia única para ventanas, esfuerzos, tarifas y fuentes verificadas.
 
-Las tarifas Standard por millón son USD 10 de entrada, USD 1 de caché leída, USD 12,50 de caché escrita y USD 50 de salida. Fast usa un multiplicador de 2. El umbral de contexto largo es 272.000 tokens. La telemetría acumulada que no demuestra el precio de cada petición conserva cobertura parcial y no se presenta como coste exacto. No se asigna una conversión a créditos de suscripción.
+> La API de Astra expone 1.050.000 tokens totales, hasta 922.000 de entrada y 128.000 de salida. El inventario local Codex 0.153.3 del 2026-09-05 expone 272.000 brutos y 258.400 usables. No son la misma capacidad ni una garantía para todas las cuentas.
 
-Fuentes: [ficha de Astra](https://developers.openai.com/api/docs/models/gpt-6-astra) y [tarifas API](https://developers.openai.com/api/docs/pricing), consultadas el 2026-09-04.
+`ultra` se conserva como valor observado del harness, no como nivel publicado de la API. Los límites y costes de OpenCode no se heredan de Astra por compartir esta página. Consulte también las [diferencias del catálogo incluido](../models/codex.md#bundled-catalog-gaps).
 
 El catálogo canónico vive en el repo Codex-Discord-Rich-Presence. `scripts/check-model-catalog-parity.ps1` comprueba la igualdad byte a byte con Pulse. El pin del core 2.0.0 sigue intacto; el cambio local no se atribuye al commit remoto fijado.
 
@@ -87,4 +92,4 @@ La identidad de `READY` del IPC local posee el usuario, nombre visible y avatar.
 
 El centro permite marcar avisos como leídos o no leídos, aplicar esas acciones a todos y limpiar la lista con confirmación. La limpieza conserva los registros; Undo restaura el último lote confirmado y sus estados de lectura. Los fallos de transporte conservan la última lista y no afirman que una mutación se guardó.
 
-[Windows Efficiency mode](windows-efficiency.md) describe EcoQoS, la prioridad reducida y el opt-out.
+[Windows Efficiency mode](../maintainers/windows-efficiency.md) describe EcoQoS, la prioridad reducida y el opt-out.

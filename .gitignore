@@ -82,7 +82,19 @@ SPEC.md
 
 # Local-only scratch: design reference captures and browser tool output.
 .design-refs/
-.stealth-output/
 
 # Machine-specific task handoffs stay local.
 docs/handoffs/
+
+# Retired local agent plans and root-level QA output.
+.zcode/
+/design-qa/
+/design-qa.md
+
+# Maintained repository guidance and accepted historical proof.
+!/AGENTS.md
+!/assets/evidence/
+!/assets/evidence/**
+!/docs/evidence/
+!/docs/evidence/**
+!/docs/models/claude.md

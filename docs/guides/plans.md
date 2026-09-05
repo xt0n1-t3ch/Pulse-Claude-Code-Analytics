@@ -71,4 +71,4 @@ Detected from the session `originator`: values containing `desktop` or
 `opencode` resolve to the **Codex App** surface (client `1478395304624652345`,
 asset `codex-app`); everything else resolves to **Codex CLI / VS Code** (client
 `1470480085453770854`, asset `codex-logo`). See
-[discord-assets.md](discord-assets.md) for the asset uploads.
+[discord-assets.md](discord.md) for the asset uploads.
