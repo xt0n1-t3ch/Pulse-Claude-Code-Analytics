@@ -3,7 +3,7 @@
   import { IconShieldCheck } from "@tabler/icons-svelte";
   import codexMark from "../assets/rp/codex-app.png";
   import claudeMark from "../assets/rp/claude.svg";
-  import openCodeMark from "../assets/rp/opencode.png";
+  import openCodeMark from "../assets/rp/opencode-v2.png";
   import openAiMark from "../assets/rp/chatgpt-app.jpg";
   import { selectedAccessRoutes, selectedAccessDiagnostics } from "../lib/stores";
   import {
