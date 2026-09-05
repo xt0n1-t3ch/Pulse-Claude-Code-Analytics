@@ -4,9 +4,9 @@ Pulse targets Windows, macOS and Linux on x64 and ARM64. A configured target is 
 
 ## Current release status
 
-On 2026-09-05, the immutable [v1.8.1 release](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.8.1) contains Windows x64 NSIS/MSI installers, a Windows SPDX file and checksums. It has no macOS, Linux, Windows ARM64 or updater assets. Do not replace that release or reuse its tag to add files.
+On September 5, 2026, the immutable [v1.8.2 release](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.8.2) published all six targets from commit `efd3ade9e17703b6393791af6e3dde516284e824`. The [release run](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/actions/runs/33959441406) passed preflight, all six native jobs and publication.
 
-The next complete release must pass the manual Release workflow for all targets:
+The release contains 24 assets, including 23 checksum entries, two Windows SPDX files and six signed updater payloads in `latest.json`. Downloaded bytes match both the checksum manifest and GitHub asset digests. All six updater signatures verify against the bundled public key; modified payload controls are rejected. The following packages are published:
 
 | Platform | Native runner | Rust target | Required public packages |
 | --- | --- | --- | --- |
@@ -18,6 +18,10 @@ The next complete release must pass the manual Release workflow for all targets:
 | Linux ARM64 | ubuntu-22.04-arm | aarch64-unknown-linux-gnu | DEB, RPM, AppImage, updater signature |
 
 The workflow verifies the Rust host target before executing tests. It builds the frontend once and uses that artifact in every native bundle. Native jobs run warning-denying Clippy and workspace tests before packaging.
+
+These checks prove native tests and packaging, not the complete installed-GUI checklist below. Real-data migration and preference persistence were also checked through the Windows Rust bridge and frontend. Full installed-GUI acceptance on all six targets remains unverified.
+
+GitHub emitted an upstream runner notice that `windows-11-arm` will switch its default Visual Studio image on September 21, 2026. It did not fail the build. Recheck the runner toolchain for subsequent releases; do not change published 1.8.2 assets.
 
 ## Verify without publishing
 

@@ -4,6 +4,10 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+
+- Link verified 1.8.2 downloads for all six targets and record publication, checksum, signature and native-runtime acceptance boundaries.
+
 ## [1.8.2] - 2026-09-05
 
 Patch release with no configuration or database schema change. Native cross-platform packages require the complete build, checksum and updater-signature gate. macOS DMGs and app archives are distributed through GitHub without Apple Developer ID signing or notarization; macOS may block first launch. This is not an App Store release. Known model-rate discrepancies remain documented; this release does not change runtime pricing.
