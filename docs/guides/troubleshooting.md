@@ -131,7 +131,7 @@ In order of likelihood:
   Developer Portal for the configured app. Discord silently drops plain
   `https://` image URLs on many client versions; the resolver wraps them as
   `mp:external/...` but that is best-effort. Upload the assets — see
-  [discord-assets.md](discord-assets.md). Config migrations move legacy defaults
+  [discord-assets.md](discord.md). Config migrations move legacy defaults
   from the old GitHub-raw URL and the letterboxed `claude-code` portal asset to
   the square Developer Portal asset.
 - **Presence is stuck or one-line.** The daemon dedups identical payloads and
@@ -267,7 +267,7 @@ When state looks corrupt, with **all Pulse processes closed**:
 
 ## Related docs
 
-- [index.md](index.md) — documentation map
-- [discord-assets.md](discord-assets.md) — uploading the RP logo + activity icons
-- [cost-calculation.md](cost-calculation.md) — pricing, cache math, fast mode, 1M surcharge
-- [opus-4-8.md](opus-4-8.md) — fast mode and Opus 4.8 specifics
+- [index.md](../index.md) — documentation map
+- [discord-assets.md](discord.md) — uploading the RP logo + activity icons
+- [cost-calculation.md](costs.md) — pricing, cache math, fast mode, 1M surcharge
+- [opus-4-8.md](../models/claude.md) — fast mode and Opus 4.8 specifics

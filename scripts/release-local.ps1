@@ -9,6 +9,10 @@
   SHA256SUMS.txt, uploads a draft, verifies the downloaded bytes, and only then
   makes the GitHub release public.
 
+.PARAMETER WindowsOnlyRecovery
+  Explicitly acknowledge a Windows x64-only recovery release. This lane never
+  becomes the latest release and cannot replace the six-platform release lane.
+
 .PARAMETER Tag
   Release tag, for example v1.7.2. Defaults to "v" plus package.json.version.
 
@@ -21,11 +25,20 @@
 param(
   [string]$Tag,
   [switch]$Draft,
-  [switch]$SkipBuild
+  [switch]$SkipBuild,
+  [switch]$WindowsOnlyRecovery
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if (-not $WindowsOnlyRecovery) {
+  throw "Use the manual Release workflow for Windows, macOS and Linux. This script requires -WindowsOnlyRecovery and never publishes as latest."
+}
+if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT -or
+    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
+  throw 'The local recovery lane requires a Windows x64 host'
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $package = Get-Content -Raw -LiteralPath (Join-Path $root "package.json") | ConvertFrom-Json
 $version = [string]$package.version
@@ -205,9 +218,9 @@ try {
   if ([string]::IsNullOrWhiteSpace($notes)) { throw "Release notes are empty for $version" }
   $arguments = @(
     "release", "create", $Tag,
-    "--draft", "--verify-tag",
-    "--title", "Pulse $Tag",
-    "--notes", $notes
+    "--draft", "--verify-tag", "--latest=false",
+    "--title", "Pulse $Tag (Windows x64 recovery)",
+    "--notes", ("Windows x64 recovery release. This release is not the cross-platform latest release and has no in-app updater manifest.`n`n" + $notes)
   )
   $arguments += @($assets | ForEach-Object { $_.FullName })
   $releaseAttempted = $true
@@ -235,7 +248,7 @@ try {
     $keepVerifiedDraft = $true
     Write-Host "Verified draft retained: $Tag" -ForegroundColor Yellow
   } else {
-    gh release edit $Tag --draft=false
+    gh release edit $Tag --draft=false --latest=false
     if ($LASTEXITCODE -ne 0) { throw "GitHub release finalization failed" }
     $immutableOutput = @(& gh api "repos/$repository/releases/tags/$Tag" --jq .immutable 2>&1)
     if ($LASTEXITCODE -ne 0) {

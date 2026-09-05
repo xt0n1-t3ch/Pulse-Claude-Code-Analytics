@@ -44,7 +44,7 @@ Codex uses two Discord applications for the selectable desktop designs. Surface 
 | ChatGPT App | `1470480085453770854` | <https://discord.com/developers/applications/1470480085453770854/rich-presence/assets> | `codex-logo` | black ChatGPT knot used by Codex CLI / VS Code Extension |
 | Codex App | `1478395304624652345` | <https://discord.com/developers/applications/1478395304624652345/rich-presence/assets> | `codex-app` | blue Codex App artwork |
 
-Reasoning, Standard/Fast speed, and surface are resolved independently from local Codex session/config state. The Discord application title itself must be `ChatGPT App` or `Codex App`; it is not reconstructed as a details line. See [plan-detection.md](plan-detection.md).
+Reasoning, Standard/Fast speed, and surface are resolved independently from local Codex session/config state. The Discord application title itself must be `ChatGPT App` or `Codex App`; it is not reconstructed as a details line. See [plan-detection.md](plans.md).
 
 ## In-app Live Preview art
 
@@ -101,4 +101,4 @@ configured `discord_client_id`.
 
 ## OpenCode en Pulse 1.8.0
 
-La aplicación OpenCode usa el Application ID `1545590419763761303` y la clave `opencode-v2`. El PNG proporcionado por Tony y su procedencia viven en `assets/branding/`; el preview usa la misma imagen. CLI, Desktop y OpenChamber conservan una identidad Discord común. Consulta [OpenCode y Astra](opencode-and-astra.md) para las fuentes de datos y los límites de atribución.
+La aplicación OpenCode usa el Application ID `1545590419763761303` y la clave `opencode-v2`. El PNG proporcionado por Tony y su procedencia viven en `assets/branding/`; el preview usa la misma imagen. CLI, Desktop y OpenChamber conservan una identidad Discord común. Consulta [OpenCode y Astra](opencode.md) para las fuentes de datos y los límites de atribución.

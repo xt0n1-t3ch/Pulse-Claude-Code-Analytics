@@ -4,7 +4,8 @@ param(
   [Parameter(Mandatory)] [string]$OutputDirectory,
   [Parameter(Mandatory)]
   [ValidateSet("windows-x64", "windows-arm64", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64")]
-  [string]$Platform
+  [string]$Platform,
+  [switch]$VerificationOnly
 )
 
 Set-StrictMode -Version Latest
@@ -17,6 +18,12 @@ $requiredSuffixes = switch ($Platform) {
   { $_ -in @("windows-x64", "windows-arm64") } { @(".exe", ".exe.sig", ".msi") }
   { $_ -in @("macos-arm64", "macos-x64") } { @(".app.tar.gz", ".app.tar.gz.sig", ".dmg") }
   { $_ -in @("linux-x64", "linux-arm64") } { @(".deb", ".rpm", ".AppImage", ".AppImage.sig") }
+}
+
+if ($VerificationOnly) {
+  # Unsigned native verification is not a public release. macOS only emits its
+  # updater tarball when updater artifact generation is enabled.
+  $requiredSuffixes = @($requiredSuffixes | Where-Object { $_ -notlike '*.sig' -and $_ -ne '.app.tar.gz' })
 }
 
 $inputPath = (Resolve-Path -LiteralPath $InputDirectory).Path

@@ -1,31 +1,30 @@
 # Pulse
 
-> Pulse is a local-first desktop usage tracker and cost dashboard for Claude Code and OpenAI Codex subscriptions on Windows, macOS, and Linux. It uses Tauri 2, Rust, and Svelte 5, stores analytics in SQLite with FTS5 search, and publishes Discord Rich Presence through local IPC. Its provider access-lane model keeps subscription and API proof separate. Pulse sends no telemetry.
+> Pulse is a local-first analytics GUI for Claude Code, Codex and OpenCode, with Discord Rich Presence. Rust, Tauri 2, Svelte 5 and SQLite own the implementation. Provider access, session history and monetary provenance stay separate. Targeted operating systems are not proof of published installers.
 
-## Docs
+## Start
 
-- [Documentation index](docs/index.md): Guide to Pulse architecture, analytics, pricing, provider plans, notifications, and troubleshooting.
-- [Release guide](docs/releasing.md): Local verification, versioning, packaging, signing, and release steps.
-- [Development bridge](docs/architecture/dev-bridge.md): Debug-only authenticated loopback bridge between Vite and the Rust backend.
-- [Discord assets](docs/discord-assets.md): Discord Developer Portal asset setup and Rich Presence image behavior.
+- [Documentation](docs/index.md): Task-based guide to the current product and maintained references.
+- [Install](README.md#install): Downloads and source builds.
+- [Preview](README.md#preview): Current application capture and historical previews.
+- [Use Pulse](README.md#use-pulse): Claude, Codex, OpenCode and Discord controls.
+- [Platform support](docs/maintainers/platforms.md): Actual release availability and native acceptance gaps.
 
-## Views
+## Models and data
 
-- [About Pulse](README.md#about): Data sources, provider boundaries, supported platforms, and desktop architecture.
-- [Why Pulse](README.md#why-pulse): Local-first, dual-provider, Discord, cache health, budget, and forecast benefits.
-- [Screenshots](README.md#screenshots): Dashboard, reports, and Discord Rich Presence previews.
-- [Install](README.md#install): Windows, macOS, Linux, and source installation.
-- [Features](README.md#features): Analytics, provider-aware costs, cache grading, reports, and Rich Presence.
-- [Usage](README.md#usage): First launch, Discord setup, reports, and fix-prompt workflow.
+- [Claude models and context](docs/models/claude.md): Current Anthropic models, Claude Code capacity, API maxima, prices and runtime gaps.
 
-## Configuration
+- [Codex models and context](docs/models/codex.md): Astra and GPT-5.6, exposed Codex capacity, usable budgets, API maxima, current prices and bundled-catalog differences.
+- [Context tracking](docs/guides/context.md): Current fill, historical peaks and compaction across providers.
+- [Costs](docs/guides/costs.md): Token categories, bundled arithmetic and monetary provenance.
+- [OpenCode and Astra](docs/guides/opencode.md): Local SQLite sessions, Go limits and catalog ownership.
+- [Plans](docs/guides/plans.md): Provider-specific plan and allowance identity.
 
-- [Claude configuration](docs/troubleshooting.md): Claude data and configuration live under `~/.claude`, including `~/.claude/discord-presence-config.json` and `~/.claude/pulse-analytics.db`.
-- [Codex plan configuration](docs/plan-detection.md): Codex reads plan and service-tier state from local files under `~/.codex`.
-- [Codex Discord configuration](docs/codex-rich-presence-upstream.md): Codex Rich Presence configuration lives at `~/.codex/discord-presence-config.json`.
-- [Provider access lanes](docs/architecture/adaptive-access.md): Subscription and API routes keep authentication proof, freshness, and analytics scope separate.
+## Maintain
 
-## Repository
-
-- [Changelog](CHANGELOG.md): Versioned release history.
-- [Package manifest](package.json): Package version and local build, check, test, lint, and verification commands.
+- [Architecture](docs/architecture/index.md): Component ownership.
+- [Access contract](docs/architecture/adaptive-access.md): Authentication, freshness and scope.
+- [Development bridge](docs/architecture/dev-bridge.md): Authenticated loopback transport for real Rust data.
+- [Release procedure](docs/maintainers/releases.md): Verification, packaging, signing and explicit publication.
+- [Test map](tests/index.md): Focused checks and regression ownership.
+- [Changelog](CHANGELOG.md): Versioned changes.
