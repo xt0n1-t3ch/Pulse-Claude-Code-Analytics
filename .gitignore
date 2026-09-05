@@ -97,3 +97,4 @@ docs/handoffs/
 !/assets/evidence/**
 !/docs/evidence/
 !/docs/evidence/**
+!/docs/models/claude.md
