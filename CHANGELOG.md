@@ -4,11 +4,78 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- Resolve OpenCode provider and allowance icons from the tracked versioned artwork, so clean checkouts do not depend on an ignored local image.
+
+### Security
+
+- Patch the brace-expansion and nanoid transitive dependencies reported by npm audit.
+
+### Changed
+
+- Update Svelte to 5.56.10, Testing Library user-event to 14.6.7 and the Tauri filesystem JavaScript plugin to 2.5.2 (#113, #114, #115).
+- Update Tauri single-instance to 2.4.4, shell to 2.3.6, dialog to 2.7.3 and its filesystem dependency to 2.5.2 (#116, #117, #118).
+
 ## [1.8.1] - 2026-09-05
+
+Pulse 1.8.1 includes the OpenCode and GPT-6 Astra integration, interface updates and Windows Efficiency mode introduced in 1.8.0. This patch also corrects non-Windows compilation. The highlights below describe the complete 1.8 update, not additional changes made after the 1.8.1 build.
 
 ### Fixed
 
 - Make Windows Efficiency mode initialization an explicit no-op on other operating systems, so warning-denying Linux builds pass without suppressing lints. Windows EcoQoS behavior is unchanged.
+
+### Included from 1.8.0
+
+#### GPT-6 Astra support
+
+- Recognize `gpt-6-astra` as GPT-6 Astra in session analytics and Discord presence through the shared model catalog.
+- Preserve observed reasoning effort, including `ultra`, without presenting harness-specific labels as API settings.
+- Track context limits and Standard/Fast pricing. Keep incomplete monetary coverage visible instead of claiming an exact bill.
+- Keep subscription credits separate from token-based cost estimates. Unknown credit conversion remains unavailable.
+
+#### Native OpenCode integration
+
+- Read local OpenCode SQLite history without an agent plugin, including supported message-table schemas and configured database paths.
+- Preserve model providers, original model IDs and mixed-model contributions. Recorded zero cost remains distinct from missing cost.
+- Read OpenCode Go five-hour, weekly and monthly account windows from its authenticated usage API. Do not estimate quotas from session tokens.
+- Remove completed sessions from live focus and Discord presence while preserving their history. With no recent session, show an idle state instead of an old model.
+- Use the square OpenCode artwork in Pulse and Discord. Keep quota toggles, presets and field order consistent between preview and publication.
+
+#### Frontend, design and responsive layouts
+
+- Use one provider bar for Claude, Codex, OpenCode and combined analytics. Keep Discord's broadcast choice separate from combined history.
+- Scope Home summaries and activity to the selected provider and seven-day window, with a separately labeled monthly projection.
+- Fit account-limit cards to available width. Replace clipped, fixed-height session controls with content-sized layouts.
+- Refine light/dark navigation, provider labels, full-width summary metrics and centered mobile headings.
+- Use two-row mobile navigation, compact provider selection and collapsible Home quotas. Keep Sessions and Costs metrics in two columns on narrow screens.
+- Preserve keyboard navigation, visible focus, selected states and explicit horizontal scrolling for wide tables.
+
+#### Notification center
+
+- Add individual and bulk read/unread controls.
+- Confirm list clearing and retain the stored records. Persistent Undo restores the last confirmed clear and its read states.
+- Keep the last loaded history when refresh fails. Do not claim an unconfirmed mutation succeeded.
+
+#### Performance and Windows efficiency
+
+- Import OpenCode history in bounded, incremental batches. Reuse calculated metadata for unchanged recent sessions and advance cursors only after persistence succeeds.
+- Poll OpenCode Go usage through a background worker with a 60-second interval, timeout and no redirects.
+- Request process-local Windows EcoQoS and Idle priority, with an environment opt-out and read-only verifier. Task Manager controls the leaf indicator; this is not a measured energy-savings claim.
+- Add a portable Tauri build command that embeds the frontend and does not require a development server.
+
+#### Data accuracy and compatibility
+
+- Give a manual Codex plan selection priority over cached detection. Recognize Pro 5x, Pro 20x, Edu and explicit aliases.
+- Read the connected Discord name and avatar from local READY identity. Do not fabricate missing banners or image badges.
+- Display monetary values with two decimal places without reducing stored precision.
+- Migrate analytics to schema 6 for OpenCode metadata. The shared core remains 2.0.0 at its existing immutable Git revision.
+
+### Installation and recovery
+
+Use the attached Windows x64 NSIS or MSI installer and verify it with `SHA256SUMS.txt`. This local release does not include a signed automatic-updater manifest. Back up configuration and the analytics database before upgrading; rollback must restore a compatible database backup with the older executable.
+
+See the [OpenCode and Astra guide](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/blob/v1.8.1/docs/opencode-and-astra.md), [Windows Efficiency mode](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/blob/v1.8.1/docs/windows-efficiency.md), and [complete changes since 1.7.9](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/compare/v1.7.9...v1.8.1).
 
 ## [1.8.0] - 2026-09-05
 
