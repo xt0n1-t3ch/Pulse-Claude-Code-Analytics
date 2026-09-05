@@ -13,6 +13,7 @@ fn sample_html_path() -> PathBuf {
 
 #[test]
 fn writes_rendered_sample_for_visual_review() {
+    isolate_storage();
     let report = html();
     let path = sample_html_path();
     std::fs::write(&path, &report).expect("write sample report");
@@ -25,6 +26,7 @@ fn writes_rendered_sample_for_visual_review() {
 
 #[test]
 fn html_report_has_no_remote_font_or_asset_references() {
+    isolate_storage();
     let report = html();
     assert!(
         !report.contains("fonts.googleapis.com"),
@@ -56,6 +58,7 @@ fn html_report_has_no_remote_font_or_asset_references() {
 
 #[test]
 fn html_report_is_well_formed_with_style_and_charts() {
+    isolate_storage();
     let report = html();
     assert!(!report.trim().is_empty(), "report must be non-empty");
     assert!(
@@ -89,6 +92,7 @@ fn html_report_is_well_formed_with_style_and_charts() {
 
 #[test]
 fn html_report_enforces_a_scriptless_offline_content_security_policy() {
+    isolate_storage();
     let report = html();
     let expected_policy = "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; img-src 'none'; font-src 'none'; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'";
 
@@ -118,6 +122,7 @@ fn html_report_enforces_a_scriptless_offline_content_security_policy() {
 
 #[test]
 fn html_and_markdown_reports_escape_hostile_project_filters() {
+    isolate_storage();
     let hostile = r#"</div><script>globalThis.pwned=1</script><a href="https://evil.example/x" data-x='1'>&boom</a>"#;
     let report = generate_html_report_for_provider(Provider::Claude, Some(30), Some(hostile));
     let markdown = generate_markdown_report_for_provider(Provider::Claude, Some(30), Some(hostile));
@@ -142,6 +147,7 @@ fn html_and_markdown_reports_escape_hostile_project_filters() {
 
 #[test]
 fn report_uses_one_provider_snapshot_for_every_provider_specific_label() {
+    isolate_storage();
     for (provider, expected_html, expected_markdown, foreign_html, foreign_markdown) in [
         (
             Provider::Claude,
@@ -170,6 +176,7 @@ fn report_uses_one_provider_snapshot_for_every_provider_specific_label() {
 
 #[test]
 fn codex_reports_keep_cache_health_and_omit_claude_only_routing() {
+    isolate_storage();
     let html = generate_html_report_for_provider(Provider::Codex, Some(30), None);
     let markdown = generate_markdown_report_for_provider(Provider::Codex, Some(30), None);
 
@@ -185,6 +192,7 @@ fn codex_reports_keep_cache_health_and_omit_claude_only_routing() {
 
 #[test]
 fn html_report_contains_brand_kpi_and_sections() {
+    isolate_storage();
     let report = html();
     assert!(report.contains("Pulse"), "brand kicker present");
     assert!(report.contains("Analytics Report"), "report title present");
@@ -223,6 +231,7 @@ fn html_report_contains_brand_kpi_and_sections() {
 
 #[test]
 fn html_report_uses_offline_system_font_stack() {
+    isolate_storage();
     let report = html();
     assert!(
         report.contains("-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif"),
@@ -236,6 +245,7 @@ fn html_report_uses_offline_system_font_stack() {
 
 #[test]
 fn markdown_report_is_valid_non_empty_gfm_with_sections() {
+    isolate_storage();
     let md = generate_markdown_report_for_provider(Provider::Claude, Some(30), None);
     assert!(!md.trim().is_empty(), "markdown report must be non-empty");
     assert!(
@@ -263,4 +273,18 @@ fn markdown_report_is_valid_non_empty_gfm_with_sections() {
         !md.contains("fonts.googleapis.com"),
         "markdown must not embed remote font references"
     );
+}
+
+fn isolate_storage() {
+    static ROOT: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let root = tempfile::tempdir().expect("isolated report storage");
+        // All test entry points wait for this initialization before reading state.
+        unsafe {
+            std::env::set_var("PULSE_HOME", root.path());
+            std::env::set_var("CLAUDE_HOME", root.path().join("claude-source"));
+            std::env::set_var("CODEX_HOME", root.path().join("codex-source"));
+        }
+        root
+    });
 }

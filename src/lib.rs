@@ -16,6 +16,7 @@ pub mod process_guard;
 pub mod provider;
 pub mod session;
 pub mod sound;
+pub mod storage;
 pub mod usage;
 pub mod util;
 pub mod workflow_state;

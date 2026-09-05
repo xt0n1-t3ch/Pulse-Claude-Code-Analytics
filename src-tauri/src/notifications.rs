@@ -988,7 +988,7 @@ pub fn open_default_database() -> Result<Connection> {
 }
 
 pub fn default_database_path() -> PathBuf {
-    cc_discord_presence::config::claude_home().join("pulse-analytics.db")
+    cc_discord_presence::storage::database_path()
 }
 
 /// Native notification payload kept independent from platform APIs for tests.

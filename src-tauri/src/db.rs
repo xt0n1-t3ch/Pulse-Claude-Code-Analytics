@@ -10,7 +10,6 @@ use rusqlite::{Connection, Transaction, params};
 use serde::Serialize;
 use tracing::{debug, warn};
 
-use cc_discord_presence::config;
 use cc_discord_presence::cost;
 use cc_discord_presence::provider::Provider;
 
@@ -62,7 +61,16 @@ fn session_used_tokens(s: &super::commands::SessionInfo) -> i64 {
 }
 
 fn db_path() -> PathBuf {
-    config::claude_home().join("pulse-analytics.db")
+    #[cfg(test)]
+    {
+        static TEST_STORAGE: OnceLock<tempfile::TempDir> = OnceLock::new();
+        TEST_STORAGE
+            .get_or_init(|| tempfile::tempdir().expect("isolated analytics storage"))
+            .path()
+            .join("pulse-analytics.db")
+    }
+    #[cfg(not(test))]
+    cc_discord_presence::storage::database_path()
 }
 
 fn active_provider() -> Provider {

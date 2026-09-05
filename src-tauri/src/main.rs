@@ -134,6 +134,10 @@ fn create_or_show_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    if let Err(error) = cc_discord_presence::storage::initialize() {
+        eprintln!("Pulse storage initialization failed: {error:#}");
+        std::process::exit(1);
+    }
     cc_discord_presence::power::apply_from_env("PULSE_EFFICIENCY_MODE");
     // Debug builds also serve the read-only dev bridge so the UI can be
     // reviewed in a browser against real backend data.

@@ -26,7 +26,7 @@ Session history, account proof and Discord broadcaster identity remain separate.
 | Shared Codex core | [upstream contract](../maintainers/codex-core.md) | Pinned canonical telemetry and presence contracts |
 | OpenCode ingestion | [src/opencode](../../src/opencode) | Read-only SQLite, sessions, contributions and metadata |
 | Native integration | [commands](../../src-tauri/src/commands.rs), [OpenCode bridge](../../src-tauri/src/opencode.rs) | Polling, snapshots and IPC |
-| Persistence | [db](../../src-tauri/src/db.rs) | Analytics schema 6, WAL, migrations and notification records |
+| Persistence | [storage](../../src/storage.rs), [db](../../src-tauri/src/db.rs) | Provider-neutral paths, safe legacy copies, analytics schema 6, WAL and notifications |
 | Reports | [analyzers](../../src-tauri/src/analyzers), [report](../../src-tauri/src/report.rs) | Provider-supported analysis and exports |
 | Presentation | [App](../../frontend/src/App.svelte), [API](../../frontend/src/lib/api.ts), [stores](../../frontend/src/lib/stores.ts) | Six routes and coherent backend state |
 

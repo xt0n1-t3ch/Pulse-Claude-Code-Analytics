@@ -18,6 +18,7 @@ Local analytics and Discord Rich Presence for **Claude Code, Codex and OpenCode*
 | Choose what Discord shows | [Discord controls](../README.md#discord-controls) · [Assets and application IDs](guides/discord.md) |
 | Understand notifications or updates | [Notifications](guides/notifications.md) · [Update checks](guides/updates.md) |
 | Diagnose missing data | [Troubleshooting](guides/troubleshooting.md) |
+| Locate or recover local data | [Storage and migration](guides/storage.md) |
 
 ## Models and analytics
 

@@ -1074,26 +1074,27 @@ pub fn spawn_extra_usage_toggle_cycle(access_token: String, session_key: Option<
 mod tests {
     use super::*;
 
-    /// Redirects `CLAUDE_HOME` at a throwaway directory for the caller's scope.
+    /// Redirects `PULSE_HOME` at a throwaway directory for the caller's scope.
     ///
     /// A successful `handle_usage_response` writes the usage file cache. Without
     /// this, running the suite on a developer machine would stamp fixture quota
-    /// figures into the real `~/.claude/discord-presence-usage-cache.json`, and
+    /// figures into the real `~/.pulse-analytics/claude/discord-presence-usage-cache.json`, and
     /// Pulse would display those invented numbers for the next five minutes.
-    struct IsolatedClaudeHome {
+    struct IsolatedPulseHome {
         _guard: std::sync::MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
         previous: Option<std::ffi::OsString>,
     }
 
-    impl IsolatedClaudeHome {
+    impl IsolatedPulseHome {
         fn new() -> Self {
             let guard = crate::config::home_env_lock()
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             let dir = tempfile::tempdir().expect("temp claude home");
-            let previous = std::env::var_os("CLAUDE_HOME");
-            unsafe { std::env::set_var("CLAUDE_HOME", dir.path()) };
+            std::fs::create_dir(dir.path().join("claude")).expect("isolated usage directory");
+            let previous = std::env::var_os("PULSE_HOME");
+            unsafe { std::env::set_var("PULSE_HOME", dir.path()) };
             Self {
                 _guard: guard,
                 _dir: dir,
@@ -1102,11 +1103,11 @@ mod tests {
         }
     }
 
-    impl Drop for IsolatedClaudeHome {
+    impl Drop for IsolatedPulseHome {
         fn drop(&mut self) {
             match self.previous.take() {
-                Some(value) => unsafe { std::env::set_var("CLAUDE_HOME", value) },
-                None => unsafe { std::env::remove_var("CLAUDE_HOME") },
+                Some(value) => unsafe { std::env::set_var("PULSE_HOME", value) },
+                None => unsafe { std::env::remove_var("PULSE_HOME") },
             }
         }
     }
@@ -1132,7 +1133,7 @@ mod tests {
 
     #[test]
     fn successful_usage_fetch_records_the_handshake_it_actually_used() {
-        let _home = IsolatedClaudeHome::new();
+        let _home = IsolatedPulseHome::new();
         let mut manager = UsageManager::new();
         manager.credentials = Some(credentials_fixture("max"));
 
@@ -1159,7 +1160,7 @@ mod tests {
 
     #[test]
     fn usage_origin_label_degrades_without_a_subscription_field() {
-        let _home = IsolatedClaudeHome::new();
+        let _home = IsolatedPulseHome::new();
         let mut manager = UsageManager::new();
         manager.credentials = Some(
             serde_json::from_str(
@@ -1177,7 +1178,7 @@ mod tests {
 
     #[test]
     fn usage_origin_does_not_claim_bare_claude_max() {
-        let _home = IsolatedClaudeHome::new();
+        let _home = IsolatedPulseHome::new();
         let mut manager = UsageManager::new();
         manager.credentials = Some(
             serde_json::from_str(
@@ -1197,7 +1198,7 @@ mod tests {
 
     #[test]
     fn a_failed_fetch_does_not_invent_an_origin() {
-        let _home = IsolatedClaudeHome::new();
+        let _home = IsolatedPulseHome::new();
         let mut manager = UsageManager::new();
         manager.credentials = Some(credentials_fixture("max"));
 
@@ -1392,7 +1393,7 @@ mod tests {
 
     #[test]
     fn file_cache_rejects_future_and_out_of_range_timestamps() {
-        let _home = IsolatedClaudeHome::new();
+        let _home = IsolatedPulseHome::new();
         let data = UsageData {
             five_hour: UsageWindow {
                 utilization: 1.0,

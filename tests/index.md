@@ -228,21 +228,25 @@ npm --prefix frontend run build
 | [docs/index.md](../docs/index.md) | `docs/` | Documentation hub: architecture, Discord assets, reasoning-effort variants, analyzers, cost calculation |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | repo root | Contribution + local-dev workflow |
 
-## OpenCode y Astra
+## OpenCode and Astra
 
-- `src/opencode/store/tests.rs`: ambas tablas de mensajes, ocho familias, multimodelo, coste cero/ausente, paginación y SQLite bloqueado/incompatible.
-- `src/opencode/process.rs`: PID, padre y executable del proceso gestionado; rechaza registros obsoletos.
-- `src/opencode/presence.rs`: privacidad, identidad OpenCode y ausencia de costes inventados.
-- `src-tauri/src/db.rs::opencode_tests`: metadatos persistidos y consultas históricas sin tarifas prestadas.
-- `tests/components/AccessSourceBar.test.ts` y `Discord.test.ts`: filtros independientes, aplicación nativa y capacidades no disponibles.
-- `scripts/check-model-catalog-parity.ps1`: igualdad del catálogo con el repo canónico.
-- `axe-core` permite auditar el DOM renderizado en el navegador integrado; acompañe el resultado con teclado, screenshots y prueba visual real en Discord.
+- `src/opencode/store/tests.rs`: both message schemas, model families, mixed models, zero/unknown costs, pagination and locked/incompatible SQLite.
+- `src/opencode/process.rs`: managed PID, parent and executable identity; stale records are rejected.
+- `src/opencode/presence.rs`: privacy, OpenCode identity and no invented costs.
+- `src-tauri/src/db.rs::opencode_tests`: persisted metadata and history without borrowed prices.
+- `tests/components/AccessSourceBar.test.ts` and `Discord.test.ts`: independent filters, native application and unavailable capabilities.
+- `scripts/check-model-catalog-parity.ps1`: byte equality with the canonical catalog.
+- Browser accessibility checks need keyboard, screenshots and real Discord visual proof as well as axe-core.
 
-La matriz `every_plan_override_survives_reload_and_matches_the_discord_payload` cubre todos los planes, precedencia manual, reload, rechazo de valores inválidos y retorno a Auto-detect. `account_plan_is_independent_from_quota_windows` separa plan y cuotas.
+`every_plan_override_survives_reload_and_matches_the_discord_payload` covers manual precedence, reload, invalid values and return to Auto-detect. `account_plan_is_independent_from_quota_windows` separates identity from quotas.
 
-`opencode_go::tests` valida las tres ventanas y la fecha mensual sin duración inventada. `discord_identity::tests` valida READY y excluye credenciales del DTO. Heatmap expone las 24 horas en formato de 12 horas; Notifications añade filtro de no leídas, cierre con Escape y retorno de foco.
+`opencode_go::tests` checks three windows and actual monthly reset dates. `discord_identity::tests` validates READY and excludes credentials from the DTO. OpenCode regressions cover freshness, Go attribution, quota toggle persistence, presets, compositor order and the opencode-v2 logo.
 
-Las regresiones OpenCode incluyen caducidad y atribución Go, roundtrip del toggle de cuotas, presets y orden del compositor, además del logo opencode-v2 en la UI.
+## Provider-neutral storage
+
+`tests/storage_migration.rs` runs the real daemon startup with isolated roots. It checks first-start migration, config writes, restart behavior and rejection of relative `PULSE_HOME` paths before writing state.
+
+`src/storage.rs::tests` checks consistent migration from an active WAL database, schema retention, settings copies, credential exclusion, repeat startup, existing destination preservation, corrupt JSON recovery and corrupt database rejection. GUI command tests isolate `PULSE_HOME` as well as both provider roots. The native/browser E2E launcher also isolates `PULSE_HOME`.
 
 ## Windows efficiency and release validation
 

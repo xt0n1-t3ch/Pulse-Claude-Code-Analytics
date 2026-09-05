@@ -5,7 +5,6 @@ use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::config;
 use crate::cost;
 use crate::session::ClaudeSessionSnapshot;
 use crate::util::{format_cost, format_tokens, human_duration};
@@ -207,8 +206,12 @@ impl Default for MetricsTracker {
 }
 
 fn persist_json(snap: &MetricsSnapshot) {
-    let path = config::claude_home().join("discord-presence-metrics.json");
-    let tmp = config::claude_home().join("discord-presence-metrics.json.tmp");
+    let path = crate::storage::home()
+        .join("claude")
+        .join("discord-presence-metrics.json");
+    let tmp = crate::storage::home()
+        .join("claude")
+        .join("discord-presence-metrics.json.tmp");
     match serde_json::to_string_pretty(snap) {
         Ok(data) => {
             if let Err(e) = std::fs::write(&tmp, &data) {
@@ -224,8 +227,12 @@ fn persist_json(snap: &MetricsSnapshot) {
 }
 
 fn persist_markdown(snap: &MetricsSnapshot) {
-    let path = config::claude_home().join("discord-presence-metrics.md");
-    let tmp = config::claude_home().join("discord-presence-metrics.md.tmp");
+    let path = crate::storage::home()
+        .join("claude")
+        .join("discord-presence-metrics.md");
+    let tmp = crate::storage::home()
+        .join("claude")
+        .join("discord-presence-metrics.md.tmp");
     let md = generate_markdown(snap);
     if let Err(e) = std::fs::write(&tmp, &md) {
         warn!("Failed to write metrics markdown: {e}");

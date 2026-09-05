@@ -141,7 +141,7 @@ impl Default for ProviderState {
 }
 
 fn state_path() -> PathBuf {
-    crate::config::claude_home().join("pulse-provider.json")
+    crate::storage::home().join("pulse-provider.json")
 }
 
 pub fn load_active_provider() -> Provider {

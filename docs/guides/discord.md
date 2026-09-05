@@ -82,7 +82,7 @@ Look at `discord_client_id` and the active session's resolved `large_image`.
 ## Customising assets per user
 
 Users can override any activity key via the config file
-(`~/.claude/discord-presence-config.json`):
+(`~/.pulse-analytics/claude/discord-presence-config.json`):
 
 ```jsonc
 {
@@ -99,6 +99,6 @@ Users can override any activity key via the config file
 Any key you reference must exist in the Developer Portal for the
 configured `discord_client_id`.
 
-## OpenCode en Pulse 1.8.0
+## OpenCode in Pulse
 
-La aplicación OpenCode usa el Application ID `1545590419763761303` y la clave `opencode-v2`. El PNG proporcionado por Tony y su procedencia viven en `assets/branding/`; el preview usa la misma imagen. CLI, Desktop y OpenChamber conservan una identidad Discord común. Consulta [OpenCode y Astra](opencode.md) para las fuentes de datos y los límites de atribución.
+OpenCode uses Application ID `1545590419763761303` and image key `opencode-v2`. The supplied PNG and its provenance live in `assets/branding/`; the preview uses the same image. CLI, Desktop and OpenChamber share one Discord identity. See [OpenCode and Astra](opencode.md) for data sources and attribution limits.

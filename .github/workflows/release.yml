@@ -254,7 +254,7 @@ jobs:
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")
           arch=x86_64
           if [[ "$TARGET" == aarch64-* ]]; then arch=arm64; fi
-          lipo -verify_arch "$arch" "$app/Contents/MacOS/$executable"
+          lipo "$app/Contents/MacOS/$executable" -verify_arch "$arch"
           echo 'GitHub macOS packages have no Apple Developer ID signature or notarization.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect complete platform artifact set

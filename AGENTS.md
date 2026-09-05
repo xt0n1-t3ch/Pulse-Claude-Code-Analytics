@@ -21,7 +21,7 @@ This checkout is Pulse 1.8.2. Read `package.json`, Cargo manifests, `scripts/rel
 | Shared Codex core | `codex-presence-core`, pinned in Cargo and `src/codex/UPSTREAM.json` | Canonical telemetry/presence contracts; no duplicate parser in the frontend |
 | OpenCode | `src/opencode/`, `src-tauri/src/opencode.rs` | Read-only local SQLite ingestion and snapshots |
 | GUI backend | `src-tauri/src/main.rs`, `src-tauri/src/commands.rs` | Native lifecycle, polling, IPC and provider presentation |
-| Persistence and reports | `src-tauri/src/db.rs`, `src-tauri/src/report.rs`, `src-tauri/src/analyzers/` | Analytics, migrations, notifications and provider-supported analysis |
+| Persistence and reports | `src/storage.rs`, `src-tauri/src/db.rs`, `src-tauri/src/report.rs`, `src-tauri/src/analyzers/` | Pulse-owned paths, safe migration, analytics, notifications and reports |
 | Frontend | `frontend/src/App.svelte`, `frontend/src/lib/`, `frontend/src/components/`, `frontend/src/views/` | Render backend facts; do not invent quotas, prices or context |
 | Discord identity | `src/discord_identity.rs`, `src/discord.rs`, Codex core compositor | Local IPC identity and shared publication/preview behavior |
 | Packaging | `.github/workflows/release.yml`, `scripts/release-*.ps1`, `src-tauri/tauri.conf.json` | Native artifacts, signing and explicit release effects |
@@ -52,11 +52,13 @@ The September 5, 2026 refresh identified GPT-5.6 pricing/context drift, an API-s
 | --- | --- | --- |
 | Claude transcripts | `~/.claude/projects/` | `src/config.rs`; `CLAUDE_HOME` |
 | Claude statusline | `~/.claude/discord-presence-data.json` | Authoritative Claude headline cost/duration when present |
-| Claude presence config | `~/.claude/discord-presence-config.json` | Schema 6 |
-| Pulse analytics | `~/.claude/pulse-analytics.db` | Schema 6; SQLite WAL, migrations and consistent backups |
+| Claude presence config | `~/.pulse-analytics/claude/discord-presence-config.json` | Schema 6 |
+| Pulse analytics | `~/.pulse-analytics/pulse-analytics.db` | Schema 6; SQLite WAL, migrations and consistent backups |
 | Codex sessions/inventory | `~/.codex/sessions/`, `~/.codex/models_cache.json` | `CODEX_HOME` |
-| Codex presence config | `~/.codex/discord-presence-config.json` | Schema 13 |
-| OpenCode integration config | `~/.claude/pulse-opencode.json` | `CLAUDE_HOME`; database paths belong to OpenCode |
+| Codex presence config | `~/.pulse-analytics/codex/discord-presence-config.json` | Schema 13 |
+| OpenCode integration config | `~/.pulse-analytics/pulse-opencode.json` | `PULSE_HOME`; database paths belong to OpenCode |
+
+`src/storage.rs` owns Pulse paths under `PULSE_HOME`, defaulting to `~/.pulse-analytics`. Initialize storage before loading preferences or starting pollers. Migration copies and validates legacy files, retains originals and never overwrites destination data. Provider source roots and credentials remain separate. See `docs/guides/storage.md` for recovery and legacy instance-lock compatibility.
 
 - Claude subscription, Codex subscription, Anthropic API, OpenAI API and OpenCode Go are separate sources. A configured credential is not authenticated proof.
 - Allowance cards require provider proof. Local history may remain useful when authentication fails. Preserve freshness and unavailable states.
@@ -121,6 +123,8 @@ Missing native hosts, updater signing secrets or runtime proof must be reported 
 
 
 ## Documentation acceptance
+
+Write maintained public documentation in English. Preserve identifiers and quoted evidence.
 
 For documentation-only work, verify local links and anchors, table arithmetic, source dates, code identifiers and rendered reading order. Refresh `docs/index.md` and `llms.txt` when navigation changes. Update `tests/index.md` when validators or test ownership change. Do not run a full binary build merely to claim that prose was tested.
 

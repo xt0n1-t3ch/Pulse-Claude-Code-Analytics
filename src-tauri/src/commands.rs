@@ -394,8 +394,7 @@ fn claude_route_from_probe(
 ) {
     if force_refresh {
         usage_mgr.invalidate_cache();
-        let usage_cache_path =
-            cc_discord_presence::config::claude_home().join("discord-presence-usage-cache.json");
+        let usage_cache_path = cc_discord_presence::config::usage_cache_path();
         if let Err(error) = std::fs::remove_file(&usage_cache_path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -973,9 +972,8 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
         let mut opencode_collector = opencode::Collector::default();
         let mut opencode_runtime = opencode::process::RuntimeDetector::default();
         let mut opencode_publisher = opencode::presence::Publisher::default();
-        let mut opencode_lease = PublisherLease::new(
-            cc_discord_presence::config::claude_home().join("pulse-opencode.lock"),
-        );
+        let mut opencode_lease =
+            PublisherLease::new(cc_discord_presence::storage::home().join("pulse-opencode.lock"));
         let mut opencode_git = CodexGitBranchCache::new(Duration::from_secs(30));
         loop {
             let provider = current_provider();
@@ -1181,8 +1179,7 @@ fn start_background_poller_inner(app: Option<tauri::AppHandle>) {
 
                     if force_refresh {
                         usage_mgr.invalidate_cache();
-                        let usage_cache_path = cc_discord_presence::config::claude_home()
-                            .join("discord-presence-usage-cache.json");
+                        let usage_cache_path = cc_discord_presence::config::usage_cache_path();
                         if let Err(err) = std::fs::remove_file(&usage_cache_path)
                             && err.kind() != std::io::ErrorKind::NotFound
                         {
@@ -1718,7 +1715,7 @@ fn build_discord_snapshot_payload(
 }
 
 fn app_snapshot_cache_path() -> PathBuf {
-    cc_discord_presence::config::claude_home().join("pulse-last-app-snapshot.json")
+    cc_discord_presence::storage::home().join("pulse-last-app-snapshot.json")
 }
 
 fn persist_app_snapshot(snapshot: &AppSnapshot) -> Result<(), String> {
@@ -5944,6 +5941,7 @@ mod tests {
         unsafe {
             std::env::set_var("CLAUDE_HOME", &claude_home);
             std::env::set_var("CODEX_HOME", &codex_home);
+            std::env::set_var("PULSE_HOME", &temp);
         }
         (guard, claude_home, codex_home)
     }
@@ -6767,7 +6765,8 @@ mod tests {
             Some(&route),
         );
         let plan =
-            PlanDetector::new().resolve_from_sessions(&[snapshot.clone()], &config.openai_plan);
+            PlanDetector::with_cache_path(tempfile::tempdir().unwrap().path().join("plan.json"))
+                .resolve_from_sessions(&[snapshot.clone()], &config.openai_plan);
         let service_tier = resolve_service_tier();
         let live = active_presence_presentation(
             codex_session_surface(&snapshot, codex_fallback_surface(false)),

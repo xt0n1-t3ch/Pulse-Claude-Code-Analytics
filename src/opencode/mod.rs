@@ -42,7 +42,7 @@ impl Default for Config {
 
 impl Config {
     pub fn path() -> PathBuf {
-        crate::config::claude_home().join("pulse-opencode.json")
+        crate::storage::home().join("pulse-opencode.json")
     }
 
     pub fn load() -> Result<Self> {
