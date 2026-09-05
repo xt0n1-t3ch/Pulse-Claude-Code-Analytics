@@ -1,6 +1,6 @@
 # Pulse
 
-Local analytics and Discord Rich Presence for Claude Code, Codex and OpenCode. Pulse v1.8.0 keeps live activity, historical usage and account limits separate, so an old session or a missing price never becomes a live metric.
+Local analytics and Discord Rich Presence for Claude Code, Codex and OpenCode. Pulse v1.8.1 keeps live activity, historical usage and account limits separate, so an old session or a missing price never becomes a live metric.
 
 <div align="center">
 <picture>
@@ -8,13 +8,13 @@ Local analytics and Discord Rich Presence for Claude Code, Codex and OpenCode. P
   <img src="assets/pulse-logo-dual-dark.png" alt="Pulse analytics" width="560" height="124">
 </picture>
 
-[![Release v1.8.0](https://img.shields.io/badge/Release-v1.8.0-171717)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)
+[![Release v1.8.1](https://img.shields.io/badge/Release-v1.8.1-171717)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)
 [![Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-171717)](LICENSE)
 
 [Download](#install) · [What is new](#whats-new-in-v180) · [Use Pulse](#use-pulse) · [Build](#build-from-source) · [Documentation](docs/index.md)
 </div>
 
-## What's new in v1.8.0
+## What's new in v1.8.1
 
 - Native OpenCode collection from local SQLite, with arbitrary model providers, mixed-model history and reported cost provenance.
 - OpenCode Go account limits for the five-hour, weekly and monthly windows. These limits do not stand in for another provider's allowance.
@@ -32,8 +32,8 @@ Download an asset for your platform from [GitHub Releases](https://github.com/xt
 
 | Asset | Use |
 | --- | --- |
-| `Pulse_1.8.0_x64-setup.exe` | Windows x64 installer |
-| `Pulse_1.8.0_x64_en-US.msi` | Windows x64 MSI package |
+| `Pulse_1.8.1_x64-setup.exe` | Windows x64 installer |
+| `Pulse_1.8.1_x64_en-US.msi` | Windows x64 MSI package |
 | `pulse-windows-x64.spdx.json` | Software bill of materials |
 | `SHA256SUMS.txt` | SHA-256 checksums for the release files |
 
@@ -126,7 +126,7 @@ Use `npm run build` for installers. Use `npm run dev` for the authenticated, loo
 
 ## Compatibility and recovery
 
-Pulse v1.8.0 uses Claude config schema 6, Codex config schema 13 and analytics schema 6. The analytics migration adds OpenCode metadata without discarding previous sessions.
+Pulse v1.8.1 uses Claude config schema 6, Codex config schema 13 and analytics schema 6. The analytics migration adds OpenCode metadata without discarding previous sessions.
 
 Back up the executable, configuration and database through SQLite Backup before replacing an installation. Pulse 1.7.9 cannot open analytics schema 6: rollback requires the schema-5 backup, while the newer database should be preserved separately.
 

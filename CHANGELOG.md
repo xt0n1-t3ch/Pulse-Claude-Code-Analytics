@@ -4,6 +4,12 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-09-05
+
+### Fixed
+
+- Make Windows Efficiency mode initialization an explicit no-op on other operating systems, so warning-denying Linux builds pass without suppressing lints. Windows EcoQoS behavior is unchanged.
+
 ## [1.8.0] - 2026-09-05
 
 ### Added
