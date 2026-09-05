@@ -10,6 +10,8 @@ Patch release with no configuration or database schema change. Native cross-plat
 
 ### Fixed
 
+- Use host-native fixture paths in the OpenChamber process identity test so Linux and macOS execute the same assertions as Windows. Runtime process detection is unchanged.
+
 - Resolve OpenCode provider and allowance icons from the tracked versioned artwork, so clean checkouts do not depend on an ignored local image.
 
 ### Security
