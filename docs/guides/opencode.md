@@ -1,95 +1,77 @@
-[Documentación](../index.md) / OpenCode y Astra
+[Documentation](../index.md) / OpenCode and Astra
 
-# ![](../../assets/icons/terminal.svg) Usar OpenCode y GPT-6 Astra en Pulse
+# ![](../../assets/icons/terminal.svg) Use OpenCode and GPT-6 Astra in Pulse
 
-Esta referencia explica a usuarios y mantenedores de Pulse 1.8.1 cómo separar sesiones, cuentas y publicación en Discord. OpenCode funciona con datos locales; Astra usa el catálogo compartido con el runtime independiente; el pin del core y la copia del catálogo tienen contratos distintos. Los artefactos y sus versiones siguen el contrato de release de cada repositorio.
+This guide explains sessions, account limits and Discord publication in Pulse 1.8.2. OpenCode reads local data. The shared model catalog and core pin have separate contracts.
 
-## Índice
+## Select sessions and publication
 
-- [Seleccionar sesiones y publicación](#seleccionar-sesiones-y-publicación)
-- [Configurar OpenCode](#configurar-opencode)
-- [Interpretar los datos](#interpretar-los-datos)
-- [Verificar Astra y las imágenes](#verificar-astra-y-las-imágenes)
-- [Actualizar y recuperar](#actualizar-y-recuperar)
-- [Detección del plan y override](#detección-del-plan-y-override)
-- [Límites OpenCode Go](#límites-opencode-go)
-- [Perfil Discord local](#perfil-discord-local)
-- [Notificaciones y eficiencia](#notificaciones-y-eficiencia)
+One bar selects Claude, Codex, OpenCode or All providers. Selecting an application selects its context and history. All providers combines analytics without changing the selected Discord broadcaster. Account limits retain their own provider and authentication.
 
-## Seleccionar sesiones y publicación
+OpenCode Desktop, CLI and OpenChamber share the OpenCode identity in Discord. SQLite ingestion needs no agent plugin. Pulse keeps the surface generic when attribution is uncertain. OpenChamber attribution requires matching PID, parent, executable and session, with no competing backend.
 
-Una sola barra selecciona Claude, Codex, OpenCode o All providers. Elegir una aplicación selecciona su contexto y su historial; All providers agrega analytics sin cambiar el último broadcaster elegido. Las cuotas conservan su proveedor y autenticación propios, aunque compartan el selector visual.
+The six views share the Pulse design system. Quotas fit the available width. Mobile navigation uses two rows and a compact provider selector. Home can collapse quotas. Sessions and Costs use two-column metrics. Tables support horizontal scrolling and keyboard access. Controls retain visible focus and selected states. Changing views resets reading position.
 
-OpenCode Desktop, CLI y OpenChamber comparten el mismo nombre y logo OpenCode en Discord. La lectura de SQLite no requiere un plugin dentro del agente. Pulse conserva una superficie genérica cuando no puede atribuir una sesión a un cliente concreto. Un registro de OpenChamber solo aporta evidencia si coinciden el PID, el proceso padre, el ejecutable y la asociación de sesión, sin otro backend concurrente.
+The preview shows the two lines computed by Rust. Text wraps inside the card. An unavailable small image is not replaced with the Pulse logo.
 
-La interfaz mantiene el sistema visual de Pulse en las seis vistas. Las cuotas se distribuyen según el ancho disponible, sin una columna recortada ni altura fija. En móvil, la navegación usa dos filas completas, los proveedores usan un selector compacto y Home permite desplegar sus cuotas para priorizar la sesión. Sessions y Costs usan métricas en dos columnas. Las tablas mantienen scroll horizontal explícito y acceso por teclado; cambiar de vista restablece la posición de lectura.
+## Configure OpenCode
 
-Los controles conservan navegación por teclado, estado seleccionado y foco visible. La pestaña activa usa el patrón neutro de los selectores: fondo suave, borde visible y texto de alto contraste. Los encabezados móviles comparten alineación central. Las métricas Home ocupan columnas iguales; el heatmap usa una fila propia. El preview muestra las dos líneas calculadas por Rust. El texto se ajusta dentro de la tarjeta, sin duplicar el payload en otro panel. Una imagen pequeña no disponible no se reemplaza por el logo Pulse.
+Pulse discovers `opencode.db` and `opencode-*.db` channel files. It respects `XDG_DATA_HOME` and `OPENCODE_DB`. Relative database paths resolve inside the OpenCode data directory. `:memory:` is ignored because it is not shared storage.
 
-## Configurar OpenCode
+Pulse settings live in `~/.pulse-analytics/pulse-opencode.json`, or under `PULSE_HOME`. Provider credentials and configuration remain unchanged. See [storage and migration](storage.md). `database_paths` accepts additional SQLite files; duplicate paths are normalized. `enabled`, `privacy_enabled`, `client_id` and `layout` control publication.
 
-Pulse busca `opencode.db` y los archivos de canal `opencode-*.db` dentro del directorio de datos OpenCode. Respeta `XDG_DATA_HOME` y `OPENCODE_DB`. Una ruta relativa de `OPENCODE_DB` se resuelve dentro del directorio de datos. `:memory:` no es una base compartida y se ignora.
+The default Application ID is `1545590419763761303`; the image key is `opencode-v2`. Remote databases and OpenChamber servers on other machines are outside this local integration.
 
-La configuración propia de Pulse vive en `~/.claude/pulse-opencode.json`, o dentro de `CLAUDE_HOME` cuando está configurado. No modifica las credenciales ni la configuración de OpenCode. `database_paths` acepta archivos SQLite adicionales; `enabled`, `privacy_enabled`, `client_id` y `layout` controlan la publicación. Las rutas de base de datos duplicadas se normalizan antes de leerlas.
+## Interpret the data
 
-El Application ID predeterminado es `1545590419763761303`; la clave de imagen es `opencode-v2`. Los datos remotos y servidores OpenChamber alojados en otras máquinas quedan fuera de esta integración local.
+The reader opens SQLite read-only and supports `message` and `session_message` tables. It imports batches of 64 sessions with a stable cursor and revisits recent sessions. The cursor advances only after persistence succeeds. Unchanged sessions reuse computed metadata.
 
-## Interpretar los datos
+Pulse retains provider, original model ID, display name, variant, source database and per-model contributions. Completed sessions leave live presence but remain in history. The latest response identifies the used model; session selection is the fallback before the first response. Multi-model sessions show Mixed models with a breakdown.
 
-El lector abre SQLite en modo read-only y reconoce tablas `message` o `session_message`. Importa lotes de 64 sesiones mediante un cursor estable y revisita sesiones recientes. Solo confirma el cursor cuando se completa la persistencia. Las sesiones recientes sin cambios reutilizan sus metadatos calculados.
+A reported zero cost differs from unknown cost. OpenCode-reported value is not a confirmed provider bill. Pulse does not invent prices, quotas or context capacity. Context comes from message data or provider/model metadata, not cumulative tokens. Claude-specific recommendations remain disabled for OpenCode.
 
-Pulse conserva proveedor del modelo, ID original, nombre visible, variante, base de origen y contribuciones por modelo. Una sesión completada deja de ser elegible para la presencia y el foco activo; sus datos permanecen en History. La respuesta más reciente identifica el modelo utilizado; la selección de sesión sirve como fallback antes de la primera respuesta. Una sesión multimodelo aparece como Mixed models, con su desglose, sin atribuir todo el consumo al último modelo.
+Diagnostics appear in Settings. Prompts and command arguments never enter the Discord payload. `privacy_enabled` omits project and branch; other fields follow their settings.
 
-Un coste cero reportado por OpenCode no equivale a un coste desconocido. OpenCode-reported value expresa el valor registrado por la aplicación, no una factura confirmada del proveedor. Pulse no reconstruye precios para modelos OpenCode sin un coste reportado. Tampoco inventa cuotas de cuenta ni capacidad de contexto.
+## Verify Astra and images
 
-El contexto proviene del mensaje o de los metadatos configurados para el par proveedor/modelo. El acumulado de tokens de sesión no representa el contexto ocupado. Las recomendaciones específicas de Claude permanecen desactivadas para OpenCode.
+`gpt-6-astra` displays as GPT-6 Astra. The [model catalog](../models/codex.md) owns verified context, effort, prices and sources.
 
-Los diagnósticos del lector aparecen en Settings. Los prompts y argumentos de comandos no entran en el payload de Discord. `privacy_enabled` omite proyecto y rama; los demás campos siguen su configuración explícita.
+> Astra's API exposes 1,050,000 total tokens, up to 922,000 input and 128,000 output. The local Codex 0.153.3 inventory checked on September 5, 2026 exposes 272,000 raw and 258,400 usable tokens. These are different capacities, not guarantees for every account.
 
-## Verificar Astra y las imágenes
+`ultra` is an observed harness value, not a published API effort level. OpenCode does not inherit Astra prices or limits. Read the [bundled catalog gaps](../models/codex.md#bundled-catalog-gaps).
 
-`gpt-6-astra` se muestra como GPT-6 Astra. El [catálogo de modelos](../models/codex.md) es la referencia única para ventanas, esfuerzos, tarifas y fuentes verificadas.
+Codex-Discord-Rich-Presence owns the canonical catalog. `scripts/check-model-catalog-parity.ps1` checks byte equality with Pulse. The core 2.0.0 pin is unchanged; local edits do not change the pinned remote commit.
 
-> La API de Astra expone 1.050.000 tokens totales, hasta 922.000 de entrada y 128.000 de salida. El inventario local Codex 0.153.3 del 2026-09-05 expone 272.000 brutos y 258.400 usables. No son la misma capacidad ni una garantía para todas las cuentas.
+`assets/branding/opencode.provenance.json` records the supplied image, checksums and previous source for rollback. The preview and Developer Portal use the same PNG. A valid payload or portal key does not replace visual verification in Discord.
 
-`ultra` se conserva como valor observado del harness, no como nivel publicado de la API. Los límites y costes de OpenCode no se heredan de Astra por compartir esta página. Consulte también las [diferencias del catálogo incluido](../models/codex.md#bundled-catalog-gaps).
+## Update and recover
 
-El catálogo canónico vive en el repo Codex-Discord-Rich-Presence. `scripts/check-model-catalog-parity.ps1` comprueba la igualdad byte a byte con Pulse. El pin del core 2.0.0 sigue intacto; el cambio local no se atribuye al commit remoto fijado.
+Back up the executable, settings and a consistent SQLite snapshot before upgrading. Do not copy an active database without its transactions. Schema 6 adds `opencode_json` and retains a pre-migration backup. The storage migration also retains legacy files; see [recovery](storage.md#recovery).
 
-`assets/branding/opencode.provenance.json` registra la imagen proporcionada por Tony y sus checksums, junto con la fuente anterior para rollback. El mismo PNG se incluye en el preview y se sube al Developer Portal. La presencia de la clave en el portal o un payload correcto no sustituyen la verificación visual en Discord.
+Stop only the PID whose executable matches the intended Pulse installation. Verify the new binary's SHA-256, startup, history and `PRAGMA quick_check`. Preserve Discord and other agents. For rollback, retain the new database and restore the previous binary, settings and consistent backup. Later imports remain in the retained new database, not the restored copy.
 
-## Actualizar y recuperar
+## Plan detection and override
 
-Antes de sustituir Pulse, respalda el ejecutable, las configuraciones y la base con SQLite Backup. No copies una base activa sin sus transacciones. La migración a esquema 6 añade `opencode_json` y conserva las filas anteriores; el mecanismo existente crea además un respaldo previo a la migración.
+Manual Settings overrides precede telemetry, memory and cache. Auto-detect reads `account/read` and `account/rateLimits/read` in the same authenticated process. Plan identity does not create quota windows.
 
-Cierra únicamente el PID cuyo ejecutable coincide con la instalación Pulse. Instala el binario verificado y compara su SHA-256. Comprueba arranque, historial y `PRAGMA quick_check`. Conserva Discord, OpenCodex y los agentes.
+Pulse recognizes Free, Go, Plus, Pro 5x, Pro 20x, Business, Enterprise and Edu. Protocol `pro` means Pro 20x; `prolite` means Pro 5x. Explicit `pro_5x` and `pro_20x` aliases are accepted. Claude Max is not a Codex plan. Unknown signals do not replace valid identity.
 
-Para rollback, cierra esa misma instalación, conserva la base nueva y restaura el binario, las configuraciones y la copia SQLite consistente. Las sesiones importadas después del respaldo se conservan en la base apartada, no en la restaurada.
+Regression tests reload each override and compare Settings with Discord. Auto-detect returns to account signals, not the last override. Invalid overrides fail without changing settings.
 
-## Detección del plan y override
+## OpenCode Go limits
 
-El override manual de Settings tiene prioridad sobre la telemetría, la memoria y la caché. Auto-detect consulta `account/read` junto a `account/rateLimits/read` en el mismo proceso autenticado. Los datos del plan no crean ventanas de cuota ficticias.
+The adapter queries `https://opencode.ai/zen/go/v1/usage` with the existing `opencode-go` key. It does not copy the key to Pulse or logs. Queries run every 60 seconds with a timeout and no redirects. Only valid responses enable the five-hour, weekly and monthly windows.
 
-Pulse reconoce Free, Go, Plus, Pro 5x, Pro 20x, Business, Enterprise y Edu. El valor de protocolo `pro` identifica Pro 20x; `prolite` identifica Pro 5x. También acepta los aliases explícitos `pro_5x` y `pro_20x`. Los planes Claude Max no se interpretan como planes Codex. Una señal no reconocida no reemplaza una identificación válida.
+The API supplies percentages and reset dates. Pulse does not assume a 30-day month. These limits belong to Go, not every OpenCode provider or model. Usage quotas controls all three windows in Discord and the preview. Presets and field order share one compositor. Text includes Go and used to identify the account. Stale or incomplete limits are not published.
 
-La matriz de pruebas cambia cada override, vuelve a cargar su archivo y comprueba el mismo plan en Settings y en el payload de Discord. Volver a Auto-detect utiliza las señales de cuenta, no el último override. Un override inválido falla sin cambiar la configuración.
+Without a recent session, OpenCode clears Discord activity and the preview shows Waiting for OpenCode. The default layout starts with model, activity, project and branch. Home filters summary, history and activity by provider and the last seven days. Monthly projection keeps This month. A recent selected session's model replaces the historical model.
 
-## Límites OpenCode Go
+## Local Discord profile
 
-El adaptador consulta `https://opencode.ai/zen/go/v1/usage` con la clave existente de `opencode-go` en el archivo de autenticación OpenCode. No copia la clave a Pulse ni a los logs. El worker consulta cada 60 segundos con timeout y sin redirecciones. Solo una respuesta válida habilita las ventanas de 5 horas, semanal y mensual.
+Local IPC `READY` owns user identity, display name and avatar. Reading identity needs no credentials and publishes no activity. Banners require a client value or a local image reference for the same user. Missing banners remain absent. The recorded local check returned no banner from `READY` or `GET_USER`.
 
-El API proporciona porcentajes y fechas de reinicio. La ventana mensual conserva su etiqueta y fecha real; no se inventa una duración fija de 30 días. Los límites pertenecen a la suscripción Go, no a todos los modelos o proveedores usados desde OpenCode.
+## Notifications and efficiency
 
-Usage quotas controla las tres ventanas en Discord y en el preview. Los presets y el orden guardado usan el mismo compositor. El texto incluye Go y used para identificar la cuenta, incluso cuando el modelo activo pertenece a otro proveedor. Los datos caducados o incompletos no se publican. Sin una sesión reciente, OpenCode retira su actividad de Discord y el preview muestra Waiting for OpenCode. El layout predeterminado empieza por modelo, actividad, proyecto y rama.
+The center supports individual and bulk read/unread actions and clearing with confirmation. Clearing retains records. Undo restores the last confirmed batch and its read states. Transport failures retain the previous list and do not claim a saved mutation.
 
-Home filtra el resumen, historial y actividad por proveedor y últimos siete días. La proyección mensual conserva la etiqueta This month. El modelo de la sesión seleccionada reemplaza el modelo histórico mientras existe una sesión reciente.
-
-## Perfil Discord local
-
-La identidad de `READY` del IPC local posee el usuario, nombre visible y avatar. La consulta no solicita credenciales ni publica una actividad. El banner solo se usa si el cliente lo expone o existe una referencia de imagen del mismo usuario en la caché local. Si falta, Pulse no dibuja un banner simulado. En la validación de esta instalación, `READY` y `GET_USER` no incluyeron banner.
-
-## Notificaciones y eficiencia
-
-El centro permite marcar avisos como leídos o no leídos, aplicar esas acciones a todos y limpiar la lista con confirmación. La limpieza conserva los registros; Undo restaura el último lote confirmado y sus estados de lectura. Los fallos de transporte conservan la última lista y no afirman que una mutación se guardó.
-
-[Windows Efficiency mode](../maintainers/windows-efficiency.md) describe EcoQoS, la prioridad reducida y el opt-out.
+[Windows Efficiency mode](../maintainers/windows-efficiency.md) explains EcoQoS, reduced priority and the opt-out.

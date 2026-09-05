@@ -621,6 +621,7 @@ pub fn run() -> io::Result<()> {
     })?;
     // Validate credentials before starting the poller so a mistyped token
     // cannot trigger provider reads in a process that will immediately exit.
+    cc_discord_presence::storage::initialize().map_err(io::Error::other)?;
     crate::commands::start_background_poller_without_app();
     run_with_token(&token)
 }

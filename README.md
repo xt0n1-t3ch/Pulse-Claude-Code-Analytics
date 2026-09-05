@@ -141,7 +141,7 @@ Pulse reads your local Claude Code transcripts and optional statusline data. Rev
 
 Claude subscription limits and Anthropic API access are separate sources. Account limits appear only after a successful provider check. Session tokens do not stand in for your remaining allowance.
 
-The default data root is `~/.claude`; `CLAUDE_HOME` can override it. Subscription checks currently read `.credentials.json` from that root. Keychain-only credentials on macOS are not supported by this reader; local session analytics remain available.
+The default Claude source root is `~/.claude`; `CLAUDE_HOME` can override it. Subscription checks currently read `.credentials.json` from that root. Keychain-only credentials on macOS are not supported by this reader; local session analytics remain available.
 
 See [plan detection](docs/guides/plans.md), [cost calculations](docs/guides/costs.md) and [troubleshooting](docs/guides/troubleshooting.md).
 
@@ -163,7 +163,7 @@ See the [Codex model catalog](docs/models/codex.md), [context tracking](docs/gui
 <details>
 <summary id="opencode-and-go">OpenCode and Go</summary>
 
-Pulse reads `opencode.db` and channel databases from OpenCode's local data directory. It supports both message-table schemas and respects `XDG_DATA_HOME` and `OPENCODE_DB`. Additional databases can be set in `~/.claude/pulse-opencode.json`.
+Pulse reads `opencode.db` and channel databases from OpenCode's local data directory. It supports both message-table schemas and respects `XDG_DATA_HOME` and `OPENCODE_DB`. Additional databases can be set in `~/.pulse-analytics/pulse-opencode.json`.
 
 When an existing OpenCode Go credential is available, Pulse requests its account usage from the Go API. Pulse does not copy that credential into its own settings or logs. The monthly window uses the provider's reset date rather than an invented fixed duration.
 
@@ -206,7 +206,7 @@ See [Windows Efficiency mode](docs/maintainers/windows-efficiency.md) for behavi
 
 <h2 id="your-data-and-network-access"><img src="assets/icons/shield.svg" alt="" width="28" height="28" align="center">&nbsp; Your data and network access</h2>
 
-Session analytics stay in `~/.claude/pulse-analytics.db`, or under `CLAUDE_HOME` when configured. Pulse reads local Claude/Codex transcripts and OpenCode SQLite records. It sends no analytics telemetry or transcript uploads.
+Pulse stores its own data in `~/.pulse-analytics/`, or under `PULSE_HOME`. Provider credentials and source records stay in their original directories. The first startup copies legacy history and settings without deleting or overwriting them. See [storage and recovery](docs/guides/storage.md).
 
 Network use is limited to the configured provider quota checks, release/update checks and the Discord presence fields you enable. Project, branch and activity controls determine what the presence exposes. Keep private prompts, credentials and local reports out of public issues.
 
@@ -228,7 +228,9 @@ Local session history does not need a Pulse account. Provider quota cards use ex
 
 ### Does Pulse upload my prompts?
 
-No transcript uploads or analytics telemetry. Session analytics remain local. Enabled provider quota checks, update checks and Discord presence still use the network. See [your data and network access](#your-data-and-network-access).
+No. Pulse does not upload your prompts or session transcripts and sends no analytics telemetry. Your session analytics remain local.
+
+Enabled provider quota checks, update checks and Discord presence use the network without uploading transcripts. See [your data and network access](#your-data-and-network-access).
 
 ### Are the cost estimates my actual bill?
 

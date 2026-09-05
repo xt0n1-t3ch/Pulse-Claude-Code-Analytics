@@ -868,7 +868,7 @@ fn github_macos_packages_require_updater_signatures_not_apple_credentials() {
     assert!(workflow.contains("TAURI_SIGNING_PRIVATE_KEY"));
     assert!(!workflow.contains("secrets.APPLE_"));
     assert!(workflow.contains("Verify macOS package architecture"));
-    assert!(workflow.contains("lipo -verify_arch"));
+    assert!(workflow.contains(r#"lipo "$app/Contents/MacOS/$executable" -verify_arch "$arch""#));
     assert!(workflow.contains("no Apple Developer ID signature or notarization"));
     assert!(workflow.contains("createUpdaterArtifacts\":false"));
 }

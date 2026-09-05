@@ -59,3 +59,7 @@ A recovery release does not satisfy the six-platform contract. The already-publi
 ## Local portable validation
 
 Run `npm run build:portable` to embed the frontend through Tauri's custom protocol. A raw Cargo GUI build can still point at the development URL. Validate the actual application window with development listeners stopped, not only the process or Discord connection.
+
+## Storage upgrade acceptance
+
+For 1.8.2, verify the provider-neutral storage migration before promotion. Keep legacy files, check a WAL database with FTS5, confirm history and preferences in the real consumer, and verify that test runs do not write to the user data directory. Follow [storage and recovery](../guides/storage.md).

@@ -22,6 +22,7 @@ fn isolated_homes(tag: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::
     unsafe {
         std::env::set_var("CLAUDE_HOME", &claude_home);
         std::env::set_var("CODEX_HOME", &codex_home);
+        std::env::set_var("PULSE_HOME", &root);
     }
     (guard, claude_home)
 }

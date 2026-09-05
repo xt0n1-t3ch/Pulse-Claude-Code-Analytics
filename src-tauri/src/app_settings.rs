@@ -4,7 +4,7 @@
 //! the UI event thread with no async runtime), so the value is mirrored in an
 //! atomic that is loaded once at startup and updated whenever the setting
 //! changes. The JSON file next to the other Pulse state
-//! (`~/.claude/pulse-app-settings.json`, matching `pulse-provider.json`) is the
+//! (`~/.pulse-analytics/pulse-app-settings.json`, matching `pulse-provider.json`) is the
 //! durable copy; adding it here avoids a database schema migration.
 
 use std::fs;
@@ -38,7 +38,7 @@ impl Default for AppSettings {
 static CLOSE_TO_TRAY: AtomicBool = AtomicBool::new(true);
 
 fn state_path() -> PathBuf {
-    cc_discord_presence::config::claude_home().join("pulse-app-settings.json")
+    cc_discord_presence::storage::home().join("pulse-app-settings.json")
 }
 
 /// Load persisted settings into the in-memory mirror. Call once at startup,

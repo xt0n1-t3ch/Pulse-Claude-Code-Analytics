@@ -10,6 +10,8 @@ Patch release with no configuration or database schema change. Native cross-plat
 
 ### Fixed
 
+- Pass the macOS executable before the architecture list to `lipo`, so successful DMG builds pass the native package check.
+
 - Repair UTF-8 documentation text, include OpenCode in package and repository discovery metadata, and clarify local analytics, costs and network access.
 - Use Node 24 artifact actions and the repository retention policy without deprecated-runtime or retention-limit warnings.
 
@@ -22,6 +24,9 @@ Patch release with no configuration or database schema change. Native cross-plat
 - Patch the brace-expansion and nanoid transitive dependencies reported by npm audit.
 
 ### Changed
+
+- Store Pulse data under `~/.pulse-analytics` with `PULSE_HOME`, independently of provider source roots. Copy legacy settings and consistent SQLite history without overwriting destination files or deleting originals; retain provider credentials and transcripts in place.
+- Use English throughout maintained OpenCode documentation and clarify that prompts, transcripts and analytics telemetry are not uploaded.
 
 - Consolidate current Claude and Codex model references, replace obsolete launch notes, organize documentation by purpose, and relocate accepted visual evidence out of the repository root.
 - Remove machine-local agent residue and handoffs from the checkout while preserving recoverable copies and existing source/build contracts.

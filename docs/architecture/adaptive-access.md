@@ -83,7 +83,7 @@ that combines providers.
 ## Runner boundaries
 
 Use `scripts/e2e/run-pulse.ps1` for a bounded probe or native Playwright run. It stages temporary
-`CLAUDE_HOME`, `CODEX_HOME`, SQLite path, provider config, and fixture copy, and
+`PULSE_HOME`, `CLAUDE_HOME`, `CODEX_HOME`, SQLite path, provider config, and fixture copy, and
 restores environment variables on exit.
 
 - **Browser** starts the repo Vite dev server on an owned loopback port and

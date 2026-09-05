@@ -16,7 +16,7 @@ It prints the resolved paths and a pass/warn line for each dependency:
 
 ```
 cc-discord-presence doctor
-config_path: C:\Users\you\.claude\discord-presence-config.json
+config_path: C:\Users\you\.pulse-analytics\claude\discord-presence-config.json
 statusline_path: C:\Users\you\.claude\discord-presence-data.json
 credentials_path: C:\Users\you\.claude\.credentials.json
 projects_paths: C:\Users\you\.claude\projects  (+ any WSL distro paths)
@@ -80,20 +80,19 @@ general application log.
 
 ## Where the data comes from
 
-All paths resolve under `claude_home()` — `~/.claude` by default, or
-`$CLAUDE_HOME` if set. The daemon and GUI rebuild their state every poll
-(default 2s; override with `CC_PRESENCE_POLL_SECONDS`) from these rolling
-sources:
+Provider sources resolve under `CLAUDE_HOME` or `CODEX_HOME`. Pulse-owned data
+uses `PULSE_HOME`, defaulting to `~/.pulse-analytics`. See [storage and recovery](storage.md).
+The GUI refreshes every 5 seconds; the daemon interval is configurable.
 
 | Source | Path | Role |
 | --- | --- | --- |
 | Claude Code session transcripts | `~/.claude/projects/**/*.jsonl` (+ WSL distro paths on Windows) | Authoritative per-turn tokens, cost, model, activity, reasoning effort, fast-mode speed |
 | Statusline handoff | `~/.claude/discord-presence-data.json` | Claude Code's own billed `total_cost_usd` + token counts; wins the headline cost when present |
 | Anthropic OAuth credentials | `~/.claude/.credentials.json` | Bearer token for the usage API (5h / 7d / extra-usage limits) |
-| Usage cache | `~/.claude/discord-presence-usage-cache.json` | 5-min cache of the usage-API response (shared rate limit with Claude Code) |
-| Config | `~/.claude/discord-presence-config.json` | Discord client id, privacy toggles, asset keys, plan |
-| Daemon metrics output | `~/.claude/discord-presence-metrics.{json,md}` | Written by the daemon every 10s for the GUI / external readers |
-| Analytics database | `~/.claude/pulse-analytics.db` | The Pulse GUI's SQLite store (WAL); historical sessions + daily stats |
+| Usage cache | `~/.pulse-analytics/claude/discord-presence-usage-cache.json` | 5-min cache of the usage-API response (shared rate limit with Claude Code) |
+| Config | `~/.pulse-analytics/claude/discord-presence-config.json` | Discord client id, privacy toggles, asset keys, plan |
+| Daemon metrics output | `~/.pulse-analytics/claude/discord-presence-metrics.{json,md}` | Written by the daemon every 10s for the GUI / external readers |
+| Analytics database | `~/.pulse-analytics/pulse-analytics.db` | The Pulse GUI's SQLite store (WAL); historical sessions + daily stats |
 
 Two precedence rules matter when numbers look off:
 
@@ -257,7 +256,7 @@ requires the GPU; the daemon is headless and never touches it.
 
 When state looks corrupt, with **all Pulse processes closed**:
 
-1. Back up `~/.claude/pulse-analytics.db` if you want the history.
+1. Back up `~/.pulse-analytics/pulse-analytics.db` if you want the history.
 2. Delete the derived/cache files — they all rebuild:
    `discord-presence-usage-cache.json`, `discord-presence-metrics.{json,md}`,
    and `pulse-analytics.db` (+ its `-wal` / `-shm`).

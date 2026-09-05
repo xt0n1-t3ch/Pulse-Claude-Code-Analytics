@@ -276,6 +276,7 @@ function Initialize-TestState([object]$FixtureInfo) {
     $providerConfig | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -LiteralPath $providerConfigPath
 
     Set-TestEnvironment "CLAUDE_HOME" $claudeHome
+    Set-TestEnvironment "PULSE_HOME" $runRoot
     Set-TestEnvironment "CODEX_HOME" $codexHome
     Set-TestEnvironment "PULSE_ANALYTICS_DB" $providerConfig.analytics_db
     Set-TestEnvironment "PULSE_PROVIDER_FIXTURE" $fixtureCopy

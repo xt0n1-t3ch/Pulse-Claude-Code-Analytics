@@ -66,6 +66,7 @@ fn main() -> ExitCode {
 fn run() -> Result<u8> {
     setup_tracing();
     let cli = Cli::parse();
+    cc_discord_presence::storage::initialize()?;
     let config = PresenceConfig::load_or_init()?;
 
     match cli.command {
@@ -130,7 +131,9 @@ fn pause() {
 /// Best-effort — silently ignores write failures.
 fn log_diagnostic(msg: &str) {
     use std::io::Write;
-    let log_path = config::claude_home().join("cc-discord-presence-debug.log");
+    let log_path = cc_discord_presence::storage::home()
+        .join("claude")
+        .join("cc-discord-presence-debug.log");
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

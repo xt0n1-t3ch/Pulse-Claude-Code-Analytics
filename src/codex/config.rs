@@ -776,7 +776,9 @@ pub fn sessions_paths() -> Vec<PathBuf> {
 }
 
 pub fn config_path() -> PathBuf {
-    codex_home().join("discord-presence-config.json")
+    crate::storage::home()
+        .join("codex")
+        .join("discord-presence-config.json")
 }
 
 pub fn global_state_paths() -> Vec<PathBuf> {

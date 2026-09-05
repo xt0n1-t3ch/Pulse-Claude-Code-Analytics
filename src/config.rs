@@ -475,11 +475,15 @@ pub fn credentials_path() -> PathBuf {
 }
 
 pub fn usage_cache_path() -> PathBuf {
-    claude_home().join("discord-presence-usage-cache.json")
+    crate::storage::home()
+        .join("claude")
+        .join("discord-presence-usage-cache.json")
 }
 
 pub fn config_path() -> PathBuf {
-    claude_home().join("discord-presence-config.json")
+    crate::storage::home()
+        .join("claude")
+        .join("discord-presence-config.json")
 }
 
 pub fn lock_path() -> PathBuf {
