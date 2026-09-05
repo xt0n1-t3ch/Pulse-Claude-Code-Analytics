@@ -21,7 +21,7 @@ The workflow verifies the Rust host target before executing tests. It builds the
 
 ## Verify without publishing
 
-After an explicitly authorized annotated tag exists on the remote, dispatch Release with `publish_release=false`, the default. It runs the native matrix and retains verification artifacts for seven days. It does not create a GitHub release, and its unsigned packages are not updater candidates.
+After an explicitly authorized annotated tag exists on the remote, dispatch Release with `publish_release=false`, the default. It runs the native matrix and retains verification artifacts under the repository retention policy. It does not create a GitHub release, and its unsigned packages are not updater candidates.
 
 Local regression checks run with `cargo test --locked --test release_scripts`. They are also part of `npm run verify`. These fixture and workflow checks do not execute Linux or macOS binaries on Windows.
 

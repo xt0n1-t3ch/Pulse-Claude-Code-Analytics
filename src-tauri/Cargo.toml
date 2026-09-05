@@ -2,7 +2,7 @@
 name = "pulse"
 version = "1.8.2"
 edition = "2024"
-description = "Pulse — Codex & Claude analytics"
+description = "Pulse - Claude Code, Codex and OpenCode analytics"
 default-run = "pulse"
 license = "Apache-2.0"
 repository = "https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics"

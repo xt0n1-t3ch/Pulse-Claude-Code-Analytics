@@ -874,6 +874,17 @@ fn github_macos_packages_require_updater_signatures_not_apple_credentials() {
 }
 
 #[test]
+fn release_artifact_actions_use_node24_pins_and_repository_retention() {
+    let workflow = read(repository_root().join(".github/workflows/release.yml"));
+    assert!(workflow.contains("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"));
+    assert!(
+        workflow.contains("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c")
+    );
+    assert_eq!(workflow.matches("retention-days: 0").count(), 2);
+    assert!(!workflow.contains("retention-days: 7"));
+}
+
+#[test]
 fn local_release_requires_explicit_windows_recovery_before_external_commands() {
     let output = script_command("release-local.ps1")
         .env("PATH", "")

@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: Pulse version
-      placeholder: "1.0.0 — see top-right of the app"
+      placeholder: "1.8.2 - see the app version"
     validations:
       required: true
   - type: dropdown
@@ -32,8 +32,9 @@ body:
       label: Provider
       options:
         - Codex
-        - Claude
-        - Both
+        - Claude Code
+        - OpenCode
+        - Multiple providers
         - Not provider-specific
     validations:
       required: true

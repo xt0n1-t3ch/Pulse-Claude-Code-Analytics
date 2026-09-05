@@ -8,7 +8,7 @@
   </picture>
 </h1>
 <h2>Your coding activity. One clear view.</h2>
-<p>Local analytics and Discord Rich Presence for<br>Claude Code, Codex and OpenCode.</p>
+<p>Local-first AI coding analytics and Discord Rich Presence for<br>Claude Code, OpenAI Codex and OpenCode.</p>
 
 <p>
   <a href="https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest"><img src="https://img.shields.io/github/v/release/xt0n1-t3ch/Pulse-Claude-Code-Analytics?style=flat-square&amp;label=release&amp;color=171717&amp;labelColor=303030" alt="Latest GitHub release"></a>
@@ -16,7 +16,7 @@
   <a href="src-tauri/Cargo.toml"><img src="https://img.shields.io/badge/built_with-Tauri_2-171717?style=flat-square&amp;labelColor=303030" alt="Built with Tauri 2"></a>
 </p>
 
-<p><a href="#install"><img src="assets/icons/download.svg" alt="" width="20" height="20" align="center"> Download</a> Ã‚Â· <a href="#preview"><img src="assets/icons/image.svg" alt="" width="20" height="20" align="center"> Preview</a> Ã‚Â· <a href="#whats-new"><img src="assets/icons/sparkles.svg" alt="" width="20" height="20" align="center"> What's new</a> Ã‚Â· <a href="#use-pulse"><img src="assets/icons/terminal.svg" alt="" width="20" height="20" align="center"> Use Pulse</a> Ã‚Â· <a href="docs/index.md"><img src="assets/icons/map.svg" alt="" width="20" height="20" align="center"> Documentation</a></p>
+<p><a href="#install"><img src="assets/icons/download.svg" alt="" width="20" height="20" align="center"> Download</a> &middot; <a href="#preview"><img src="assets/icons/image.svg" alt="" width="20" height="20" align="center"> Preview</a> &middot; <a href="#whats-new"><img src="assets/icons/sparkles.svg" alt="" width="20" height="20" align="center"> What's new</a> &middot; <a href="#use-pulse"><img src="assets/icons/terminal.svg" alt="" width="20" height="20" align="center"> Use Pulse</a> &middot; <a href="docs/index.md"><img src="assets/icons/map.svg" alt="" width="20" height="20" align="center"> Documentation</a></p>
 
 
 </div>
@@ -25,7 +25,9 @@
 | --- | --- | --- |
 | See your active project, model and session context. | Read account usage without mixing providers or session tokens. | Choose which application and fields your profile shares. |
 
-Pulse keeps live activity, session history and account limits separate. Missing prices stay unavailable, not zero. Your analytics stay local.
+Pulse is an open-source desktop dashboard for **Claude Code analytics, OpenAI Codex usage and OpenCode sessions**. Track tokens, API-equivalent costs, prompt-cache efficiency and account limits, then share selected live details through Discord Rich Presence.
+
+Live activity, session history and account limits stay separate. Missing prices remain unavailable, not zero. Your session analytics stay on your machine.
 
 <h2 id="preview"><img src="assets/icons/image.svg" alt="" width="28" height="28" align="center">&nbsp; Preview</h2>
 
@@ -213,6 +215,24 @@ On Windows, WSL session discovery is off by default. Enable it only when you nee
 ```powershell
 $env:CC_PRESENCE_INCLUDE_WSL = "1"
 ```
+
+<h2 id="common-questions"><img src="assets/icons/info.svg" alt="" width="28" height="28" align="center">&nbsp; Common questions</h2>
+
+### Is Pulse a Claude Code cost tracker or a Codex dashboard?
+
+Both, plus OpenCode. Each provider has its own data source, context rules and cost provenance. The combined view does not merge account allowances or treat subscription credits as API spend.
+
+### Does Pulse need a separate account or API key?
+
+Local session history does not need a Pulse account. Provider quota cards use existing supported credentials and require a successful provider check. Missing credentials do not erase local history. See [plans and access](docs/guides/plans.md).
+
+### Does Pulse upload my prompts?
+
+No transcript uploads or analytics telemetry. Session analytics remain local. Enabled provider quota checks, update checks and Discord presence still use the network. See [your data and network access](#your-data-and-network-access).
+
+### Are the cost estimates my actual bill?
+
+Not always. Pulse separates provider-reported cost from API-equivalent estimates. Model prices can change, and documented runtime pricing gaps remain. See [cost provenance](docs/guides/costs.md) before using estimates for a budget.
 
 <h2 id="build-from-source"><img src="assets/icons/terminal.svg" alt="" width="28" height="28" align="center">&nbsp; Build from source</h2>
 

@@ -143,7 +143,10 @@ mod tests {
         let record = ManagedProcess {
             pid: 1,
             owner_pid: 2,
-            binary: "C:\\app\\opencode.exe".into(),
+            binary: Path::new("app")
+                .join("opencode.exe")
+                .to_string_lossy()
+                .into_owned(),
             runtime: "desktop".into(),
         };
         assert!(!valid_record(&record, &[]));
@@ -156,12 +159,18 @@ mod tests {
             ProcessIdentity {
                 pid: 2,
                 parent_pid: 0,
-                executable: "C:\\app\\OpenChamber.exe".into(),
+                executable: Path::new("app")
+                    .join("OpenChamber.exe")
+                    .to_string_lossy()
+                    .into_owned(),
             },
         ];
         assert!(valid_record(&record, &processes));
         let wrong = ManagedProcess {
-            binary: "C:\\different\\opencode.exe".into(),
+            binary: Path::new("different")
+                .join("opencode.exe")
+                .to_string_lossy()
+                .into_owned(),
             ..record
         };
         assert!(!valid_record(&wrong, &processes));

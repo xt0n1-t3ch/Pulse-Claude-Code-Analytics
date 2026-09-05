@@ -2,7 +2,7 @@
   "name": "pulse",
   "version": "1.8.2",
   "private": true,
-  "description": "Native local-first analytics dashboard for Claude Code and Codex, with Discord Rich Presence.",
+  "description": "Local-first analytics for Claude Code, OpenAI Codex and OpenCode, with Discord Rich Presence.",
   "scripts": {
     "dev": "npm --prefix frontend run dev",
     "dev:tauri": "cargo tauri dev",

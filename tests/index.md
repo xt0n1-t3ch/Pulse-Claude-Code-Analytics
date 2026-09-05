@@ -11,6 +11,7 @@ Centralized tests for the whole app. Frontend logic/integration/component-render
 | Frontend | `bun run --cwd frontend test` | Vitest unit + integration + component render (`tests/unit`, `tests/integration`, `tests/components`) |
 | Frontend (watch) | `bun run --cwd frontend test:watch` | Same, watch mode |
 | Release contracts | `cargo test --locked --test release_scripts` | Six native runner targets, publication opt-in, macOS architecture checks and updater signing gates, unsigned verification isolation, required public packages and Windows-only recovery exclusion from latest |
+| Public documentation | `npm --prefix frontend run test -- tests/unit/documentation-contract.test.ts` | Valid UTF-8, mojibake prevention, local documentation links, provider metadata and the tracked Claude guide |
 | Backend | `cargo test --workspace` | Both Rust crates (`cc-discord-presence` daemon/core + `pulse` Tauri host): inline `#[cfg(test)]` modules + the `tests/*.rs` / `src-tauri/tests/*.rs` integration tests |
 | Browser bridge | `cargo test -p pulse --lib dev_bridge` | Loopback-only POST contract, Bearer-token auth, strict local CORS, real command dispatch, safe-control argument guards, and explicit unavailable/unknown behavior |
 | Real browser development runtime | `bun run --cwd frontend dev` | Starts Vite plus the authenticated Rust bridge with one generated shared token; `1420` fails closed instead of rendering fixtures when the backend is unavailable |
@@ -22,7 +23,7 @@ Centralized tests for the whole app. Frontend logic/integration/component-render
 | Pulse E2E harness dry-run | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e/run-pulse.ps1 -Mode Browser -DryRun` | Stages temporary homes/DB/provider config and checks the Browser launch prerequisites without starting a server |
 | Native Tauri CDP + Playwright E2E | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/e2e/run-pulse.ps1 -Mode Tauri -Fixture no_data -RunPlaywright` | Starts owned Vite on `1420` before the repo-owned debug binary; native Tauri alone owns IPC and polling. It isolates WebView2 user data, runs `chromium.connectOverCDP`, validates the no-data Home contract, and cleans only exact owned processes. |
 
-Vitest config: [frontend/vitest.config.ts](../frontend/vitest.config.ts) (alias `@` â†’ `frontend/src`,
+Vitest config: [frontend/vitest.config.ts](../frontend/vitest.config.ts) (alias `@` → `frontend/src`,
 `fs.allow` widened to the repo root so the root-level spec tree resolves). Tauri IPC, the event/app/
 window/dialog/fs plugins, and Chart.js are all mocked in [tests/setup.ts](setup.ts) so store/view
 modules import cleanly outside a WebView; a WAAPI `Element.prototype.animate` stub plus a `matchMedia`
@@ -73,23 +74,23 @@ browser proof
 Home keeps live session telemetry visible while releasing the allowance column
 until an authenticated provider route supplies quota proof.
 
-## Frontend â€” unit (`tests/unit/`)
+## Frontend — unit (`tests/unit/`)
 
 | File | Module under test | Coverage |
 |:---|:---|:---|
-| [utils.test.ts](unit/utils.test.ts) | `lib/utils` | `fmtTokens` (B/M/K/unit tiers), `fmtCost` ($ two-decimal), `fmtDuration` (s/m/h+m), `fmtTps` (/sâ†’K/s), `fmtPct` (whole-percent rounding), `usageColor` (normal/warning/danger), `classifyActivity` (thinking/editing/reading/running/waiting/idle), `fmtClock` (HH:MM passthrough + em-dash fallback on nullÂ·undefined) |
+| [utils.test.ts](unit/utils.test.ts) | `lib/utils` | `fmtTokens` (B/M/K/unit tiers), `fmtCost` ($ two-decimal), `fmtDuration` (s/m/h+m), `fmtTps` (/s→K/s), `fmtPct` (whole-percent rounding), `usageColor` (normal/warning/danger), `classifyActivity` (thinking/editing/reading/running/waiting/idle), `fmtClock` (HH:MM passthrough + em-dash fallback on null·undefined) |
 | [access.test.ts](unit/access.test.ts) | `lib/access` | provider/subscription vs API labels, authenticated-route vs local-history display projections, dynamic provider-native windows, no numeric output for stale or unavailable usage, stable source-id to provider-scope resolution, and no API-to-subscription aliasing |
 | [provider.test.ts](unit/provider.test.ts) | `lib/provider` | optimistic latest-intent provider selection, serialized persistence, stale bootstrap rejection, and provider revision publication only for the surviving selection |
 
-## Frontend â€” integration (`tests/integration/`)
+## Frontend — integration (`tests/integration/`)
 
 | File | Surface | Coverage |
 |:---|:---|:---|
-| [tauri-mock.test.ts](integration/tauri-mock.test.ts) | `lib/api` over the mocked Tauri IPC | list commands resolve to `[]`, mapped scalar (`get_active_provider`â†’`"claude"`), unmapped command resolves to `undefined` without throwing |
-| [poll-flow.test.ts](integration/poll-flow.test.ts) | `stores.poll()` â†’ global stores â†’ `Dashboard.svelte` | one `poll()` pass calls each loader exactly once and hydrates `health`/`metrics`/`sessions`/`rateLimits`/`planInfo` + derived `activeSessions`; provider changes synchronously clear proof-bound state and reject prior-provider responses in flight; Dashboard then renders the provider/work shell and two live session cards end to end |
+| [tauri-mock.test.ts](integration/tauri-mock.test.ts) | `lib/api` over the mocked Tauri IPC | list commands resolve to `[]`, mapped scalar (`get_active_provider`→`"claude"`), unmapped command resolves to `undefined` without throwing |
+| [poll-flow.test.ts](integration/poll-flow.test.ts) | `stores.poll()` → global stores → `Dashboard.svelte` | one `poll()` pass calls each loader exactly once and hydrates `health`/`metrics`/`sessions`/`rateLimits`/`planInfo` + derived `activeSessions`; provider changes synchronously clear proof-bound state and reject prior-provider responses in flight; Dashboard then renders the provider/work shell and two live session cards end to end |
 | [phase5-flow.test.ts](integration/phase5-flow.test.ts) | `Reports.svelte` data flow | Reports renders the bundle through a single `getReportsBundle` call |
 
-## Frontend â€” component render (`tests/components/`)
+## Frontend — component render (`tests/components/`)
 
 DOM-render tests for every view/component via `@testing-library/svelte` on happy-dom. Tauri is
 satisfied through the injected internals in [setup.ts](setup.ts); the Chart.js view (`Costs`) swaps in
@@ -113,7 +114,7 @@ the [fixtures/ChartStub.svelte](fixtures/ChartStub.svelte) stub so canvas-bound 
 | [Discord.test.ts](components/Discord.test.ts) | `Discord` (view) | coherent Broadcast header, live-preview backend payload, provider capability gates, autosave saving/saved lifecycle, rollback on failed persistence, field reorder/toggles, and theme-aware preview |
 | [Settings.test.ts](components/Settings.test.ts) | `Settings` (view) | coherent Application header, identity masthead + config controls, db size + session total, plan override rollback, latest-provider-wins race handling, two-step clear-history confirm, and theme toggle |
 
-## Backend â€” Rust (`cargo test --workspace`)
+## Backend — Rust (`cargo test --workspace`)
 
 Two workspace crates. `cc-discord-presence` (repo root) is the daemon + analytics core;
 `pulse` (`src-tauri/`) is the Tauri host that depends on it. `--workspace` runs both crates' inline
@@ -148,7 +149,7 @@ Per-crate, per-module unit tests compiled with each crate. Representative covera
 | codex core | `src/codex/{session.rs,session/parser.rs,cost.rs,discord.rs,util.rs,process.rs}` | Codex JSONL parse, cost, presence lines, helpers |
 | codex telemetry | `src/codex/telemetry/{plan.rs,service_tier.rs,limits.rs}` | provider-scoped exact plan tiers (no Codex Max or generic Pro), service-tier resolution, rate-limit window parsing |
 | Windows test harness | `src-tauri/build.rs`, `src-tauri/src/lib.rs` | embeds the shared Common-Controls v6 + Tauri `asInvoker`/`uiAccess=false` manifest; Cargo's current Windows lib harness cannot consume a build-script test-only link flag, so packaged RT_MANIFEST readback remains a release gate |
-| db | `src-tauri/src/db.rs` | SQLite historical-session insert/query/round-trip + context snapshot storage clamped to the model window; Codex JSONL collect â†’ upsert â†’ 7d/month forecast integration; inclusive now-6d/exclusive now-8d window boundary; retryable write fingerprints; exact provider isolation plus explicit `all` aggregation; provider history inventory independent of cost/authentication; stored exact/partial/unavailable/provider-billed cost provenance round-trip; Summary, daily, project, hourly, model, and Reports timeline aggregates exclude unavailable raw estimates, average only priced sessions, and expose aggregate coverage |
+| db | `src-tauri/src/db.rs` | SQLite historical-session insert/query/round-trip + context snapshot storage clamped to the model window; Codex JSONL collect → upsert → 7d/month forecast integration; inclusive now-6d/exclusive now-8d window boundary; retryable write fingerprints; exact provider isolation plus explicit `all` aggregation; provider history inventory independent of cost/authentication; stored exact/partial/unavailable/provider-billed cost provenance round-trip; Summary, daily, project, hourly, model, and Reports timeline aggregates exclude unavailable raw estimates, average only priced sessions, and expose aggregate coverage |
 | analyzers | `src-tauri/src/analyzers/{session_trace.rs,cache_health.rs,model_routing.rs,prompt_complexity.rs,inflection.rs}` | trace scan + scan-pass counting, cache-health grading, provenance-aware model-routing split and inflection detection that cannot promote unavailable raw estimates, prompt-complexity scoring |
 | commands | `src-tauri/src/commands.rs` | access snapshots enriched with local-history inventory; reports-bundle assembly from roots; provenance-aware cost totals that retain token categories even when money is unavailable; daily timeline points that exclude unavailable raw estimates and report partial coverage; Codex weekly-only routes are never duplicated into the legacy 5h slot when a model-scoped weekly window is also present; `SessionInfo.intro_pricing`/`has_inflated_tokenizer` wiring for Claude sessions (real-clock, matched against a fresh `cost::active_intro_pricing` call so the test never goes stale across the real cutoff date) and confirmed absent for Codex sessions; `SessionInfo.context_used_tokens` and `build_claude_context_breakdown`'s `used_tokens` reflect current fill (`current_context_tokens`) rather than the historical peak (`max_turn_api_input`), while `context_window_tokens`/the 1M-vs-200K decision still correctly keys off the peak |
 | update checks | `src-tauri/src/update_check.rs` | SemVer tag comparison, newer-release detection, prerelease/draft suppression, release URL allowlist |
@@ -185,10 +186,10 @@ npm --prefix frontend run check
 
 Full pre-ship gate (see below) applies as usual. Note: this environment compiles the `pulse`
 crate's full dependency tree (Tauri + the `icu_properties`/`idna` chain it pulls in) under
-tight available memory â€” pass `--jobs 2` to `cargo` invocations that touch the `pulse` package
+tight available memory — pass `--jobs 2` to `cargo` invocations that touch the `pulse` package
 or the build can hit `STATUS_COMMIT_LIMIT_EXCEEDED` and cascade into unrelated-looking
 compile errors in transitive dependencies. This is an environment/parallelism characteristic,
-not a code defect â€” see the Sonnet 5 handoff for the diagnosis.
+not a code defect — see the Sonnet 5 handoff for the diagnosis.
 
 ## v1.2.0 targeted validators
 
@@ -229,19 +230,19 @@ npm --prefix frontend run build
 
 ## OpenCode y Astra
 
-- `src/opencode/store/tests.rs`: ambas tablas de mensajes, ocho familias, multimodelo, coste cero/ausente, paginaciÃ³n y SQLite bloqueado/incompatible.
+- `src/opencode/store/tests.rs`: ambas tablas de mensajes, ocho familias, multimodelo, coste cero/ausente, paginación y SQLite bloqueado/incompatible.
 - `src/opencode/process.rs`: PID, padre y executable del proceso gestionado; rechaza registros obsoletos.
 - `src/opencode/presence.rs`: privacidad, identidad OpenCode y ausencia de costes inventados.
-- `src-tauri/src/db.rs::opencode_tests`: metadatos persistidos y consultas histÃ³ricas sin tarifas prestadas.
-- `tests/components/AccessSourceBar.test.ts` y `Discord.test.ts`: filtros independientes, aplicaciÃ³n nativa y capacidades no disponibles.
-- `scripts/check-model-catalog-parity.ps1`: igualdad del catÃ¡logo con el repo canÃ³nico.
-- `axe-core` permite auditar el DOM renderizado en el navegador integrado; acompaÃ±e el resultado con teclado, screenshots y prueba visual real en Discord.
+- `src-tauri/src/db.rs::opencode_tests`: metadatos persistidos y consultas históricas sin tarifas prestadas.
+- `tests/components/AccessSourceBar.test.ts` y `Discord.test.ts`: filtros independientes, aplicación nativa y capacidades no disponibles.
+- `scripts/check-model-catalog-parity.ps1`: igualdad del catálogo con el repo canónico.
+- `axe-core` permite auditar el DOM renderizado en el navegador integrado; acompañe el resultado con teclado, screenshots y prueba visual real en Discord.
 
-La matriz `every_plan_override_survives_reload_and_matches_the_discord_payload` cubre todos los planes, precedencia manual, reload, rechazo de valores invÃ¡lidos y retorno a Auto-detect. `account_plan_is_independent_from_quota_windows` separa plan y cuotas.
+La matriz `every_plan_override_survives_reload_and_matches_the_discord_payload` cubre todos los planes, precedencia manual, reload, rechazo de valores inválidos y retorno a Auto-detect. `account_plan_is_independent_from_quota_windows` separa plan y cuotas.
 
-`opencode_go::tests` valida las tres ventanas y la fecha mensual sin duraciÃ³n inventada. `discord_identity::tests` valida READY y excluye credenciales del DTO. Heatmap expone las 24 horas en formato de 12 horas; Notifications aÃ±ade filtro de no leÃ­das, cierre con Escape y retorno de foco.
+`opencode_go::tests` valida las tres ventanas y la fecha mensual sin duración inventada. `discord_identity::tests` valida READY y excluye credenciales del DTO. Heatmap expone las 24 horas en formato de 12 horas; Notifications añade filtro de no leídas, cierre con Escape y retorno de foco.
 
-Las regresiones OpenCode incluyen caducidad y atribuciÃ³n Go, roundtrip del toggle de cuotas, presets y orden del compositor, ademÃ¡s del logo opencode-v2 en la UI.
+Las regresiones OpenCode incluyen caducidad y atribución Go, roundtrip del toggle de cuotas, presets y orden del compositor, además del logo opencode-v2 en la UI.
 
 ## Windows efficiency and release validation
 
