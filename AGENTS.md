@@ -1,4 +1,4 @@
-# AGENTS.md â€” Pulse repository guide
+# AGENTS.md — Pulse repository guide
 
 ## Product and scope
 

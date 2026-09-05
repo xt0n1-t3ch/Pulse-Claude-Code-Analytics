@@ -22,8 +22,9 @@ body:
       label: Provider scope
       options:
         - Codex
-        - Claude
-        - Both where capability exists
+        - Claude Code
+        - OpenCode
+        - Multiple providers where capability exists
         - Provider-independent
     validations:
       required: true

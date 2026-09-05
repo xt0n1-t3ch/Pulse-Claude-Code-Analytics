@@ -1,6 +1,8 @@
-# Pulse
+# Pulse: Claude Code, Codex and OpenCode analytics
 
 > Pulse is a local-first analytics GUI for Claude Code, Codex and OpenCode, with Discord Rich Presence. Rust, Tauri 2, Svelte 5 and SQLite own the implementation. Provider access, session history and monetary provenance stay separate. Targeted operating systems are not proof of published installers.
+
+The canonical repository is https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics. This file is a navigation aid for readers and language-model tools, not a promise of search ranking or provider endorsement.
 
 ## Start
 
@@ -13,7 +15,6 @@
 ## Models and data
 
 - [Claude models and context](docs/models/claude.md): Current Anthropic models, Claude Code capacity, API maxima, prices and runtime gaps.
-
 - [Codex models and context](docs/models/codex.md): Astra and GPT-5.6, exposed Codex capacity, usable budgets, API maxima, current prices and bundled-catalog differences.
 - [Context tracking](docs/guides/context.md): Current fill, historical peaks and compaction across providers.
 - [Costs](docs/guides/costs.md): Token categories, bundled arithmetic and monetary provenance.
