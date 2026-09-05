@@ -17,7 +17,7 @@ use cc_discord_presence::provider::Provider;
 static DB: OnceLock<Arc<Mutex<Connection>>> = OnceLock::new();
 static WRITES_SINCE_CHECKPOINT: AtomicUsize = AtomicUsize::new(0);
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 fn context_label_tokens(label: &str) -> Option<i64> {
     let normalized = label
@@ -46,6 +46,9 @@ fn context_label_tokens(label: &str) -> Option<i64> {
 fn session_window_tokens(s: &super::commands::SessionInfo) -> i64 {
     if s.context_window_tokens > 0 {
         return s.context_window_tokens.min(i64::MAX as u64) as i64;
+    }
+    if s.provider == "opencode" {
+        return 0;
     }
     if cost::is_ga_1m_context(&s.model_id) {
         return 1_000_000;
@@ -303,6 +306,7 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
     for (column, definition) in [
         ("provider", "TEXT DEFAULT 'claude'"),
         ("session_name", "TEXT DEFAULT NULL"),
+        ("opencode_json", "TEXT DEFAULT NULL"),
         ("created_at", "TEXT DEFAULT NULL"),
         ("used_tokens", "INTEGER DEFAULT 0"),
         ("window_tokens", "INTEGER DEFAULT 0"),
@@ -527,6 +531,7 @@ impl CostBasis {
 
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct HistoricalSession {
+    pub opencode: Option<cc_discord_presence::opencode::Metadata>,
     pub id: String,
     pub provider: String,
     pub session_name: Option<String>,
@@ -602,6 +607,9 @@ pub(crate) fn estimate_api_equivalent_cost(
     cache_write_tokens: i64,
     cache_read_tokens: i64,
 ) -> Option<EstimatedCost> {
+    if provider == "opencode" {
+        return None;
+    }
     estimate_api_equivalent_cost_with_speed(
         provider,
         model_id,
@@ -622,6 +630,9 @@ fn estimate_api_equivalent_cost_with_speed(
     cache_read_tokens: i64,
     speed: &str,
 ) -> Option<EstimatedCost> {
+    if provider.eq_ignore_ascii_case("opencode") {
+        return None;
+    }
     let model_id = model_id.trim();
     if model_id.is_empty() {
         return None;
@@ -660,6 +671,12 @@ fn estimate_api_equivalent_cost_with_speed(
             SessionSpeed::explicit(speed_mode, SpeedSource::LegacyDefault),
             &PricingConfig::default(),
         );
+        if model_id.starts_with("gpt-6-astra")
+            && (computed.status != cc_discord_presence::codex::cost::PricingStatus::Exact
+                || !matches!(speed, "standard" | "fast"))
+        {
+            return None;
+        }
         let total = computed.known_total_cost_usd?;
         if !total.is_finite() || total < 0.0 {
             return None;
@@ -780,7 +797,7 @@ fn query_sessions(
             started_at, ended_at, duration_secs, COALESCE(known_cost, 0), cost_status, cost_source, known_cost,
             input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, total_tokens,
             input_cost, output_cost, cache_write_cost, cache_read_cost,
-            has_thinking, subagent_count, is_active, used_tokens, window_tokens, speed
+            has_thinking, subagent_count, is_active, used_tokens, window_tokens, speed, opencode_json
          FROM sessions
          WHERE (?1 = 'all' OR provider = ?1)",
     );
@@ -868,6 +885,9 @@ fn query_sessions(
     let rows = stmt
         .query_map(refs.as_slice(), |row| {
             Ok(HistoricalSession {
+                opencode: row
+                    .get::<_, Option<String>>(31)?
+                    .and_then(|raw| serde_json::from_str(&raw).ok()),
                 id: row.get(0)?,
                 provider: row.get(1)?,
                 session_name: row.get(2)?,
@@ -1195,11 +1215,15 @@ fn session_cost_provenance(
         return ("unavailable", "unknown", None);
     }
     let cost = nonnegative_finite(session.cost);
+    if session.provider == "opencode" {
+        return ("exact", "opencode_reported", Some(cost));
+    }
     match session.cost_basis.as_str() {
         "exact" => ("exact", "session-calculated", Some(cost)),
         "estimated" => ("exact", "api_equivalent", Some(cost)),
         "partial" => ("partial", "session-calculated", Some(cost)),
         "provider_billed" => ("exact", "provider_billed", Some(cost)),
+        "opencode_reported" => ("exact", "opencode_reported", Some(cost)),
         _ => ("unavailable", "unknown", None),
     }
 }
@@ -1293,6 +1317,13 @@ fn upsert_session_into(
             context_source,
         ],
     )?;
+    if s.provider == "opencode" {
+        let metadata = s
+            .opencode
+            .as_ref()
+            .and_then(|value| serde_json::to_string(value).ok());
+        conn.execute("UPDATE sessions SET opencode_json=?2, is_active=?3, ended_at=CASE WHEN ?3=0 THEN ?4 ELSE NULL END WHERE id=?1", params![storage_id, metadata, !s.is_idle, updated_at])?;
+    }
     conn.execute(
         "UPDATE sessions
          SET created_at = COALESCE(created_at, started_at, updated_at),
@@ -1495,7 +1526,7 @@ fn search_sessions_from_connection(
             s.cost_status, s.cost_source, s.known_cost,
             s.input_tokens, s.output_tokens, s.cache_write_tokens, s.cache_read_tokens, s.total_tokens,
             s.input_cost, s.output_cost, s.cache_write_cost, s.cache_read_cost,
-             s.has_thinking, s.subagent_count, s.is_active, s.used_tokens, s.window_tokens, s.speed
+             s.has_thinking, s.subagent_count, s.is_active, s.used_tokens, s.window_tokens, s.speed, s.opencode_json
         FROM sessions_fts fts
         JOIN sessions s ON s.rowid = fts.rowid
         WHERE (?1 = 'all' OR s.provider = ?1) AND sessions_fts MATCH ?2
@@ -1513,6 +1544,9 @@ fn search_sessions_from_connection(
     let rows = stmt
         .query_map(params![provider, query, lim], |row| {
             Ok(HistoricalSession {
+                opencode: row
+                    .get::<_, Option<String>>(31)?
+                    .and_then(|raw| serde_json::from_str(&raw).ok()),
                 id: row.get(0)?,
                 provider: row.get(1)?,
                 session_name: row.get(2)?,
@@ -2168,7 +2202,7 @@ pub fn get_dashboard_data_scoped(
     };
     let cutoff = (now - chrono::Duration::days(days)).to_rfc3339();
     DashboardDataSnapshot {
-        summary: analytics_summary_from_connection(&conn, &provider),
+        summary: analytics_summary_for_window(&conn, &provider, days),
         sessions: query_sessions(
             &conn,
             &provider,
@@ -2579,6 +2613,91 @@ pub fn clear_history_scoped(provider: Option<&str>) -> Result<i64> {
 
 pub fn get_db_size_bytes() -> u64 {
     std::fs::metadata(db_path()).map(|m| m.len()).unwrap_or(0)
+}
+
+pub fn upsert_opencode_session(session: &super::commands::SessionInfo, updated: i64) -> bool {
+    let Ok(conn) = db().lock() else {
+        return false;
+    };
+    let Some(updated) = chrono::DateTime::from_timestamp_millis(updated) else {
+        return false;
+    };
+    match upsert_session_into(&conn, session, &updated.to_rfc3339()) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!("OpenCode analytics write failed: {error}");
+            false
+        }
+    }
+}
+
+fn analytics_summary_for_window(conn: &Connection, provider: &str, days: i64) -> AnalyticsSummary {
+    let rows = query_sessions(
+        conn,
+        provider,
+        Some(days),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let count = rows.len() as i64;
+    let coverage = summarize_cost_provenance(
+        rows.iter()
+            .map(|row| (row.cost_basis, row.cost_source.as_str(), row.known_cost)),
+    );
+    let total_cost: f64 = rows.iter().filter_map(|row| row.known_cost).sum();
+    let total_tokens: i64 = rows.iter().map(|row| row.total_tokens).sum();
+    let mut projects: BTreeMap<String, i64> = BTreeMap::new();
+    let mut models: BTreeMap<String, i64> = BTreeMap::new();
+    for row in &rows {
+        *projects.entry(row.project.clone()).or_default() += row.total_tokens;
+        *models.entry(row.model.clone()).or_default() += row.total_tokens;
+    }
+    let top = |map: BTreeMap<String, i64>| {
+        map.into_iter()
+            .max_by_key(|(_, tokens)| *tokens)
+            .map(|(name, _)| name)
+            .unwrap_or_default()
+    };
+    AnalyticsSummary {
+        total_sessions: count,
+        priced_sessions: coverage.priced_sessions as i64,
+        cost_basis: coverage.cost_basis,
+        cost_sources: coverage.cost_sources,
+        total_cost,
+        total_tokens,
+        total_cache_read: rows.iter().map(|row| row.cache_read_tokens).sum(),
+        total_cache_write: rows.iter().map(|row| row.cache_write_tokens).sum(),
+        avg_duration_secs: if count > 0 {
+            rows.iter().map(|row| row.duration_secs).sum::<i64>() as f64 / count as f64
+        } else {
+            0.0
+        },
+        avg_tokens_per_session: if count > 0 {
+            total_tokens as f64 / count as f64
+        } else {
+            0.0
+        },
+        avg_cost_per_session: if coverage.priced_sessions > 0 {
+            total_cost / coverage.priced_sessions as f64
+        } else {
+            0.0
+        },
+        top_project: top(projects),
+        top_model: top(models),
+        days_tracked: rows
+            .iter()
+            .filter_map(|row| row.started_at.as_deref())
+            .map(|value| value.chars().take(10).collect::<String>())
+            .collect::<BTreeSet<_>>()
+            .len() as i64,
+    }
 }
 
 #[cfg(test)]
@@ -3092,6 +3211,7 @@ mod tests {
         tokens: u64,
     ) -> super::super::commands::SessionInfo {
         super::super::commands::SessionInfo {
+            opencode: None,
             provider: "claude".into(),
             app_name: None,
             session_id: "session".into(),
@@ -4000,7 +4120,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 5);
+        assert_eq!(version, SCHEMA_VERSION);
 
         let provider_history_index: i64 = conn
             .query_row(
@@ -4143,7 +4263,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("read user_version");
-        assert_eq!(version, 5);
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     #[test]
@@ -4188,7 +4308,10 @@ mod tests {
             )
             .expect("backup schema columns");
         assert!(!backup_has_speed);
-        assert_eq!(schema_version(&migrated).expect("live schema version"), 5);
+        assert_eq!(
+            schema_version(&migrated).expect("live schema version"),
+            SCHEMA_VERSION
+        );
 
         drop(backup);
         drop(migrated);
@@ -4451,5 +4574,98 @@ mod tests {
                 Some(7.0)
             )
         );
+    }
+}
+
+#[cfg(test)]
+mod opencode_tests {
+    use super::*;
+    #[test]
+    fn dashboard_summary_uses_seven_days_and_exact_provider_scope() {
+        let connection = Connection::open_in_memory().unwrap();
+        init_schema(&connection).unwrap();
+        let now = Utc::now();
+        for (id, provider, age, tokens) in [
+            ("recent", "opencode", 1, 100),
+            ("old", "opencode", 8, 900),
+            ("other", "codex", 1, 500),
+        ] {
+            let timestamp = (now - chrono::Duration::days(age)).to_rfc3339();
+            let session = crate::commands::SessionInfo {
+                provider: provider.into(),
+                session_id: id.into(),
+                started_at: Some(timestamp.clone()),
+                tokens,
+                input_tokens: tokens,
+                model: id.into(),
+                project: id.into(),
+                is_idle: true,
+                ..Default::default()
+            };
+            upsert_session_into(&connection, &session, &timestamp).unwrap();
+        }
+        let scoped = analytics_summary_for_window(&connection, "opencode", 7);
+        assert_eq!(scoped.total_sessions, 1);
+        assert_eq!(scoped.total_tokens, 100);
+        assert_eq!(scoped.top_model, "recent");
+        let all = analytics_summary_for_window(&connection, "all", 7);
+        assert_eq!(all.total_sessions, 2);
+        assert_eq!(all.total_tokens, 600);
+    }
+
+    #[test]
+    fn native_metadata_survives_history_and_unknown_cost_stays_unknown() {
+        let connection = Connection::open_in_memory().unwrap();
+        init_schema(&connection).unwrap();
+        let metadata = cc_discord_presence::opencode::Metadata {
+            model_provider: "custom".into(),
+            model_id: "gpt-6-astra".into(),
+            variant: Some("max".into()),
+            ..Default::default()
+        };
+        let session = crate::commands::SessionInfo {
+            provider: "opencode".into(),
+            session_id: "native".into(),
+            model_id: "gpt-6-astra".into(),
+            opencode: Some(metadata.clone()),
+            input_tokens: 1000,
+            is_idle: true,
+            ..Default::default()
+        };
+        upsert_session_into(&connection, &session, "2026-09-04T00:00:00Z").unwrap();
+        let history = query_sessions(
+            &connection,
+            "opencode",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(10),
+        );
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].opencode.as_ref(), Some(&metadata));
+        assert!(history[0].known_cost.is_none());
+        assert_eq!(history[0].window_tokens, 0);
+        let free = crate::commands::SessionInfo {
+            cost_available: true,
+            cost_basis: "opencode_reported".into(),
+            ..session
+        };
+        upsert_session_into(&connection, &free, "2026-09-04T00:00:00Z").unwrap();
+        let (cost, source): (Option<f64>, String) = connection
+            .query_row(
+                "SELECT known_cost,cost_source FROM sessions WHERE provider='opencode'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cost, Some(0.0));
+        assert_eq!(source, "opencode_reported");
+        assert_eq!(schema_version(&connection).unwrap(), SCHEMA_VERSION);
     }
 }

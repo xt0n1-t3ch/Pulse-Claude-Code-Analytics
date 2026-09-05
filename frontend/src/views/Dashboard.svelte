@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import Heatmap from "../components/Heatmap.svelte";
   import AllowanceRail from "../components/AllowanceRail.svelte";
   import MetricStrip from "../components/MetricStrip.svelte";
@@ -58,8 +59,10 @@
     }
   }
 
-  $effect(() => {
-    void refresh($selectedAnalyticsProviderScope);
+  $effect(() => { void refresh($selectedAnalyticsProviderScope); });
+  onMount(() => {
+    const timer = setInterval(() => { if (!analyticsLoading && document.visibilityState !== "hidden") void refresh($selectedAnalyticsProviderScope); }, 5000);
+    return () => clearInterval(timer);
   });
 
   let scopedSessions = $derived(
@@ -100,11 +103,7 @@
   let histInput = $derived(histSessions.reduce((s, h) => s + Math.max(0, h.input_tokens - h.cache_write_tokens - h.cache_read_tokens), 0));
   let histCacheR = $derived(histSessions.reduce((s, h) => s + h.cache_read_tokens, 0));
 
-  let showInput = $derived(
-    summary
-      ? Math.max(0, summary.total_tokens - summary.total_cache_read - summary.total_cache_write)
-      : hasSessions ? totalInput : histInput,
-  );
+  let showInput = $derived(histSessions.length > 0 ? histInput : totalInput);
   let showCacheR = $derived(summary?.total_cache_read ?? (hasSessions ? totalCacheR : histCacheR));
   let showCacheHit = $derived(showCacheR + showInput > 0 ? showCacheR / (showCacheR + showInput) * 100 : 0);
 
@@ -121,6 +120,7 @@
   });
 
   let topModel = $derived.by(() => {
+    if (focusSession) return {name:focusSession.opencode?.model_name ?? focusSession.model, sessions:1};
     if (!summary?.top_model || summary.top_model === "—") return null;
     return { name: summary.top_model, sessions: summary.total_sessions };
   });
@@ -154,7 +154,7 @@
   );
 
   let liveInstances = $derived(scopedSessions.filter((session) => !session.is_idle));
-  let visibleInstances = $derived(liveInstances.length > 0 ? liveInstances : scopedSessions);
+  let visibleInstances = $derived(liveInstances.length > 0 ? liveInstances : scopedSessions.filter((session) => session.provider !== "opencode"));
   $effect(() => {
     const instances = visibleInstances;
     if (!instances.some((session) => session.session_id === selectedFocusId)) {
@@ -172,7 +172,7 @@
   );
   let focusHistory = $derived(histSessions[0] ?? null);
   let focusHistoryFallback = $derived(
-    focusSession ? null : focusHistory,
+    focusSession || $selectedAnalyticsProviderScope === "opencode" ? null : focusHistory,
   );
   let focusName = $derived(
     focusSession?.session_name
@@ -250,18 +250,22 @@
   let initialAnalyticsLoading = $derived(
     analyticsLoading && !summary && histSessions.length === 0 && !forecast && hourlyData.length === 0,
   );
+  let mobileAllowancesOpen = $state(false);
 </script>
 
 <div class="dashboard app-view" data-dashboard-layout="direction-two">
   <div class="home-grid" class:without-allowances={!hasAllowanceRoutes}>
     {#if hasAllowanceRoutes}
-      <AllowanceRail />
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (The bounded quota column supports keyboard scrolling.) -->
+      <div class="home-allowances" role="region" aria-label="Account limits" tabindex="0">
+        <button class="allowance-disclosure" type="button" aria-expanded={mobileAllowancesOpen} onclick={() => mobileAllowancesOpen = !mobileAllowancesOpen}>Account limits <span>{mobileAllowancesOpen ? "Hide" : "Show"}</span></button>
+        <div class:mobile-collapsed={!mobileAllowancesOpen}><AllowanceRail /></div>
+      </div>
     {/if}
     <section class="work-now">
       <header class="work-now-head">
         <div>
-          <h2>Live workspace</h2>
-          <p>Your current session — context, monetary value, and throughput.</p>
+          <h2>Working now</h2>
         </div>
         {#if $backendConnection !== "live"}
           <div class="home-status" aria-label="Connection status">
@@ -327,7 +331,7 @@
     </section>
   {/if}
 
-  <div class="signal-grid">
+  <div class="signal-grid" class:without-live-session={!focusSession}>
     <section
       id="session-focus-panel"
       class="focus-panel"
@@ -339,18 +343,20 @@
         <div>
           <div class="view-kicker">
             <span class="focus-dot" class:live={focusIsLive}></span>
-            {focusIsLive ? "Live session" : focusSession ? "Recent session" : "Latest session"}
+            {focusIsLive ? "Live session" : focusSession ? "Recent session" : focusHistoryFallback ? "Latest session" : "Idle"}
           </div>
           <h1>{focusName}</h1>
+          {#if focusSession || focusHistoryFallback}
           <div class="focus-meta">
             <span>{focusProject}</span>
             <span>{focusBranch}</span>
             <span>{focusModel}</span>
             <span>{focusDuration > 0 ? fmtDuration(focusDuration) : "Waiting"}</span>
           </div>
+          {/if}
         </div>
         <span class="focus-state" class:live={focusIsLive}>
-          {focusIsLive ? "Running" : focusSession ? "Idle" : "History"}
+          {focusIsLive ? "Running" : focusSession || !focusHistoryFallback ? "Idle" : "History"}
         </span>
       </div>
 
@@ -361,19 +367,14 @@
           <span class="skeleton"></span>
         </div>
       {:else}
+        {#if focusSession || focusHistoryFallback}
         <MetricStrip>
-          {#if focusCostBasis !== "exact"}
-            <StatCard label="Current monetary value" value={fmtExactCost(focusCost, focusCostAvailable)}>
-              {#snippet extra()}
-                <span class="focus-note" title={focusCostNote} style="display:block">{focusCostNote}</span>
-              {/snippet}
-            </StatCard>
-          {:else}
-            <StatCard label="Current monetary value" value={fmtExactCost(focusCost, focusCostAvailable)} />
-          {/if}
-          <StatCard label="Burn rate" value={focusCostAvailable && burnRate > 0 ? `${fmtCost(burnRate)}/hr` : "—"} />
-          <StatCard label="Cumulative tokens" value={fmtTokens(focusTokens)} />
+          {#if focusCostAvailable}<StatCard label="Reported value" value={fmtCost(focusCost)} />{/if}
+          {#if focusCostAvailable && burnRate > 0}<StatCard label="Value per hour" value={`${fmtCost(burnRate)}/hr`} />{/if}
+          <StatCard label="Session tokens" value={fmtTokens(focusTokens)} />
+          {#if focusSession}<StatCard label="Output tokens" value={fmtTokens(focusSession.output_tokens)} />{/if}
         </MetricStrip>
+        {/if}
       {/if}
 
       <div class="focus-chart" aria-label="Session token composition">
@@ -401,13 +402,13 @@
       </div>
     </section>
 
+    {#if focusSession}
     <aside class="telemetry-ledger" data-telemetry-ledger>
       <div class="ledger-head">
         <div>
           <span class="view-kicker">This session</span>
           <h2>Session status</h2>
         </div>
-        <span class="ledger-date">Today</span>
       </div>
 
       {#if focusSession}
@@ -428,7 +429,7 @@
 
         <section class="ledger-section">
           <div class="ledger-row"><span>Current activity</span><strong>{focusSession.activity}</strong></div>
-          <span class="ledger-note">{focusSession.activity_target ?? "No target reported"}</span>
+          {#if focusSession.activity_target}<span class="ledger-note">{focusSession.activity_target}</span>{/if}
         </section>
 
         <section class="ledger-section split">
@@ -436,10 +437,9 @@
             <span class="ledger-note">Reasoning effort</span>
             <strong>{focusSession.effort}</strong>
           </div>
-          <div>
-            <span class="ledger-note">Output speed</span>
-            <strong>{focusSession.tokens_per_sec ? fmtTps(focusSession.tokens_per_sec) : "—"}</strong>
-          </div>
+          {#if focusSession.tokens_per_sec > 0}<div>
+            <span class="ledger-note">Output speed</span><strong>{fmtTps(focusSession.tokens_per_sec)}</strong>
+          </div>{/if}
         </section>
       {:else}
         <div class="ledger-empty">
@@ -451,17 +451,18 @@
       <section class="ledger-section">
         <div class="ledger-row">
           <span>Discord presence</span>
-          <strong class:connected={$health?.discord_status === "Connected"}>{$health?.discord_status ?? "Detecting"}</strong>
+          <strong class:connected={$health?.discord_status === "Connected"}>{$health?.discord_status === "Controlled by external daemon" ? "Desktop app" : $health?.discord_status ?? "Connecting"}</strong>
         </div>
         <span class="ledger-note">Rich Presence connection</span>
       </section>
     </aside>
+    {/if}
   </div>
 
   {#if initialAnalyticsLoading}
     <section class="glance-section glance-skeleton" aria-label="Loading at-a-glance analytics">
       <div class="glance-head">
-        <span class="view-kicker">At a glance</span>
+        <span class="view-kicker">{$selectedAnalyticsProviderScope === "all" ? "All providers" : $selectedAnalyticsProviderScope} · Last 7 days</span>
       </div>
       <div class="insight-row" aria-hidden="true">
         <span class="skeleton"></span>
@@ -473,7 +474,7 @@
   {:else if hasOperationalSummary}
   <section class="glance-section">
     <div class="glance-head">
-      <span class="view-kicker">At a glance</span>
+      <span class="view-kicker">{$selectedAnalyticsProviderScope === "all" ? "All providers" : $selectedAnalyticsProviderScope} · Last 7 days</span>
     </div>
     <div class="insight-row">
     {#if showCacheR + showInput > 0}
@@ -497,7 +498,7 @@
           <span class="forecast-label">{forecastInsight.label}</span>
           <span class="forecast-value">{fmtGlanceCost(forecastInsight.value)}</span>
           <span class="forecast-meta">
-            {fmtGlanceCost(forecastInsight.current)} {forecastInsight.provenance} · projected {fmtGlanceCost(forecastInsight.value)}
+            This month · {fmtGlanceCost(forecastInsight.current)} {forecastInsight.provenance}
           </span>
         </div>
       </div>
@@ -506,20 +507,20 @@
     {#if topModel}
       <div class="insight-card">
         <div class="routing-info">
-          <span class="routing-label">Dominant model</span>
+          <span class="routing-label">{focusSession ? "Current model" : "Most used model"}</span>
           <span class="routing-value">{topModel.name}</span>
-          <span class="routing-meta">Across {topModel.sessions} sessions</span>
+          <span class="routing-meta">{focusSession ? `${focusSession.provider} · current session` : `Across ${topModel.sessions} recent sessions`}</span>
         </div>
       </div>
     {/if}
 
+    </div>
     {#if hourlyData.length > 0}
-      <div class="insight-card heatmap-card" title="Last 30 days">
+      <div class="insight-card heatmap-card" title="Last 7 days">
         <span class="heatmap-title">Activity by hour</span>
         <Heatmap data={hourlyData} />
       </div>
     {/if}
-    </div>
   </section>
   {/if}
 
@@ -529,10 +530,11 @@
 
 <style>
   .dashboard {
-    min-height: 100%;
+    min-height: 0;
     display: flex;
     flex-direction: column;
   }
+  .signal-grid.without-live-session { grid-template-columns: minmax(0, 1fr); }
   .home-status { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
   .status-chip {
     min-height: 28px;
@@ -551,12 +553,11 @@
   .status-chip.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); }
   .status-chip.warn i { background: var(--warning); }
   .home-grid {
-    flex: 1;
     display: grid;
-    grid-template-columns: clamp(280px, 23vw, 360px) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0;
-    align-items: stretch;
-    min-height: 100%;
+    align-items: start;
+    min-height: 0;
     /* One unified surface: the grid itself is the card. Its two columns
        (Provider limits + Live workspace) share this matte panel and are separated by
        a single interior divider, never two floating cards. */
@@ -586,9 +587,9 @@
     overflow: hidden;
     /* Column of the shared home-grid card, divided from Provider limits by one
        interior hairline instead of its own border/shadow. */
-    border-left: 1px solid var(--divider);
+    border-top: 1px solid var(--divider);
   }
-  .home-grid.without-allowances .work-now { border-left: 0; }
+  .home-grid.without-allowances .work-now { border-top: 0; }
   .work-now-head {
     display: flex;
     align-items: flex-start;
@@ -606,7 +607,6 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
-  .work-now-head p { margin-top: 6px; color: var(--text-muted); font-size: 12px; }
   .analytics-alert {
     display: flex;
     align-items: center;
@@ -656,7 +656,8 @@
     letter-spacing: var(--letter-wider);
     text-transform: uppercase;
   }
-  .instance-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .instance-grid { display: flex; flex-wrap: wrap; }
+  .instance-grid > .instance-tab { flex: 1 1 220px; }
   .instance-tab {
     position: relative;
     display: flex;
@@ -710,15 +711,6 @@
   .focus-panel :global(.stat-card) { min-width: 0; padding: 13px 16px; }
   .focus-panel :global(.stat-label) { color: var(--text-muted); }
   .focus-panel :global(.stat-value) { min-width: 0; font-size: clamp(19px, 2vw, 27px); }
-  .focus-note {
-    display: block;
-    max-width: 100%;
-    overflow: hidden;
-    color: var(--text-muted);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .focus-stats-skeleton {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -754,7 +746,6 @@
   }
   .ledger-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--divider); }
   .ledger-head h2 { margin-top: 4px; font-size: var(--fs-lg); font-weight: 650; letter-spacing: var(--letter-tight); }
-  .ledger-date { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--fs-xs); }
   .ledger-section { display: flex; flex-direction: column; gap: 8px; padding: 16px 0; border-bottom: 1px solid var(--divider); }
   .ledger-section:last-child { border-bottom: 0; padding-bottom: 0; }
   .ledger-empty { display: flex; flex-direction: column; gap: 6px; padding: 26px 0; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.5; }
@@ -790,11 +781,8 @@
   .glance-skeleton .insight-row { gap: 12px; }
   .glance-skeleton .skeleton { min-height: 64px; }
   .glance-skeleton .heatmap-skeleton { grid-column: 1 / -1; min-height: 72px; }
-  /* The 24-column heatmap needs real width; letting it share an auto-fit track
-     (min 175px) forced a 260px min-width that overran the panel. Give it its own
-     full-width row instead so it can breathe and never overflow. */
-  .heatmap-card { grid-column: 1 / -1; min-width: 0; margin-top: 2px; }
-  .heatmap-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 10px; }
+  .heatmap-card { min-width: 0; margin-top: 2px; padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--divider); }
+  .heatmap-title { text-align: center; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-bottom: 10px; }
 
   .cache-grade { display: flex; align-items: center; gap: 14px; }
   .grade-letter { font-size: 36px; font-weight: 900; line-height: 1; }
@@ -818,7 +806,6 @@
 
   /* Give each live instance enough room before the rest of the dashboard collapses. */
   @media (max-width: 1180px) {
-    .instance-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .instance-tab:nth-child(2n) { border-right: 0; }
     .instance-tab:nth-child(n + 3) { border-top: 1px solid var(--divider); }
   }
@@ -829,16 +816,11 @@
     .telemetry-ledger { border-top: 1px solid var(--divider); border-left: 0; }
   }
 
-  @media (max-width: 800px) {
-    .insight-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .heatmap-card { min-width: 0; }
-  }
 
   @media (max-width: 620px) {
     .work-now-head { align-items: flex-start; flex-direction: column; }
     .analytics-alert { align-items: flex-start; flex-direction: column; }
     .home-status { justify-content: flex-start; }
-    .instance-grid { grid-template-columns: 1fr; }
     .instance-tab { border-right: 0; border-top: 1px solid var(--divider); }
     .instance-tab:first-child { border-top: 0; }
     .focus-panel, .telemetry-ledger { padding: 17px; }
@@ -854,4 +836,30 @@
     .insight-card { padding: 10px 0; border-top: 1px solid var(--divider); border-left: 0; }
     .insight-card:first-child { border-top: 0; }
   }
+  .home-allowances { min-width: 0; }
+  .allowance-disclosure { display: none; }
+  @media (max-width: 620px) {
+    .allowance-disclosure { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; color: var(--text-primary); border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+    .allowance-disclosure span { color: var(--text-secondary); font-weight: 400; }
+    .allowance-disclosure:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .mobile-collapsed { display: none; }
+  }
+  .focus-panel :global(.metric-strip) { grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); }
+  .focus-panel :global(.stat-value) { line-height:1.3; }
+  .insight-row { align-items:center; }
+  .insight-card:not(.heatmap-card) { text-align:center; justify-content:center; }
+  .ledger-row strong { white-space:normal; overflow-wrap:anywhere; }
+  .home-grid { align-items:start; }
+  .home-allowances { position:static; max-height:none; overflow:visible; }
+  .home-allowances:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+  .work-now { min-height:0; }
+  @media(max-width:620px) { .home-allowances { position:static; max-height:none; overflow:visible; } }
+  .mix-legend > div { grid-template-columns:auto auto; justify-content:center; justify-items:center; text-align:center; gap:5px 6px; }
+  .mix-legend i { grid-row:1; }
+  .mix-legend strong { grid-column:1 / -1; justify-self:center; }
+  .mix-legend span { font-size:11px; }
+  .insight-card:not(.heatmap-card) { display:grid; place-items:center; padding:14px; min-height:110px; }
+  .cache-grade { justify-content:center; }
+  .forecast-info, .routing-info { text-align:center; align-items:center; }
+  .forecast-meta, .routing-meta { white-space:normal; overflow:visible; text-overflow:clip; line-height:1.5; }
 </style>

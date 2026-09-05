@@ -21,6 +21,8 @@ pub enum AccessSourceKind {
     OpenAiApi,
     ClaudeSubscription,
     AnthropicApi,
+    OpenCodeLocal,
+    OpenCodeGo,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -756,6 +758,7 @@ fn usage_source_matches(source: &AccessSource, usage_source: &UsageSource) -> bo
 
 fn source_lane(kind: AccessSourceKind) -> Option<UsageLane> {
     match kind {
+        AccessSourceKind::OpenCodeLocal | AccessSourceKind::OpenCodeGo => None,
         AccessSourceKind::CodexSubscription => Some(UsageLane::CodexSubscription),
         AccessSourceKind::OpenAiApi => Some(UsageLane::OpenAiApi),
         AccessSourceKind::ClaudeSubscription => Some(UsageLane::ClaudeSubscription),

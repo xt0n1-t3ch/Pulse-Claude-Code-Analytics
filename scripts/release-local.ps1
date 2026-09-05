@@ -250,7 +250,12 @@ try {
   }
 } finally {
   if (Test-Path -LiteralPath $verification) {
-    Remove-Item -LiteralPath $verification -Recurse -Force
+    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $resolvedVerification = [System.IO.Path]::GetFullPath($verification)
+    if (-not $resolvedVerification.StartsWith($temporaryRoot, [System.StringComparison]::OrdinalIgnoreCase) -or [System.IO.Path]::GetFileName($resolvedVerification) -notmatch '^pulse-release-verify-[0-9a-f]{32}$') {
+      throw "Refusing cleanup outside the task-owned release verification directory"
+    }
+    Remove-Item -LiteralPath $resolvedVerification -Recurse -Force
   }
   if ($releaseAttempted -and -not $releaseFinalized -and -not $keepVerifiedDraft) {
     Remove-FailedRelease -ReleaseTag $Tag

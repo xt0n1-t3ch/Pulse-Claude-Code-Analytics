@@ -479,28 +479,12 @@ describe("Dashboard.svelte", () => {
     expect(container.textContent).toContain(formatResetDateTime("2026-05-28T18:00:00Z"));
   });
 
-  it("keeps an unavailable cost note below the value in its own metric card", async () => {
-    sessions.set([{
-      ...liveSession("unpriced", "Unpriced work", 80_000, 100_000, "Thinking"),
-      cost_available: false,
-      cost_basis: "unavailable",
-    }]);
-
-    const { container } = render(Dashboard);
-    await tick();
-
-    const costLabel = [...container.querySelectorAll(".stat-label")]
-      .find((node) => node.textContent?.trim() === "Current monetary value");
-    const costCard = costLabel?.closest(".stat-card");
-    const value = costCard?.querySelector(".stat-value");
-    const note = costCard?.querySelector<HTMLElement>(".focus-note");
-
-    expect(costCard).not.toBeNull();
-    expect(note?.textContent).toBe("Exact total not reported");
-    expect(note?.title).toBe("Exact total not reported");
-    expect(note?.closest(".stat-card")).toBe(costCard);
-    expect(value?.compareDocumentPosition(note as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(getComputedStyle(note as HTMLElement).display).toBe("block");
+  it("omits unreported monetary tiles instead of displaying empty metrics", async () => {
+    sessions.set([{ ...liveSession("unpriced", "Unpriced work", 80_000, 100_000, "Thinking"), cost_available:false, cost_basis:"unavailable" }]);
+    const {container}=render(Dashboard); await tick();
+    expect(container.querySelector("[data-session-focus]")?.textContent).not.toContain("Exact total not reported");
+    expect([...container.querySelectorAll(".stat-label")].some((label)=>label.textContent==="Reported value")).toBe(false);
+    expect(container.textContent).toContain("Session tokens");
   });
 
   it("keeps at-a-glance metadata to one line and moves coverage to a tooltip", async () => {
@@ -526,9 +510,10 @@ describe("Dashboard.svelte", () => {
     const meta = card?.querySelectorAll(".forecast-meta") ?? [];
     expect(meta).toHaveLength(1);
     expect(meta[0]?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "$10,444 API-equivalent · projected $11,992",
+      "This month · $10,444 API-equivalent",
     );
     expect(card?.title).toBe("Coverage: 27/31 days");
+    expect(container.querySelector(".insight-row .heatmap-card")).toBeNull();
     expect(card?.querySelector(".insight-kicker")).toBeNull();
   });
 
@@ -571,6 +556,7 @@ describe("Dashboard.svelte", () => {
         error: null,
       }],
     });
+    selectedAnalyticsProviderScope.set("claude");
     selectedAccessSourceId.set("claude-subscription:test");
 
     const { container } = render(Dashboard);
@@ -584,12 +570,12 @@ describe("Dashboard.svelte", () => {
     await waitFor(() => {
       const settled = container.querySelector("[data-session-focus]")?.textContent ?? "";
       expect(settled).toContain("No active session");
-      expect(settled).toContain("Exact total not reported");
+      expect(settled).toContain("No active session");
     });
 
     const focus = container.querySelector("[data-session-focus]")?.textContent ?? "";
     expect(focus).toContain("No active session");
-    expect(focus).toContain("Exact total not reported");
+    expect(focus).toContain("No active session");
     expect(focus).not.toContain("Unavailable");
     expect(focus).not.toContain("$4.25");
     expect(focus).not.toContain("1.1M");
@@ -636,4 +622,17 @@ describe("Dashboard.svelte", () => {
     expect(container.textContent).not.toContain("5h");
     expect(container.textContent).not.toContain("Spark");
   });
+  it("keeps completed OpenCode work out of the live focus and shows idle", async () => {
+    selectedAnalyticsProviderScope.set("opencode");
+    sessions.set([{...liveSession("old-open", "Finished smoke", 90000, 200000, "Waiting for input"), provider:"opencode", model:"mimo-v2.5-free", is_idle:true}]);
+    getSessionHistory.mockResolvedValueOnce([{...hist("old-open","Finished smoke",0),provider:"opencode",model:"mimo-v2.5-free"}]);
+    const {container}=render(Dashboard);
+    await tick();
+    const focus=container.querySelector("[data-session-focus]");
+    expect(focus?.textContent).toContain("No active session");
+    expect(focus?.textContent).toContain("Idle");
+    expect(focus?.textContent).not.toContain("mimo-v2.5-free");
+    expect(focus?.querySelector(".metric-strip")).toBeNull();
+  });
+
 });

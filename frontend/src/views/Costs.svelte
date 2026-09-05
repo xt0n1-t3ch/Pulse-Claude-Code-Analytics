@@ -62,6 +62,7 @@
   let histSessions = $state<HistoricalSession[]>([]);
   const DETAIL_PAGE_SIZE = 50;
   let visibleDetailLimit = $state(DETAIL_PAGE_SIZE);
+  let showAllModels = $state(false);
   let loadGeneration = 0;
   let totalsGeneration = 0;
   let lastTotalsKey = "";
@@ -550,6 +551,11 @@
       </header>
 
       <div class="ledger-metrics">
+        {#if $selectedAnalyticsProviderScope === "opencode"}
+          <div class="ledger-metric"><span class="ledger-label">OpenCode-reported</span><strong class="ledger-value">{fmtExactCost(totalCost, costAvailable)}</strong><small>{pricedSessionCount} sessions with reported values</small></div>
+          <div class="ledger-metric"><span class="ledger-label">Cost source</span><strong class="ledger-value">OpenCode</strong><small>Application-reported value, not a provider invoice</small></div>
+        {:else}
+        {#if totals?.billed_spend_usd != null}
         <div class="ledger-metric">
           <span class="ledger-label">Provider billed</span>
           <strong class="ledger-value">
@@ -557,6 +563,8 @@
           </strong>
           <small>{(totals?.billed_sessions ?? 0) > 0 ? `${totals?.billed_sessions ?? 0} billing reads` : "no billing reads yet"}</small>
         </div>
+        {/if}
+        {#if totals?.api_equivalent_usd != null}
         <div class="ledger-metric">
           <span class="ledger-label">API-equivalent</span>
           <strong class="ledger-value">
@@ -564,6 +572,8 @@
           </strong>
           <small>{totals?.api_equivalent_sessions ?? 0} sessions priced</small>
         </div>
+        {/if}
+        {/if}
         <div class="ledger-metric">
           <span class="ledger-label">Tokens</span>
           <strong class="ledger-value">{fmtTokens(usageTotalTokens)}</strong>
@@ -590,7 +600,7 @@
             <h4>Token mix</h4>
             <span>{fmtTokens(usageTotalTokens)} observed</span>
           </div>
-          <div class="token-mix-bar" aria-label="Token mix">
+          <div class="token-mix-bar" role="img" aria-label="Token mix">
             {#each usageTokenMix as item}
               <span
                 class={item.className}
@@ -720,7 +730,7 @@
       <section class="pane">
         <h3 class="pane-title">By model</h3>
         <div class="model-cost-list">
-          {#each modelCosts as [model, cost]}
+          {#each (showAllModels ? modelCosts : modelCosts.slice(0, 8)) as [model, cost]}
             <div class="mc-row">
               <span class="mc-name" title={model}>{model}</span>
               <div class="mc-bar-track">
@@ -730,6 +740,7 @@
             </div>
           {/each}
         </div>
+        {#if modelCosts.length > 8}<button class="show-more" type="button" onclick={() => showAllModels = !showAllModels}>{showAllModels ? "Show fewer models" : `Show all ${modelCosts.length} models`}</button>{/if}
       </section>
     {/if}
       </div>
@@ -763,7 +774,8 @@
         <button class="export-btn" onclick={() => showExport = true}>Export</button>
       {/if}
     </div>
-    <div class="detail-table">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex (The scrollable table must be reachable by keyboard.) -->
+    <div class="detail-table" role="region" aria-label="Scrollable session cost details" tabindex="0">
       <table>
         <caption class="sr-only">Session cost and token details</caption>
         <thead>
@@ -1298,4 +1310,17 @@
     .mc-bar-track { grid-column: 1 / -1; grid-row: 2; }
     .mc-val { width: auto; }
   }
+  .detail-table:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  @media (max-width: 620px) {
+    .ledger-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ledger-metric { min-width: 0; padding: 14px 10px; }
+    .ledger-metric:nth-child(even) { border-left: 1px solid var(--divider); padding-left: 12px; }
+    .ledger-metric:nth-child(-n+2) { border-top: 0; }
+    .ledger-metric strong { font-size: 22px; overflow-wrap: anywhere; }
+    .project-name, .project-ref { white-space: normal; overflow-wrap: anywhere; }
+  }
+  .charts-row { align-items:start; gap:28px; }
+  .model-cost-list { max-height:340px; overflow-y:auto; }
+  .ledger-metrics { grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); }
+  @media(max-width:620px) { .ledger-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 </style>

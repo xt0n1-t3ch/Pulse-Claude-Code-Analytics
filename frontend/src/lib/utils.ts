@@ -44,6 +44,7 @@ export function monetaryValueKind(sources: readonly string[]): MonetaryValueKind
 }
 
 export function monetaryValueLabel(sources: readonly string[]): string {
+  if (sources.length > 0 && sources.every((source) => source === "opencode_reported")) return "OpenCode-reported value";
   const kind = monetaryValueKind(sources);
   if (kind === "provider-billed") return "Provider-billed spend";
   if (kind === "api-equivalent") return "API-equivalent value";

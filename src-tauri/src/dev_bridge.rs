@@ -118,6 +118,7 @@ struct BridgeTarget {
     end_hour: i64,
     notification_limit: Option<usize>,
     notification_id: Option<i64>,
+    notification_token: Option<String>,
     recommendation_id: Option<String>,
 }
 
@@ -251,6 +252,7 @@ impl BridgeTarget {
             limit,
             notification_limit,
             notification_id: optional_i64("id")?,
+            notification_token: optional_string("token")?,
             recommendation_id: optional_string("recId")?,
         })
     }
@@ -493,6 +495,22 @@ fn dispatch(target: &BridgeTarget) -> Result<String, DispatchError> {
             .and_then(serialize),
         "mark_all_notifications_read" => crate::commands::mark_all_notifications_read()
             .map_err(DispatchError::Unavailable)
+            .and_then(serialize),
+        "mark_notification_unread" => required(target.notification_id, "id")
+            .and_then(|id| {
+                crate::commands::mark_notification_unread(id).map_err(DispatchError::Unavailable)
+            })
+            .and_then(serialize),
+        "mark_all_notifications_unread" => crate::commands::mark_all_notifications_unread()
+            .map_err(DispatchError::Unavailable)
+            .and_then(serialize),
+        "dismiss_all_notifications" => crate::commands::dismiss_all_notifications()
+            .map_err(DispatchError::Unavailable)
+            .and_then(serialize),
+        "restore_notifications" => required(target.notification_token.clone(), "token")
+            .and_then(|token| {
+                crate::commands::restore_notifications(token).map_err(DispatchError::Unavailable)
+            })
             .and_then(serialize),
         "dismiss_notification" => required(target.notification_id, "id")
             .and_then(|id| {
@@ -1072,6 +1090,8 @@ mod tests {
             "set_discord_field_order",
             "set_codex_desktop_design",
             "mark_notification_read",
+            "mark_notification_unread",
+            "restore_notifications",
             "dismiss_notification",
         ] {
             let target = BridgeTarget::for_test(command);

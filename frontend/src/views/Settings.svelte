@@ -8,12 +8,15 @@
     accessSnapshot,
     selectedAccessSourceId,
     selectedAnalyticsProviderScope,
+    opencodeDiagnostics,
+    refreshDiscordPresencePreview,
   } from "../lib/stores";
   import { provider, providerProfile, setProvider, PROVIDERS, type Provider } from "../lib/provider";
   import { planLabelForKey, planOptionsFor } from "../lib/plans";
   import { setPlanOverride, exportAllData, clearHistory, getDbSize, getPlanInfo, getAnalyticsSummary, getAppSettings, setCloseToTray } from "../lib/api";
   import type { AnalyticsSummary } from "../lib/api";
   import PulseMark from "../components/PulseMark.svelte";
+  import OpenCodeMark from "../components/OpenCodeMark.svelte";
   import SegmentedControl from "../components/SegmentedControl.svelte";
   import Select from "../components/Select.svelte";
   import IconDownload from "@tabler/icons-svelte/icons/download";
@@ -84,11 +87,6 @@
     planInfo.set(null);
     try {
       await setProvider(nextProvider);
-      const matchingSource = $accessSnapshot?.routes.find((route) =>
-        route.source.provider === nextProvider
-        && route.source.kind === `${nextProvider}_subscription`
-      );
-      selectedAccessSourceId.set(matchingSource?.source.id ?? "all");
     } catch {
       if (generation !== providerGeneration || providerPlanGeneration !== planGeneration) return;
       settingsError = "Provider selection could not be saved.";
@@ -99,6 +97,7 @@
       if (generation !== providerGeneration || providerPlanGeneration !== planGeneration) return;
       if (fresh.provider === nextProvider) {
         planInfo.set(fresh);
+      void refreshDiscordPresencePreview();
         return;
       }
       throw new Error("provider plan response did not match the selected provider");
@@ -184,7 +183,7 @@
     }
     try {
       const mutation = planMutation.then(() =>
-        setPlanOverride(val === "auto" ? "" : val, selectedProvider)
+        selectedProvider === "opencode" ? Promise.resolve() : setPlanOverride(val === "auto" ? "" : val, selectedProvider)
       );
       planMutation = mutation.catch(() => undefined);
       await mutation;
@@ -194,6 +193,7 @@
         throw new Error("plan response did not match the selected provider");
       }
       planInfo.set(fresh);
+      void refreshDiscordPresencePreview();
       planSavedFlash = true;
       if (planSavedTimer) clearTimeout(planSavedTimer);
       planSavedTimer = setTimeout(() => { planSavedFlash = false; }, 1800);
@@ -289,7 +289,7 @@
   let planStateLabel = $derived.by(() => {
     if (planSaving) return "Saving";
     if (!activePlanInfo) return "Detecting";
-    return activePlanInfo.detected ? "Auto" : "Manual";
+    return activePlanInfo.detected ? "Auto" : activePlanInfo.plan_key ? "Manual override" : "Not reported";
   });
 </script>
 
@@ -310,14 +310,13 @@
     <div class="identity-top">
       <div class="it-lead">
         <div class="it-mark" aria-hidden="true">
-          <PulseMark size={28} />
+          {#if $provider === "opencode"}<OpenCodeMark />{:else}<PulseMark size={28} />{/if}
         </div>
         <div class="it-text">
-          <span class="it-kicker">Active identity</span>
           <div class="it-line">
             <span class="it-product" style="color: {$providerProfile.accent}">{$providerProfile.productName}</span>
-            <span class="it-sep">·</span>
-            <span class="it-plan">{activePlanInfo ? activePlanLabel : "Detecting plan…"}</span>
+            {#if $provider !== "opencode"}<span class="it-sep">·</span>
+            <span class="it-plan">{activePlanInfo ? activePlanLabel : "Detecting plan…"}</span>{/if}
           </div>
           <span class="it-sub">
             Broadcasting as <strong>{$providerProfile.label}</strong>
@@ -326,15 +325,9 @@
           </span>
         </div>
       </div>
-      <div class="it-status">
-        <span class="it-pill" class:manual={isManual} class:flash={planSavedFlash}>
-          <span class="it-pill-dot"></span>
-          {planSavedFlash ? "Saved" : planStateLabel}
-        </span>
-        <span class="it-pill ipc-{discordTone}">
-          <span class="it-pill-dot"></span>
-          {$health?.discord_status ?? "—"}
-        </span>
+      <div class="settings-state" role="status">
+        <span>{planSavedFlash ? "Plan saved" : isManual && $provider !== "opencode" ? "Using your selected plan" : $provider === "opencode" ? "OpenCode local sessions" : "Plan detected from your account"}</span>
+        <span>{$health?.discord_status === "Controlled by external daemon" ? "Desktop app controls publication" : $health?.discord_status === "Connected" ? "Discord connected" : $health?.discord_status?.startsWith("Waiting for OpenCode") ? "Waiting for OpenCode session" : "Discord connection pending"}</span>
       </div>
     </div>
 
@@ -349,6 +342,7 @@
         />
       </div>
 
+      {#if $provider !== "opencode"}
       <div class="rail-ctrl rail-ctrl-select">
         <span class="rail-k">Plan override</span>
         <Select
@@ -358,6 +352,7 @@
           ariaLabel="Plan override"
         />
       </div>
+      {/if}
 
       <div class="rail-ctrl">
         <span class="rail-k">Appearance</span>
@@ -387,6 +382,15 @@
     {/if}
   </section>
 
+  {#if $provider === "opencode"}
+    <section class="s-card" aria-label="OpenCode connection status">
+      <header class="s-card-head"><div class="head-text"><h3 class="s-card-title">OpenCode local sessions</h3>
+        <p class="s-card-desc">OpenChamber, OpenCode Desktop and CLI share local session storage. Account quotas are not inferred.</p></div></header>
+      <div class="s-rows"><div class="s-row"><span class="s-label">Configuration</span><span class="s-desc">~/.claude/pulse-opencode.json · database_paths accepts additional SQLite files.</span></div>
+      {#each $opencodeDiagnostics as diagnostic}<p class="settings-error" role="status">{diagnostic}</p>{/each}
+      {#if $opencodeDiagnostics.length === 0}<p class="s-row">No OpenCode reader errors reported.</p>{/if}</div>
+    </section>
+  {/if}
   <div class="settings-grid">
     <section class="s-card">
       <header class="s-card-head">
@@ -409,7 +413,10 @@
             <span class="s-label">Rate Limit Source</span>
             <span class="s-desc">How usage quotas are fetched.</span>
           </div>
-          <span class="s-value mono truncate">{$rateLimits?.source ?? "—"}</span>
+          <span class="s-value mono truncate">{$provider === "opencode"
+            ? $accessSnapshot?.routes.some((route) => route.source.kind === "open_code_go" && route.source.proof === "quota_response" && route.availability === "available" && route.freshness === "fresh")
+              ? "OpenCode Go usage API" : "OpenCode Go quotas unavailable"
+            : $rateLimits?.source ?? "—"}</span>
         </div>
         <div class="s-row">
           <div class="s-info">
@@ -504,7 +511,6 @@
     gap: 24px;
     flex-wrap: wrap;
   }
-  .view-title-group { display: flex; flex-direction: column; gap: 4px; }
   .settings-title { display: flex; align-items: center; gap: 10px; }
   .version-chip { padding: 3px 8px; color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--radius-full); font: 600 10px var(--font-mono); }
   .view-title {
@@ -547,8 +553,7 @@
     .view-header { flex-direction: column; gap: 12px; }
     .check-updates-btn { width: 100%; justify-content: center; }
     .identity-top { grid-template-columns: 1fr; }
-    .it-status { justify-content: flex-start; }
-  }
+    }
 
   .it-mark {
     width: 40px;
@@ -563,14 +568,6 @@
     flex-shrink: 0;
   }
   .it-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  .it-kicker {
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: var(--letter-wider);
-    color: var(--text-muted);
-  }
   .it-line {
     display: inline-flex;
     align-items: baseline;
@@ -586,61 +583,14 @@
   .it-sep { color: var(--border-strong); font-weight: 400; }
   .it-plan { color: var(--text-secondary); font-weight: 500; }
   .it-sub {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
+    font-size: 13px;
+    color: var(--text-secondary);
     line-height: var(--lh-snug);
   }
   .it-sub strong { font-weight: 600; color: var(--text-secondary); }
   .it-sub .it-dim { margin: 0 5px; color: var(--border-strong); }
   .it-sub .mono { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
 
-  .it-status {
-    display: inline-flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  .it-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 5px 10px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-full);
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    color: var(--text-secondary);
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-  }
-  .it-pill-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--text-muted);
-    flex-shrink: 0;
-  }
-  .it-pill.manual { color: var(--text-primary); }
-  .it-pill.manual .it-pill-dot {
-    background: var(--warning);
-    box-shadow: 0 0 0 2px var(--warning-dim);
-  }
-  .it-pill.flash { color: var(--success); }
-  .it-pill.flash .it-pill-dot {
-    background: var(--success);
-    box-shadow: 0 0 0 2px var(--success-dim);
-    animation: savedPulse 1.8s var(--ease);
-  }
-  .it-pill.ipc-ok { color: var(--success); }
-  .it-pill.ipc-ok .it-pill-dot {
-    background: var(--success);
-    box-shadow: 0 0 0 2px var(--success-dim);
-  }
-  .it-pill.ipc-warn { color: var(--warning); }
-  .it-pill.ipc-warn .it-pill-dot { background: var(--warning); }
-  @keyframes savedPulse {
-    0% { transform: scale(0.6); opacity: 0.4; }
-    35% { transform: scale(1); opacity: 1; }
-    100% { transform: scale(1); opacity: 1; }
-  }
 
   .rail {
     position: relative;
@@ -725,8 +675,8 @@
     margin: 0 0 3px;
   }
   .s-card-desc {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
+    font-size: 13px;
+    color: var(--text-secondary);
     line-height: var(--lh-snug);
     margin: 0;
   }
@@ -753,8 +703,8 @@
     letter-spacing: var(--letter-tight);
   }
   .s-desc {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
+    font-size: 13px;
+    color: var(--text-secondary);
     line-height: var(--lh-snug);
   }
 
@@ -907,4 +857,13 @@
     font-size: var(--fs-sm);
     font-weight: 500;
   }
+  .it-line { flex-wrap: wrap; }
+  @media (max-width: 620px) {
+    .identity-top, .rail-ctrl { padding: 16px; }
+    .it-sub, .s-value, .settings-error { white-space: normal; overflow-wrap: anywhere; }
+    .s-card-head, .s-row { padding-inline: 16px; }
+    .meta-strip { gap: 10px; }
+  }
+  .settings-state { display:grid; gap:5px; color:var(--text-secondary); text-align:right; font-size:12px; line-height:1.5; }
+  @media(max-width:760px) { .settings-state { text-align:left; } }
 </style>

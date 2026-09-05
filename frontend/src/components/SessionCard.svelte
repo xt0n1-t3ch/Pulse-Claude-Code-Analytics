@@ -5,6 +5,7 @@
 
   let { session }: { session: SessionInfo } = $props();
   let expanded = $state(false);
+  let modelLabel = $derived(session.model.replace(/ · (?:Minimal|Light|Low|Medium|High|Extra High|Max|Ultra)(?: · ⚡ Fast)?$/, "").replace(/ · ⚡ Fast$/, ""));
   let activityClass = $derived(classifyActivity(session.activity));
 
   let pureInput = $derived(Math.max(0, session.input_tokens - session.cache_write_tokens - session.cache_read_tokens));
@@ -41,7 +42,7 @@
     {#if session.branch}
       <span class="badge branch">{session.branch}</span>
     {/if}
-    <span class="badge model" class:mythos-class={isMythosClass}>{session.model}{#if session.has_inflated_tokenizer}<span
+    <span class="badge model" class:mythos-class={isMythosClass} title={session.model}>{modelLabel}{#if session.has_inflated_tokenizer}<span
           class="inflated-marker"
           title="Inflated tokenizer — this model can produce more tokens than its predecessor for the same text, raising cost at unchanged per-token rates."
         >⚠</span>{/if}</span>
@@ -55,9 +56,7 @@
     <span
       class="badge effort"
       class:effort-implicit={!session.effort_explicit}
-      title={session.effort_explicit
-        ? "Reasoning effort detected from JSONL injection"
-        : "Settings.json default — Claude Desktop composer effort is kept in app memory and cannot be read from disk"}
+      title={session.effort_explicit ? "Reasoning effort reported by the session" : "Effort is not reported by the session"}
     >{session.effort_explicit ? "" : "~"}{session.effort}</span>
     {#if session.has_thinking}
       <span class="badge thinking">Thinking</span>
@@ -106,9 +105,12 @@
         </div>
       </div>
 
+      {#if session.cost_available === true}
       <div class="detail-section">
-        <h4 class="detail-title">Monetary Value Breakdown</h4>
-        {#if session.cost_available === true}
+        <h4 class="detail-title">Reported value</h4>
+        {#if session.opencode && session.cost_available === true}
+          <span class="cost-unavailable">OpenCode-reported total: {fmtCost(session.cost)}. Token-category charges are not reported.</span>
+        {:else if session.cost_available === true}
           <div class="cost-grid">
             <span class="cost-label">Input</span><span class="cost-val">{fmtCost(session.input_cost)}</span>
             <span class="cost-label">Output</span><span class="cost-val">{fmtCost(session.output_cost)}</span>
@@ -120,8 +122,9 @@
         {/if}
       </div>
 
+      {/if}
       <div class="detail-section">
-        <h4 class="detail-title">Performance</h4>
+        <h4 class="detail-title">Session details</h4>
         <div class="perf-grid">
           <span class="perf-label">Output Speed</span><span class="perf-val">{session.tokens_per_sec > 0 ? fmtTps(session.tokens_per_sec) : "—"}</span>
           <span class="perf-label">Cache Hit Ratio</span><span class="perf-val">{cacheHitRatio.toFixed(1)}%</span>
@@ -412,4 +415,10 @@
       text-align: left;
     }
   }
+  .detail { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:20px; padding:18px 0 4px; }
+  .detail-section { padding:0 4px; }
+  .detail-title { font-size:12px; text-transform:none; letter-spacing:0; color:var(--text-primary); }
+  .token-legend { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .cost-grid, .perf-grid { gap:9px 14px; line-height:1.5; }
+  .perf-val { overflow-wrap:anywhere; }
 </style>

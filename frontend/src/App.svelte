@@ -35,6 +35,13 @@
     ($currentView in views ? $currentView : "dashboard") as ViewId,
   );
   let ActiveView = $derived(views[activeViewId]);
+  let scrollFrame: HTMLDivElement;
+  let mainContent: HTMLElement;
+  $effect(() => {
+    void activeViewId;
+    if (scrollFrame) scrollFrame.scrollTop = 0;
+    if (mainContent) mainContent.scrollTop = 0;
+  });
 
   const initialTheme: "dark" | "light" =
     localStorage.getItem("pulse-theme") === "light" ? "light" : "dark";
@@ -76,10 +83,10 @@
   });
 </script>
 
-<div class="main-wrapper">
+<div class="main-wrapper" bind:this={scrollFrame}>
   <TopBar onToggleTheme={toggleTheme} />
   <AccessSourceBar />
-  <main class="main-content">
+  <main class="main-content" bind:this={mainContent}>
     {#key activeViewId}
       <div class="view-host" in:fly={{ y: 4, duration: 80 }}>
         {#if activeViewId === "settings"}
@@ -122,5 +129,9 @@
     width: 100%;
     min-width: 0;
     min-height: 100%;
+  }
+  @media (max-width: 620px) {
+    .main-wrapper { display: block; overflow-y: auto; }
+    .main-content { overflow: visible; }
   }
 </style>

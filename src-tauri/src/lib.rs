@@ -9,6 +9,8 @@ pub mod db;
 pub mod dev_bridge;
 pub mod live;
 pub mod notifications;
+pub mod opencode;
+pub mod opencode_go;
 pub mod report;
 pub mod report_template;
 pub mod update_check;

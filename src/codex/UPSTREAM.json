@@ -12,7 +12,7 @@
     "promotion_status": "promoted"
   },
   "compatibility": {
-    "pulse": "1.7.9",
+    "pulse": "1.8.0",
     "presence_config_schema": 13,
     "usage_snapshot_revision": 1,
     "app_snapshot_revision": 1
@@ -31,5 +31,15 @@
     "src/codex/session.rs",
     "src/codex/telemetry/plan.rs",
     "src/codex/telemetry/service_tier.rs"
-  ]
+  ],
+  "local_changes": {
+    "status": "unreleased",
+    "models": [
+      "gpt-6-astra"
+    ],
+    "behavior": [
+      "omit unknown account plan from Discord model label"
+    ],
+    "catalog_owner": "Codex-Discord-Rich-Presence/src/model_catalog.json"
+  }
 }

@@ -4,6 +4,34 @@ All notable changes to **Pulse** are documented here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-09-05
+
+### Added
+
+- Native OpenCode SQLite collection across message-table schemas, arbitrary model providers and mixed-model sessions, with incremental imports and explicit cost provenance.
+- OpenCode Go account windows for five-hour, weekly and monthly usage, sourced from the authenticated Go API without copying credentials.
+- GPT-6 Astra identity, observed reasoning effort, context limits and Standard/Fast pricing with explicit incomplete monetary coverage.
+- Windows Efficiency mode through process-local EcoQoS and Idle priority, with an environment opt-out and read-only policy verifier.
+- Notification read/unread actions, bulk controls, confirmed soft clearing and persistent Undo for the last confirmed clear.
+- A portable Tauri build command that embeds the frontend instead of depending on the development server.
+
+### Changed
+
+- One provider bar selects Claude, Codex, OpenCode or combined analytics; Discord exposes a separate broadcast selector.
+- Home uses provider-scoped seven-day data, adaptive account-limit columns and content-sized active-session controls without clipped fixed-height rails.
+- Light/dark navigation, centered mobile headings, readable provider identity, full-width summary metrics and accessible notification controls use the existing Pulse design system.
+- OpenCode uses the supplied square logo throughout the app and Discord. The previous portal asset remains available for rollback.
+- Analytics schema 6 adds OpenCode metadata. The shared core remains 2.0.0 at the existing immutable Git pin.
+
+### Fixed
+
+- Completed OpenCode sessions leave live focus and Discord immediately; history retains their actual values. A null completion field remains active, and old tool state cannot override a completed message.
+- OpenCode quotas respect field toggles, presets and saved order through the shared preview/publisher compositor.
+- Monetary display uses two decimal places without changing stored precision. Missing costs and unsupported credits remain unavailable.
+- Manual Codex plan selection takes precedence over automatic caches. Protocol pro maps to Pro 20x and prolite to Pro 5x; Edu and explicit aliases are recognized.
+- The connected Discord name and avatar come from local READY identity. Missing banners and image badges are not fabricated.
+- Notification errors retain the last loaded history and do not claim that an unconfirmed mutation succeeded or failed to save.
+
 ## [1.7.9] - 2026-08-27
 
 ### Removed

@@ -1,311 +1,143 @@
 # Pulse
 
-Pulse is a local-first Claude Code and OpenAI Codex usage tracker and cost dashboard with Discord Rich Presence.
+Local analytics and Discord Rich Presence for Claude Code, Codex and OpenCode. Pulse v1.8.0 keeps live activity, historical usage and account limits separate, so an old session or a missing price never becomes a live metric.
 
 <div align="center">
-
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/pulse-logo-dual-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="assets/pulse-logo-dual-light.png">
-  <img src="assets/pulse-logo-dual-dark.png" alt="Pulse, Claude Code and Codex analytics" width="560" height="124">
+  <img src="assets/pulse-logo-dual-dark.png" alt="Pulse analytics" width="560" height="124">
 </picture>
 
-### See where your Claude Code and Codex usage actually goes.
+[![Release v1.8.0](https://img.shields.io/badge/Release-v1.8.0-171717)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)
+[![Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-171717)](LICENSE)
 
-The open-source analytics dashboard for **Claude Pro / Max / Teams** and **ChatGPT Plus / Pro / Business**.<br>Measure provider-aware cost, cache, context, and limits; catch runaway sessions; and send one-click fix prompts back to the active coding agent. Native desktop. 100 % local. Zero telemetry.
-
-[![v1.7.9](https://img.shields.io/badge/v1.7.9-blue)](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/tag/v1.7.9)
-![Platforms: Windows, macOS, Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0a0a0a)
-![Built with Tauri 2, Rust, and Svelte 5](https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20Rust%20%C2%B7%20Svelte%205-0a0a0a)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-0a0a0a.svg)](LICENSE)
-
-<a href="#install"><b>Download</b></a>&nbsp; · &nbsp;<a href="#whats-new"><b>What's New</b></a>&nbsp; · &nbsp;<a href="#about"><b>About</b></a>&nbsp; · &nbsp;<a href="#screenshots"><b>Screenshots</b></a>&nbsp; · &nbsp;<a href="#features"><b>Features</b></a>&nbsp; · &nbsp;<a href="docs/"><b>Docs</b></a>&nbsp; · &nbsp;<a href="https://github.com/sponsors/xt0n1-t3ch"><b>Sponsor</b></a>
-
+[Download](#install) · [What is new](#whats-new-in-v180) · [Use Pulse](#use-pulse) · [Build](#build-from-source) · [Documentation](docs/index.md)
 </div>
 
-## Table of contents
+## What's new in v1.8.0
 
-- [What's new](#whats-new)
-- [About Pulse](#about)
-- [Why Pulse](#why-pulse)
-- [Screenshots](#screenshots)
-- [Install](#install)
-- [Features](#features)
-- [Usage](#usage)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [Security](#security)
-- [License](#license)
-- [Windows and WSL session roots](#windows--wsl-session-roots)
+- Native OpenCode collection from local SQLite, with arbitrary model providers, mixed-model history and reported cost provenance.
+- OpenCode Go account limits for the five-hour, weekly and monthly windows. These limits do not stand in for another provider's allowance.
+- GPT-6 Astra identity, context and Standard/Fast pricing, with incomplete monetary coverage kept explicit.
+- A seven-day provider-scoped dashboard, content-sized account limits and consistent light/dark controls.
+- A notification center with read/unread actions, bulk controls, confirmation and persistent Undo for the last confirmed clear.
+- Windows Efficiency mode through EcoQoS and reduced process priority.
+- Model-first OpenCode presence, independent field toggles, saved order and two-decimal currency. Completed sessions stop publishing instead of lingering as active work.
 
+See the [changelog](CHANGELOG.md) for the release history.
 
-<h2 id="whats-new"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;What's New in v1.7.9</h2>
+## Install
 
-- **Incremental by construction** — unchanged transcripts read no historical body bytes; appends read only their bounded tail anchor and delta, while active-session checkpoints recover safely after restart.
-- **Money with provenance** — provider-billed spend and documented API-equivalent value remain separate through SQLite, dashboards, reports, budgets, and exports; unknown values stay unavailable.
-- **Native Daybreak models** — `gpt-daybreak-blue-latest` and `gpt-5.6-cyber` resolve as GPT-5.6-Cyber-Blue and GPT-5.6-Cyber-Red with six observed reasoning tiers and no invented Blue pricing.
-- **Published typed core** — Pulse pins `codex-presence-core` 2.0.0 to the immutable upstream `v1.10.2` release and its exact Git revision.
+Download an asset for your platform from [GitHub Releases](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest). The local Windows release includes:
 
-<details>
-<summary>Previous v1.6.5 highlights</summary>
+| Asset | Use |
+| --- | --- |
+| `Pulse_1.8.0_x64-setup.exe` | Windows x64 installer |
+| `Pulse_1.8.0_x64_en-US.msi` | Windows x64 MSI package |
+| `pulse-windows-x64.spdx.json` | Software bill of materials |
+| `SHA256SUMS.txt` | SHA-256 checksums for the release files |
 
-- **Live Codex quota, not yesterday's JSONL** — Pulse reads the authenticated `account/rateLimits/read` backend, so a provider-reported 83% used renders as 17% available. JSONL is a short-lived fallback and stale quota events stay unavailable.
-- **Multi-instance Dashboard** — every active session is selectable from one responsive live-work owner; the detail panel follows that selection and renders exact `used / available window` values.
-- **Current context only** — Context no longer mixes active windows with a stale historical utilization list. One selector owns the active sessions and one matte detail surface owns the selected window.
-- **Richer factual telemetry** — live token composition replaces the misleading empty spend timeline, and Activity by Hour groups timestamps in the user's local timezone with proper AM/PM labels.
-- **Matte Geist surfaces** — the dark theme uses neutral black panels rather than navy/gray sheens; color remains scoped to provider identity and semantic values.
-- **Responsive controls and persistence** — Discord fields stack before they clip, expose automatic save state, and the signed in-app updater remains a single approve/update/relaunch flow.
+Platform availability follows the files attached to each release. The Rust/Tauri source supports Windows, macOS and Linux; a source target is not proof that a binary for that target was published.
 
-</details>
-
-<details>
-<summary>Previous v1.6.2 highlights</summary>
-
-- **Real reasoning effort** — Pulse reads the effort field Claude Code records on every assistant turn instead of falling back to a default.
-- **Honest Claude usage provenance** — the quota footer names the observed OAuth/cache path.
-- **Rich Presence that sticks** — the master switch and field toggles persist for Claude and survive a restart.
-
-</details>
-
-<details>
-<summary>Previous v1.6.1 highlights</summary>
-
-- **Claude Opus 5 priced correctly** — the dateless `claude-opus-5` id now resolves to the official $5/$25 rates with 1M GA context and no long-context surcharge, instead of falling through to legacy Opus pricing.
-- **True window totals** — Cost Analysis and Reports aggregate the entire selected window in SQL rather than the newest page of sessions, so 7d/30d/90d/1y agree across views.
-- **In-app updates** — signed Tauri updater artifacts install a new release from inside Pulse instead of sending you to the Releases page.
-- **Distinct analytical views** — Reports leads with a daily cost timeline and marked inflections; Cost Analysis is a budget cockpit with its own shape.
-- **Theme-true Discord preview** — the live Rich Presence card and its header state resolve through semantic tokens in both Dark and Light.
-
-</details>
-
-<details>
-<summary>Previous v1.6.0 highlights</summary>
-
-- **Event-driven live telemetry** — one versioned backend snapshot hydrates the app, updates Discord, and persists analytics without recurring frontend polling or unchanged SQLite writes.
-- **Factual Codex usage** — semantic global and model quota windows, Credits, and absolute local reset timestamps match the data Codex exposes without inventing a five-hour window.
-- **Discord you can shape** — ten ordered presence fields, compact and descriptive presets, persistent privacy controls, and one backend-owned preview/publisher contract.
-- **Responsive native UI** — Dark and Light themes, self-hosted Inter Variable, keyboard-visible controls, and validated layouts down to 720x560.
-- **Release integrity** — Pulse pins `codex-presence-core` 1.0.0 to canonical `v1.8.0`, validates migrations and the Windows SPDX SBOM, and ships immutable checksummed assets.
-
-</details>
-
-**[Download v1.7.9](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest)** &nbsp;·&nbsp; **[Full changelog](CHANGELOG.md)**
-
-<h2 id="about"><img src="assets/icons/info.svg" alt="" width="28" align="center"> &nbsp;About</h2>
-
-You may pay for Claude Code every month, ChatGPT every month, or both: **Claude Pro / Max / Teams** on one side and **ChatGPT Plus / Pro / Business** on the other. Yet if someone asked *"which session consumed the most context this week?"* or *"what percentage of my input was served from cache?"* you probably could not answer with evidence.
-
-**Pulse answers.** It reads the local JSONL transcripts and runtime metadata written by Claude Code and Codex, then normalizes provider-specific facts without sending session data anywhere. Install, launch, and switch providers from the same desktop app:
-
-- **A – F cache-health letter grade** — trend-weighted, so you see the *direction* your cache efficiency is heading, not just today's number.
-- **Opus-4.7-tokenizer aware** — Opus 4.7's new tokenizer inflates tokens by up to 35 %; Pulse flags the inflation so you know when you're hitting limits faster than expected.
-- **1 M context GA pricing** — flat per-token rate across the full 1 M window for **Fable 5 · Mythos 5 · Opus 4.6 · Opus 4.7 · Opus 4.8 · Sonnet 4.6 · Sonnet 5** (per [Anthropic's official pricing](https://platform.claude.com/docs/en/about-claude/pricing)). Older betas (Sonnet 4 / 4.5, Opus 4 / 4.5) still get 2× input · 1.5× output · 2× cache at > 200 K. Pulse applies the correct math per-model so you compare sessions like-for-like. Plan-level **Extra Usage** on Pro / Max / Teams is tracked separately.
-- **Inflection alerts** — any session that blows past 2 × your rolling baseline gets flagged with context and a suggested fix.
-- **Provider-aware fix prompts** — every recommendation has a **Copy Fix Prompt** action labeled for the active provider: **Fix with Claude Code** or **Fix with Codex**.
-- **Plan usage limits** — live tracking of the windows each provider actually exposes, including Claude's Sonnet/Extra Usage telemetry and Codex's primary/secondary quota windows.
-- **In-app updates** — startup and 6-hour checks surface stable signed releases; after approval Pulse downloads, installs, and relaunches from inside the app.
-- **Discord Rich Presence** — six-tier reasoning effort, live project / model / branch. Your flow state, on your profile.
-
-**One product, two factual lanes.** Claude sessions keep Anthropic-specific model routing, cache TTL, Extra Usage, and statusline authority. Codex sessions use the canonical GPT catalog and current local App metadata, including **GPT-5.6 Sol / Terra / Luna / Cyber Blue / Cyber Red** with independent reasoning and Standard/Fast modes. Context comes from observed runtime metadata when available and falls back to a documented catalog value only when the runtime is silent. Unpublished Fast economics, missing cache-write telemetry, and unpriced Blue usage stay partial or unavailable instead of becoming invented numbers.
-
-Codex Discord Rich Presence has its own source-of-truth repo: **[xt0n1-t3ch/Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence)**. Pulse consumes its typed core through a checked Git dependency pinned to upstream `v1.10.2` at commit `a508507e0849fd5c9e09c7d1c55eebe2d199cfc0`. The standalone Rich Presence project keeps its own audience while Pulse owns the Tauri integration and analytics presentation.
-
-Written in **Rust** + **Tauri 2** + **Svelte 5**. ≈ 12 MB on Windows, ≈ 18 MB on macOS. Cold-starts in under 200 ms. One-click installers for Windows (NSIS + MSI), macOS (DMG — Apple Silicon + Intel), and Linux (deb, rpm, AppImage). Apache-2.0 licensed (attribution required — see [`NOTICE`](NOTICE)). The data never leaves your machine.
-
-<h2 id="why-pulse">Why Pulse</h2>
-
-- **Local-first analytics.** Pulse reads local session data into SQLite and sends no telemetry.
-- **Dual-provider tracking.** One desktop app keeps Claude Code and OpenAI Codex analytics separate while supporting both subscription workflows.
-- **Real Discord identity.** Discord Rich Presence uses local Discord IPC to publish the active project, branch, model, reasoning effort, and session timer.
-- **Cache health grading.** A trend-weighted A to F grade shows whether prompt-cache efficiency is improving or declining.
-- **Budgets and forecasts.** Cost views compare provider-aware session value with configurable budgets and forecasts.
-
-<h2 id="screenshots"><img src="assets/icons/image.svg" alt="" width="28" align="center"> &nbsp;Screenshots</h2>
-
-<div align="center">
-
-<img src="assets/screenshots/dashboard.png" alt="Pulse dashboard — Claude Code and Codex cost, tokens, cache health grade, plan usage limits, and activity heatmap" width="900">
-
-<sub><b>Dashboard</b> — at-a-glance cost · tokens · cache-hit ratio · plan limits · extra usage · activity heatmap.</sub>
-
-<br><br>
-
-<img src="assets/screenshots/reports.png" alt="Pulse Reports & Insights — A-F cache health grade, model routing, inflection timeline, cost spikes" width="900">
-
-<sub><b>Reports & Insights</b> — provider-capable cache health · rule-based recommendations · cost inflection detection · one-click fix prompts for Claude Code or Codex.</sub>
-
-<br><br>
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/screenshots/discord-rich-presence.png" alt="Pulse Discord Rich Presence on a profile — Claude Code activity with model, reasoning effort, tokens, cost, plan usage" width="420"><br>
-      <sub><b>Claude Code Rich Presence</b><br>Live model · reasoning effort · project · branch · tokens · cost · 5 h / 7 d / Extra Usage.</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/screenshots/codex-discord-rich-presence.png" alt="Pulse Discord Rich Presence on a profile — ChatGPT App activity with GPT model, reasoning, cost, tokens, context, and quota windows" width="420"><br>
-      <sub><b>Codex / ChatGPT App Rich Presence</b><br>Selectable desktop identity · GPT-5.6 family · reasoning · speed · cache · cost · context · quota windows.</sub>
-    </td>
-  </tr>
-</table>
-
-</div>
-
-<h2 id="install"><img src="assets/icons/download.svg" alt="" width="28" align="center"> &nbsp;Install</h2>
-
-### Windows
+For Windows installation through the repository script:
 
 ```powershell
 irm https://raw.githubusercontent.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/main/scripts/install.ps1 | iex
 ```
 
-Or grab an installer from the [latest release](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/releases/latest):
+Manual-download releases do not include a signed updater manifest unless that manifest appears in their asset list. Use the installer when the in-app updater cannot offer the release.
 
-| Asset | Description |
-| :--- | :--- |
-| `Pulse_x.y.z_x64-setup.exe` | NSIS installer — recommended |
-| `Pulse_x.y.z_x64_en-US.msi` | MSI installer |
+## Use Pulse
 
-### macOS
+Start your coding client, then open Pulse. Use the provider bar to select Claude, Codex, OpenCode or combined analytics.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/main/scripts/install.sh | bash
+| View | Purpose |
+| --- | --- |
+| Home | Active sessions, provider limits, cache ratio and the last seven days of activity |
+| Sessions | Live sessions and searchable, filtered history |
+| Usage & cost | Provider-billed spend and API-equivalent value, with their provenance |
+| Reports | Provider-supported analysis and exports |
+| Discord | Broadcast application, presets, field order and the backend-owned preview |
+| Settings | Provider, plan display, appearance, window behavior and data controls |
+
+Choosing a provider changes its workspace context. **All providers** combines analytics without changing the last broadcast application. The **Broadcast from** control in Discord makes publication ownership explicit.
+
+A completed OpenCode session stays in history but leaves the live focus and Discord publisher. **Idle** does not borrow the last model, token count or monetary value. Unknown cost is unavailable; a provider-reported zero is displayed as `$0.00`.
+
+### OpenCode and Go
+
+Pulse reads `opencode.db` and channel databases from OpenCode's local data directory. It supports both message-table schemas and respects `XDG_DATA_HOME` and `OPENCODE_DB`. Additional databases can be set in `~/.claude/pulse-opencode.json`.
+
+When an existing OpenCode Go credential is available, Pulse requests its account usage from the Go API. Pulse does not copy that credential into its own settings or logs. The monthly window uses the provider's reset date rather than an invented fixed duration.
+
+Desktop, CLI and OpenChamber can share this local store. Unknown client attribution remains OpenCode; a managed OpenChamber label requires matching process identity. Remote stores on other machines are outside this local integration. Read the [OpenCode and Astra guide](docs/opencode-and-astra.md) for the source and absence rules.
+
+### Discord controls
+
+Open Discord, choose a broadcast application in Pulse, and enable Rich Presence. Use **Minimal**, **Standard** or **Full**, then adjust individual fields. OpenCode defaults to model, activity, project and branch before its numeric fields. Field order controls priority within each Discord line.
+
+Unavailable fields stay disabled. Go quotas identify Go explicitly and appear only while their data is fresh and the field is enabled. The profile preview uses the same Rust compositor as the publisher. The connected user's name and avatar come from local Discord IPC; an unavailable banner is not fabricated.
+
+### Notifications
+
+The bell opens the local notification history. You can mark one item or all items as read/unread, dismiss an item, or clear the list. **Clear all** requires confirmation and preserves the records. **Undo** restores the last confirmed clear and its original read states. The last Undo receipt survives an app restart on the same client.
+
+If Pulse cannot refresh the history, it labels the retained snapshot and disables bulk changes until the connection recovers.
+
+### Windows Efficiency mode
+
+Pulse requests EcoQoS and Idle process priority at startup. Windows owns the Task Manager leaf indicator; Pulse does not draw a substitute. Other operating systems keep their normal scheduling behavior.
+
+Set this environment variable before launch to opt out:
+
+```powershell
+$env:PULSE_EFFICIENCY_MODE = "0"
 ```
 
-| Asset | Architecture |
-| :--- | :--- |
-| `Pulse_x.y.z_aarch64.dmg` | Apple Silicon (M1 / M2 / M3 / M4) |
-| `Pulse_x.y.z_x64.dmg` | Intel |
+See [Windows Efficiency mode](docs/windows-efficiency.md) for behavior and the read-only verification command.
 
-### Linux
+## Your data and network access
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/main/scripts/install.sh | bash
-```
+Session analytics stay in `~/.claude/pulse-analytics.db`, or under `CLAUDE_HOME` when configured. Pulse reads local Claude/Codex transcripts and OpenCode SQLite records. It sends no analytics telemetry or transcript uploads.
 
-| Asset | Distro |
-| :--- | :--- |
-| `pulse_x.y.z_amd64.deb` | Debian / Ubuntu |
-| `pulse-x.y.z-1.x86_64.rpm` | Fedora / RHEL |
-| `pulse_x.y.z_amd64.AppImage` | Any (portable) |
+Network use is limited to the configured provider quota checks, release/update checks and the Discord presence fields you enable. Project, branch and activity controls determine what the presence exposes. Keep private prompts, credentials and local reports out of public issues.
 
-### From source
-
-```bash
-git clone https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics.git
-cd Pulse-Claude-Code-Analytics
-cd frontend && npm install && npm run build && cd ..
-cd src-tauri && cargo tauri build
-```
-
-<h2 id="features"><img src="assets/icons/sparkles.svg" alt="" width="28" align="center"> &nbsp;Features</h2>
-
-### Analytics dashboard
-
-| | |
-| :--- | :--- |
-| **Provider-owned cost math** | Per session · day · model. Claude uses its published model/cache/Fast rules and authoritative statusline totals. Codex uses the vendored factual catalog, exposes completeness, and never invents unpublished Fast or cache-write economics. |
-| **A – F cache health grade** | Trend-weighted hit ratio — cchubber-style. See your direction, not just your current number. |
-| **Model routing insights** | Opus / Sonnet / Haiku split + *"you could save $X by rerouting N sessions to Sonnet"* estimate. |
-| **Inflection detection** | Any session ≥ 2 × baseline cost-per-session gets flagged with context. |
-| **Recommendations engine** | Every finding has a **Copy Fix Prompt** action routed to the active provider: Claude Code or Codex. |
-| **Plan usage limits** | 5-hour window · weekly all-models · Sonnet-only · Extra Usage monthly spend. Auto-detects Pro / Max / Teams. Sound alert on Extra Usage spikes. |
-| **Heatmap · sparklines · charts** | All-local Chart.js. Zero network. |
-| **Reports export** | Branded HTML + Markdown. One click. |
-| **OpenAI Codex support** | Canonical GPT catalog with GPT-5.6 Sol / Terra / Luna, sourced API rates and Codex credits, exact/partial/unavailable cost status, 372K raw / 353.4K usable context, reasoning effort, and independent Standard/Fast display. One-click provider switch. |
-| **Codex RP upstream sync** | Codex Discord Rich Presence logic is mirrored from [Codex-Discord-Rich-Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence) with scripts and CI checks, instead of drifting as a private fork. |
-
-### Discord Rich Presence
-
-| | |
-| :--- | :--- |
-| **Live fields** | Project · git branch · model · reasoning effort · activity status. |
-| **Session timer** | Elapsed since start. Persists through Discord restarts. |
-| **Reasoning tiers** | Low · Medium · High · Extra High · Max, plus Ultra where the selected Codex model exposes it. |
-| **Asset resolver** | Multi-tier — portal keys → Media Proxy → plain URLs → fallback. |
-| **Presets and privacy** | Minimal · Standard · Full, plus independent project, branch, model, activity, tokens, cost, limits, context, and systems controls. |
-
-<!--
-Keywords: Claude Code analytics, Claude Code cost tracker, Claude Code usage dashboard, OpenAI Codex analytics, ChatGPT App analytics,
-Claude Fable 5 pricing, Claude Mythos 5 pricing, Claude Opus 4.8 fast mode pricing, Anthropic token cost, cache hit ratio, prompt caching,
-1M context window usage, model routing, GPT-5.6 pricing, Discord Rich Presence,
-reasoning effort, Claude Pro Max Teams plan usage limits, Extra Usage, JSONL transcript,
-local-first, zero telemetry, open source, Rust, Tauri 2, Svelte 5, Windows, macOS, Linux.
-See llms.txt for a machine-readable project summary.
--->
-
-
-### Privacy & ownership
-
-- **100 % local.** Your session data never leaves your machine. No telemetry, no phone-home, no cloud.
-- **SQLite at `~/.claude/pulse-analytics.db`** — yours to inspect, export, back up, or delete.
-- **Apache-2.0 licensed** with required attribution. Fork it, audit it, ship your own version — just keep the [`NOTICE`](NOTICE) file and credit the original author per the license.
-
-<h2><img src="assets/icons/brain.svg" alt="" width="28" align="center"> &nbsp;What makes Pulse different</h2>
-
-| | Pulse | Generic dashboards |
-| :--- | :---: | :---: |
-| Opus 4.7 tokenizer awareness (flags inflated counts) | ✓ | — |
-| 1 M context pricing correctly applied per model (GA flat vs. beta surcharge) | ✓ | — |
-| A – F cache health grade (trend-weighted) | ✓ | — |
-| Provider-aware *Fix with Claude Code* / *Fix with Codex* prompts | ✓ | — |
-| Zero-config — reads JSONL transcripts directly | ✓ | setup required |
-| Discord Rich Presence | ✓ | — |
-| Native desktop (Tauri 2 + Rust, no Electron bloat) | ✓ | — |
-| Open source | Apache-2.0 | varies |
-
-<h2 id="usage"><img src="assets/icons/terminal.svg" alt="" width="28" align="center"> &nbsp;Usage</h2>
-
-**First launch** → install Pulse → launch → it auto-detects local Claude Code and Codex state → choose a provider; sessions stream in live.
-
-**Discord Rich Presence** → open the **Discord** tab → pick a preset (Minimal · Standard · Full) or customize fields → toggle on. Custom presence artwork in [`docs/discord-assets.md`](docs/discord-assets.md).
-
-**Reports** → open the **Reports** tab → read the provider-capable analysis → click **Copy Fix Prompt** on any item → run it in the active provider. Export HTML / Markdown for your team.
-
-<h2 id="roadmap"><img src="assets/icons/map.svg" alt="" width="28" align="center"> &nbsp;Roadmap</h2>
-
-- **Linux tray icon** — system-tray quick toggles (Discord presence on/off, pause analytics, open dashboard) via Tauri's `tray-icon` feature. Parity with the Windows tray.
-- **MCP server inventory** — list every MCP server Claude Code has loaded for each session, with its tool count, per-tool invocation frequency, and an estimated token cost per tool call. Helps spot noisy MCPs silently inflating your context.
-- **Budget-threshold desktop notifications** — native OS notification when you cross configurable thresholds (e.g. "80 % of weekly limit", "Extra Usage just passed $150 of your $200 cap"). Replaces eyeballing the dashboard.
-- **Custom Discord presence templates** — save / share named field layouts beyond Minimal · Standard · Full. Export a preset as JSON; import one from a teammate.
-- **Session replay** — step through a past session's prompts and tool-call timeline with the same filters the live dashboard uses. Currently the data is there (JSONL traces) but there's no dedicated UI.
-- **Smarter cost forecast** — weekly-reset-aware projections with a confidence band, instead of today's linear daily-average multiplication.
-
-Track on the [project board](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/projects).
-
-<h2 id="contributing"><img src="assets/icons/git-pull-request.svg" alt="" width="28" align="center"> &nbsp;Contributing</h2>
-
-PRs welcome. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the dev setup, style guide, and release process. Please read the [Code of Conduct](CODE_OF_CONDUCT.md) first.
-
-<h2 id="sponsor"><img src="assets/icons/heart.svg" alt="" width="28" align="center"> &nbsp;Sponsor</h2>
-
-If Pulse saves you money (or sanity), sponsor its development:
-
-[![Sponsor xt0n1-t3ch on GitHub](https://img.shields.io/badge/GitHub_Sponsors-%E2%9D%A4-0a0a0a?style=for-the-badge&logo=githubsponsors)](https://github.com/sponsors/xt0n1-t3ch)
-
-Every contribution goes toward faster releases, better analyzers, and keeping Pulse free and open-source forever.
-
-<h2 id="security"><img src="assets/icons/shield.svg" alt="" width="28" align="center"> &nbsp;Security</h2>
-
-Responsible-disclosure policy in [`SECURITY.md`](SECURITY.md). Report privately via [GitHub Security Advisories](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/security/advisories/new).
-
-<h2 id="license"><img src="assets/icons/scale.svg" alt="" width="28" align="center"> &nbsp;License</h2>
-
-[Apache-2.0](LICENSE) © 2026 xt0n1-t3ch. Use Pulse for anything (personal or commercial) — but per the license you must keep the copyright notice and the [`NOTICE`](NOTICE) file with original-author attribution in any redistribution or derivative work.
-
----
-
-<div align="center">
-<sub>Built with Rust, Tauri, and Svelte for Claude Code and Codex. &nbsp; · &nbsp; <a href="https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics">github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics</a></sub>
-</div>
-
-
-## Windows + WSL session roots
-
-Pulse is Windows-native by default. On Windows it does **not** launch `wsl.exe` while polling sessions, because broken WSL installs can raise OS-level crash dialogs. If you intentionally keep Claude/Codex transcripts inside WSL and want Pulse to scan them, opt in before launch:
+On Windows, WSL session discovery is off by default. Enable it only when you need those transcript roots:
 
 ```powershell
 $env:CC_PRESENCE_INCLUDE_WSL = "1"
 ```
 
-Linux and macOS continue to use their native session paths; WSL path bridging remains available only through the explicit Windows opt-in.
+## Build from source
+
+Install Rust, Node.js, the Tauri CLI and the platform build prerequisites. Then run:
+
+```powershell
+git clone https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics.git
+cd Pulse-Claude-Code-Analytics
+npm --prefix frontend ci
+npm run verify
+npm run build:portable
+```
+
+`build:portable` compiles the frontend and runs `cargo tauri build --no-bundle`. The Tauri CLI enables `tauri/custom-protocol`, so the executable contains its UI. Do not promote a raw Cargo GUI build that still points at the development URL.
+
+Use `npm run build` for installers. Use `npm run dev` for the authenticated, loopback-only browser development bridge. The development bridge is not required by the installed application.
+
+## Compatibility and recovery
+
+Pulse v1.8.0 uses Claude config schema 6, Codex config schema 13 and analytics schema 6. The analytics migration adds OpenCode metadata without discarding previous sessions.
+
+Back up the executable, configuration and database through SQLite Backup before replacing an installation. Pulse 1.7.9 cannot open analytics schema 6: rollback requires the schema-5 backup, while the newer database should be preserved separately.
+
+Pulse consumes `codex-presence-core` 2.0.0 through an immutable Git pin recorded in [UPSTREAM.json](src/codex/UPSTREAM.json). The standalone [Codex Discord Rich Presence](https://github.com/xt0n1-t3ch/Codex-Discord-Rich-Presence) runtime has its own releases and terminal interface.
+
+See the [dependency audit scope](docs/dependency-audit.md) for inherited Tauri advisories and platform boundaries.
+
+## Contribute and report problems
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md), the [test map](tests/index.md), [release procedure](docs/releasing.md) and [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues privately through [GitHub Security Advisories](https://github.com/xt0n1-t3ch/Pulse-Claude-Code-Analytics/security/advisories/new).
+
+## License
+
+[Apache-2.0](LICENSE), copyright 2026 xt0n1-t3ch. Redistributed and derivative versions must preserve the license, copyright notice and [NOTICE](NOTICE) attribution.

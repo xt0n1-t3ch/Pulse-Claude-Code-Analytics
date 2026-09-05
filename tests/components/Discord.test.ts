@@ -177,7 +177,7 @@ describe("Discord.svelte", () => {
     const { container, getByText } = render(Discord);
     await tick();
 
-    expect(getByText("Broadcast")).toBeTruthy();
+    expect(getByText("Discord")).toBeTruthy();
     expect(container.querySelector(".dp-profile")).not.toBeNull();
     await waitFor(() => {
       expect(container.querySelector(".dp-activity-details")?.textContent).toContain("pulse");
@@ -185,6 +185,22 @@ describe("Discord.svelte", () => {
     expect(getByText("Tony")).toBeTruthy();
     expect(container.querySelector(".dp-handle")?.textContent?.trim()).toBe("@xt0n1");
     expect(container.querySelector(".dp-art-large")).not.toBeNull();
+  });
+
+  it("offers native OpenCode without borrowed quotas or a substitute logo", async () => {
+    const { provider } = await import("@/lib/provider");
+    provider.set("opencode");
+    discordSettings = { ...discordSettings, provider: "opencode", supports_credits: false, supports_desktop_design: false };
+    const Discord = (await import("@/views/Discord.svelte")).default;
+    const { container, getByText } = render(Discord);
+    await tick();
+    expect(container.querySelector(".dp-art-large")?.getAttribute("src")).toContain("opencode-v2");
+    const quota = getByText("Usage quotas").closest(".field-cell")?.querySelector("input");
+    expect((quota as HTMLInputElement).disabled).toBe(false);
+    for (const label of ["Credits available", "Systems"]) {
+      expect((getByText(label).closest(".field-cell")?.querySelector("input") as HTMLInputElement).disabled).toBe(true);
+    }
+    expect(container.querySelector(".fc-den")?.textContent).toBe("/8");
   });
 
   it("renders the Discord global name instead of the username", async () => {
@@ -392,7 +408,7 @@ describe("Discord.svelte", () => {
     expect(container.querySelector(".dp-activity-state")?.textContent).not.toContain("Weekly 88% used");
   });
 
-  it("previews a session from the selected provider instead of the first global session", async () => {
+  it("keeps the broadcast preview independent from the selected account", async () => {
     const { sessions, selectedAccessSourceId } = await import("@/lib/stores");
     const claude = makeSession("claude-1", "claude-project");
     const codex = makeSession("codex-1", "codex-project");
@@ -428,7 +444,7 @@ describe("Discord.svelte", () => {
     const { container } = render(Discord);
     await tick();
 
-    expect(container.querySelector(".dp-activity-details")?.textContent).toContain("codex-project");
+    expect(container.querySelector(".dp-activity-details")?.textContent).toContain("claude-project");
   });
 
   it("marks provider-unsupported fields unavailable instead of offering a switch that reverts", async () => {

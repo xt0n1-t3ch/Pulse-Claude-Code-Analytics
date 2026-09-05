@@ -1,0 +1,18 @@
+{
+  "source": "User-provided opencode.webp",
+  "source_file": "opencode-user.webp",
+  "source_sha256": "bc56b9d028a7ca7de4dd049610c16822bd0fb83cff7f1d7f443a7e1fa0ee1dd0",
+  "local_file": "opencode-v2.png",
+  "sha256": "1157a237ef1725eca358bec36d1e07abf9c567dd1c97b111bfd599c4dc69586b",
+  "conversion": "Lossless PNG; ImageMagick AE comparison reports zero changed pixels",
+  "discord_application_id": "1545590419763761303",
+  "discord_asset_key": "opencode-v2",
+  "discord_asset_id": "1545619116046688317",
+  "previous_asset": {
+    "source": "https://raw.githubusercontent.com/anomalyco/opencode/5b1e31988ed74b821b3a7ca6647188446992aafc/packages/console/app/src/asset/brand/opencode-logo-dark-square.png",
+    "upstream_commit": "5b1e31988ed74b821b3a7ca6647188446992aafc",
+    "local_file": "opencode.png",
+    "purpose": "Official OpenCode logo for Discord and Pulse preview",
+    "sha256": "44d24a1c9e7e2af1f6551bd808b1330e2493e233a173c5930b300b70290e1b57"
+  }
+}

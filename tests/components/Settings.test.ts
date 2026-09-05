@@ -89,6 +89,20 @@ describe("Settings.svelte", () => {
     selectedAccessSourceId.set("claude-subscription");
   });
 
+  it("uses the exact OpenCode logo and theme-aware identity color", async () => {
+    const { provider, providerProfile } = await import("@/lib/provider");
+    provider.set("opencode");
+    const { accessSnapshot } = await import("@/lib/stores");
+    const route = get(accessSnapshot)!.routes[0];
+    accessSnapshot.set({ routes: [{ ...route, source: { ...route.source, kind: "open_code_go", provider: "opencode", proof: "quota_response" } }] });
+    const Settings = (await import("@/views/Settings.svelte")).default;
+    const { container } = render(Settings, { onToggleTheme: vi.fn(), currentTheme: "light" });
+    await tick();
+    expect(container.querySelector(".it-mark img")?.getAttribute("src")).toContain("opencode-v2");
+    expect(get(providerProfile).accent).toBe("var(--text-primary)");
+    expect(container.textContent).toContain("OpenCode Go usage API");
+  });
+
   it("mounts and shows the identity masthead plus configuration controls", async () => {
     const Settings = (await import("@/views/Settings.svelte")).default;
     const { container, getByText } = render(Settings, {
@@ -145,7 +159,7 @@ describe("Settings.svelte", () => {
     expect(container.querySelector(".it-line")?.textContent).not.toContain("Pro 20x");
   });
 
-  it("keeps analytics scope aligned when Active provider changes", async () => {
+  it("keeps analytics and account selection independent when the broadcaster changes", async () => {
     const { selectedAccessSourceId, selectedAnalyticsProviderScope } = await import("@/lib/stores");
     getPlanInfo.mockResolvedValueOnce({
       provider: "codex",
@@ -161,8 +175,8 @@ describe("Settings.svelte", () => {
     await fireEvent.click(getByRole("button", { name: "Active provider" }));
     await fireEvent.click(getByRole("option", { name: "Codex" }));
 
-    await waitFor(() => expect(get(selectedAccessSourceId)).toBe("codex-subscription"));
-    expect(get(selectedAnalyticsProviderScope)).toBe("codex");
+    await waitFor(() => expect(setActiveProvider).toHaveBeenCalledWith("codex"));
+    expect(get(selectedAnalyticsProviderScope)).toBe("all");
   });
 
   it("never renders an invalid same-provider plan claim", async () => {

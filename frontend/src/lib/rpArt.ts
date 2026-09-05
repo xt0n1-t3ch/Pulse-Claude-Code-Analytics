@@ -4,6 +4,7 @@
 // terminal prompt). Small badge is null until a distinct small asset exists, so
 // the card matches Discord's large-image-only rendering rather than duplicating
 // the large art.
+import openCode from "../assets/rp/opencode-v2.png";
 import claudeCode from "../assets/rp/claude-code.png";
 import codexApp from "../assets/rp/codex-app.png";
 import chatGptApp from "../assets/rp/chatgpt-app.jpg";
@@ -24,6 +25,7 @@ export function rpArtFor(
   assetKey?: string | null,
   largeText?: string | null,
 ): RpArt {
+  if (provider === "opencode") return { large: openCode, small: null, largeText: "OpenCode", assetKey: "opencode-v2" };
   if (provider === "codex") {
     const isCodexApp = assetKey === "codex-app";
     return {

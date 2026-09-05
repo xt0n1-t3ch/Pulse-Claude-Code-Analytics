@@ -54,6 +54,7 @@
   --danger-glow: rgba(239, 68, 68, 0.22);
   --danger-dim: rgba(239, 68, 68, 0.10);
   --on-danger: #ffffff;
+  --notification-badge-bg: #b91c1c;
   --modal-backdrop: rgba(0, 0, 0, 0.62);
   --info: #7cb9e8;
   --info-glow: rgba(124, 185, 232, 0.22);
@@ -222,13 +223,13 @@
   --claude: #9a3412;
   --claude-dim: rgba(154, 52, 18, 0.10);
 
-  --success: #16a34a;
+  --success: #166534;
   --success-dim: rgba(22, 163, 74, 0.08);
   --success-glow: rgba(22, 163, 74, 0.18);
-  --warning: #d97706;
+  --warning: #854d0e;
   --warning-dim: rgba(217, 119, 6, 0.08);
   --warning-glow: rgba(217, 119, 6, 0.18);
-  --danger: #dc2626;
+  --danger: #b91c1c;
   --danger-dim: rgba(220, 38, 38, 0.08);
   --danger-glow: rgba(220, 38, 38, 0.18);
   --on-danger: #ffffff;
@@ -801,5 +802,24 @@ input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+html[data-provider="opencode"] { --provider-accent: var(--text-primary); --provider-accent-dim: var(--bg-elevated); }
+
+@media (max-width: 620px) {
+  .main-content .app-view > .view-header {
+    align-items: stretch;
+    flex-direction: column;
+    text-align: center;
+  }
+  .main-content .app-view > .view-header > :first-child {
+    width: 100%;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+  .main-content .app-view > .view-header .view-status {
+    justify-content: center;
   }
 }

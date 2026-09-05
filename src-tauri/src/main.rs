@@ -134,6 +134,7 @@ fn create_or_show_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    cc_discord_presence::power::apply_from_env("PULSE_EFFICIENCY_MODE");
     // Debug builds also serve the read-only dev bridge so the UI can be
     // reviewed in a browser against real backend data.
     #[cfg(debug_assertions)]
@@ -203,6 +204,10 @@ fn main() {
             commands::mark_notification_read,
             commands::mark_all_notifications_read,
             commands::dismiss_notification,
+            commands::mark_notification_unread,
+            commands::mark_all_notifications_unread,
+            commands::dismiss_all_notifications,
+            commands::restore_notifications,
             commands::get_metrics,
             commands::get_live_sessions,
             commands::get_discord_preview,

@@ -14,6 +14,10 @@ const api = vi.hoisted(() => ({
   getUnreadNotificationCount: vi.fn(),
   markNotificationRead: vi.fn(),
   markAllNotificationsRead: vi.fn(),
+  markNotificationUnread: vi.fn(),
+  markAllNotificationsUnread: vi.fn(),
+  dismissAllNotifications: vi.fn(),
+  restoreNotifications: vi.fn(),
   dismissNotification: vi.fn(),
   persistActiveProvider: vi.fn(),
   getProviderCopy: vi.fn(),
@@ -53,6 +57,7 @@ const notification = {
 
 describe("NotificationCenter", () => {
   beforeEach(async () => {
+    localStorage.removeItem("pulse-notification-undo");
     const { provider } = await import("@/lib/provider");
     provider.set("claude");
     tauriEvents.listeners.clear();
@@ -88,6 +93,10 @@ describe("NotificationCenter", () => {
     api.markNotificationRead.mockResolvedValue(true);
     api.markAllNotificationsRead.mockResolvedValue(1);
     api.dismissNotification.mockResolvedValue(true);
+    api.markNotificationUnread.mockResolvedValue(true);
+    api.markAllNotificationsUnread.mockResolvedValue(1);
+    api.dismissAllNotifications.mockResolvedValue({count:1,undo_token:"2026-09-05T03:00:00Z"});
+    api.restoreNotifications.mockResolvedValue(1);
     api.persistActiveProvider.mockResolvedValue(undefined);
     api.getProviderCopy.mockResolvedValue({});
   });
@@ -126,7 +135,7 @@ describe("NotificationCenter", () => {
     const { getByRole } = render(NotificationCenter);
     await waitFor(() => expect(getByRole("button", { name: /1 unread/ })).toBeTruthy());
     await fireEvent.click(getByRole("button", { name: /1 unread/ }));
-    await fireEvent.click(getByRole("button", { name: "Mark read" }));
+    await fireEvent.click(getByRole("button", { name: "Mark all read" }));
 
     expect(api.markAllNotificationsRead).toHaveBeenCalledOnce();
     expect(api.getUnreadNotificationCount).toHaveBeenCalled();
@@ -182,4 +191,39 @@ describe("NotificationCenter", () => {
     await waitFor(() => expect(getByRole("dialog", { name: "Notification center" })).toBeTruthy());
     await waitFor(() => expect(getByText(notification.title)).toBeTruthy());
   });
+  it("supports unread filtering and Escape with focus restoration", async () => {
+    api.getNotifications.mockResolvedValue([notification,{...notification,id:43,title:"Read event",read_at:"2026-08-01T01:00:00Z"}]);
+    const {getByRole,getByText,queryByText,queryByRole}=render(NotificationCenter);
+    await waitFor(()=>expect(getByRole("button",{name:/1 unread/})).toBeTruthy());
+    const trigger=getByRole("button",{name:/1 unread/});
+    await fireEvent.click(trigger);
+    await waitFor(()=>expect(getByText("Read event")).toBeTruthy());
+    await fireEvent.click(getByRole("button",{name:"Unread (1)"}));
+    expect(queryByText("Read event")).toBeNull();
+    await fireEvent.keyDown(window,{key:"Escape"});
+    expect(queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps read/unread/clear actions visible and restores a confirmed clear", async () => {
+    api.getNotifications.mockResolvedValue([{...notification,read_at:"2026-09-05T02:00:00Z"}]);
+    api.getUnreadNotificationCount.mockResolvedValue(0);
+    const {getByRole,getByText} = render(NotificationCenter);
+    await fireEvent.click(getByRole("button",{name:"Notifications"}));
+    await waitFor(()=>expect(getByText(notification.title)).toBeTruthy());
+    expect(getByRole("button",{name:"Mark all read"})).toBeTruthy();
+    await fireEvent.click(getByRole("button",{name:`Mark unread: ${notification.title}`}));
+    await waitFor(()=>expect(api.markNotificationUnread).toHaveBeenCalledWith(42));
+    await fireEvent.click(getByRole("button",{name:"Mark all unread"}));
+    await waitFor(()=>expect(api.markAllNotificationsUnread).toHaveBeenCalledOnce());
+    await fireEvent.click(getByRole("button",{name:"Clear all",exact:true}));
+    expect(api.dismissAllNotifications).not.toHaveBeenCalled();
+    await fireEvent.click(getByRole("button",{name:"Cancel",exact:true}));
+    await fireEvent.click(getByRole("button",{name:"Clear all",exact:true}));
+    await fireEvent.click(getByRole("button",{name:"Clear notifications",exact:true}));
+    await waitFor(()=>expect(getByRole("button",{name:"Undo",exact:true})).toBeTruthy());
+    await fireEvent.click(getByRole("button",{name:"Undo",exact:true}));
+    await waitFor(()=>expect(api.restoreNotifications).toHaveBeenCalledWith("2026-09-05T03:00:00Z"));
+  });
+
 });

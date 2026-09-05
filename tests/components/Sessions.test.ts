@@ -126,12 +126,12 @@ describe("Sessions.svelte", () => {
     await tick();
 
     const labels = [...container.querySelectorAll(".stat-label")].map((e) => e.textContent?.trim());
-    expect(labels).toEqual(["Active sessions", "Live tokens", "Live monetary value", "Avg throughput"]);
+    expect(labels).toEqual(["Active sessions", "Live tokens", "Reported value", "Output rate"]);
 
     await waitFor(() => {
       expect(container.querySelectorAll(".session-list .session-card").length).toBe(2);
     });
-    expect(getByText("2 active")).toBeTruthy();
+    expect(container.querySelector(".stat-value")?.textContent).toBe("2");
   });
 
   it("loads history as a labelled data table", async () => {
@@ -186,7 +186,7 @@ describe("Sessions.svelte", () => {
     const { container, getByText } = render(Sessions);
     await tick();
 
-    expect(getByText("1 active")).toBeTruthy();
+    expect(container.querySelector(".stat-value")?.textContent).toBe("1");
     expect(container.querySelectorAll(".session-list .session-card")).toHaveLength(1);
     expect(container.textContent).not.toContain("idle-project");
   });
@@ -251,7 +251,7 @@ describe("Sessions.svelte", () => {
     expect(toolbar).not.toBeNull();
     expect(facts).not.toBeNull();
     expect(facts?.textContent?.replace(/\s+/g, " ")).toContain(
-      "$8303.05 API-equivalent · lower bound",
+      "$8303.05 API-equivalent value · known subtotal",
     );
     expect(toolbar?.querySelectorAll(".search-box, .history-summary")).toHaveLength(2);
     expect(container.querySelector(".history-summary.card")).toBeNull();
@@ -274,7 +274,7 @@ describe("Sessions.svelte", () => {
     await tick();
 
     await waitFor(() => {
-      expect(container.querySelector(".history-summary")?.textContent).toContain("5 sessions · — API-equivalent · 2.0M tokens · top contributor pulse · 30 days");
+      expect(container.querySelector(".history-summary")?.textContent).toContain("5 sessions · — Known monetary value · 2.0M tokens · top contributor pulse · 30 days");
     });
     expect(container.querySelector(".history-summary")?.textContent).not.toContain("$0.00");
   });

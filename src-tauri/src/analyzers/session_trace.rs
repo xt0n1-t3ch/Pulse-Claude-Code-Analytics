@@ -178,6 +178,7 @@ fn scan_provider_roots(
                     continue;
                 };
                 let Some(matched_id) = (match provider {
+                    Provider::OpenCode => None,
                     Provider::Claude => remaining.contains(stem).then(|| stem.to_string()),
                     Provider::Codex => remaining
                         .iter()
@@ -233,6 +234,7 @@ fn parse_session_trace(provider: Provider, session_id: &str, path: &Path) -> Ses
             continue;
         };
         match provider {
+            Provider::OpenCode => {}
             Provider::Claude => parse_claude_trace_line(&value, &mut trace),
             Provider::Codex => parse_codex_trace_line(&value, &mut trace),
         }
@@ -481,6 +483,7 @@ mod tests {
 
     fn historical_session(provider: &str, id: &str) -> HistoricalSession {
         HistoricalSession {
+            opencode: None,
             id: id.into(),
             provider: provider.into(),
             session_name: None,
@@ -550,6 +553,7 @@ mod tests {
     #[test]
     fn raw_session_id_strips_provider_prefix() {
         let session = HistoricalSession {
+            opencode: None,
             id: "codex:019daa02-33ad-7c40-8ea4-6d003a58e803".into(),
             provider: "codex".into(),
             session_name: None,
